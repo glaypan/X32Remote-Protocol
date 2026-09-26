@@ -1,0 +1,45 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ---- 构建产物 ----
+build/
+dist/
+*.class
+
+# ---- 本机/运行时状态 ----
+# 模拟器运行时配置（含用户自定义快捷键与卡片，属本机状态，不入库）
+X32Simulator/user_config.json
+X32Simulator/*.log
+X32Simulator/_port_test.log
+
+# ---- Swift / 本地校验工作区 ----
+X32Remote-ios/.localverify/
+X32Remote-ios/.build/
+.localverify/
+
+# ---- 编辑器 / 系统 ----
+.DS_Store
+._*
+.vscode/
+.idea/
+*.swp
+
+# ---- 发布产物（由 tools/make_release.py 生成，可随时重建）----
+outputs/*.zip
+# 二进制产物走 GitHub Release 附件，不入库（避免仓库体积膨胀）
+outputs/*.apk
+outputs/*.ipa
+
+# ---- 本地 Swift 工具链安装目录（体积大，且可通过 tools/local_verify.sh 重建）----
+.swift-setup/
+
+# ---- iOS 工程是独立 git 仓库（github.com/glaypan/X32Remote），此处不重复纳入 ----
+/X32Remote-ios/
+
+# ---- 会话/工具状态 ----
+.workbuddy/
+*.genie
