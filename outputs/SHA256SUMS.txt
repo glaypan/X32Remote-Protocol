@@ -1,17 +1,20 @@
-4efc871ac403a08ce47510d2b2c721a32c52b59661093fd46d401378d4462798 *X32Remote-v1.1.0-full.zip
-7bdf2e035d8a245401cb8e807a379a85b42d0b054594fe46655a0d0827cc4db6 *X32Remote-v1.1.0-assets.zip
-350d09548c705c176368b8a226858b532b1229162c371dd95417f93e34ae4b70 *X32Remote-1.0.0.apk
+9a607e7e421e2ea98ede31fce972a1d851af4040795a82deb15f2adfbd0bfe67 *X32Remote-v1.1.1-full.zip
+dab7f0121027e141615fc2ceb24ed46d4b67694bf290a3444731ae4d3628f38a *X32Remote-v1.1.1-assets.zip
+4916ae96508a8cbc7e4e225f222ad1b0052c56af472420eddcfcc08563dc6ef5 *X32Remote-1.1.0.apk
 7551d96ba852e130e34ebe1a7c71e609f35edfdb94c9259cad4a2fb654408617 *X32Remote-unsigned.ipa
 
-# X32 Remote v1.1.0 发布包校验和 (SHA256)
+# X32 Remote v1.1.1 发布包校验和 (SHA256)
 # 生成时间: 2026-09-27
 # 校验方式: sha256sum -c SHA256SUMS.txt
 #
 # 说明:
-#   X32Remote-v1.1.0-full.zip    完整发布包（三端源码 + 产物 + 文档）
-#   X32Remote-v1.1.0-assets.zip  仅产物（iOS IPA + Android APK + 发布说明）
-#   X32Remote-1.0.0.apk          Android 安装包
+#   X32Remote-v1.1.1-full.zip    完整发布包（全部源码 + 产物 + 文档）
+#   X32Remote-v1.1.1-assets.zip  仅产物（Android APK + iOS IPA + 发布说明）
+#   X32Remote-1.1.0.apk          Android 安装包（versionName 1.1.0 / versionCode 2）
 #   X32Remote-unsigned.ipa       iOS 未签名包（需 Sideloadly 签名，要求 iOS 17+）
 #
-# iOS IPA 版本: 1.1.0 (build 2) / MinimumOSVersion 17.0
-# 云端构建: GitHub Actions run 36260594878, 提交 ece8fff (全部步骤通过)
+# Android APK: 版本 1.1.0 (versionCode 2) / minSdk 26 / targetSdk 35
+#   签名 DN: CN=X32 Remote（与上一版同密钥，可覆盖安装升级）
+# iOS IPA:     版本 1.1.0 (build 2) / MinimumOSVersion 17.0
+#
+# 测试: Android 单元测试 73 项全过；iOS 云端构建 + 核心库单测通过

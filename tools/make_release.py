@@ -1,19 +1,30 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""打包 X32 Remote v1.1.0 发布包。
+"""打包 X32 Remote 发布包。
+
+用法:
+    python tools/make_release.py                  # 用默认版本（见 DEFAULT_VERSION）
+    python tools/make_release.py --version 1.1.1  # 指定版本
+    python tools/make_release.py --apk outputs/X32Remote-1.1.0.apk
 
 产出（都在 outputs/ 下）：
-  X32Remote-v1.1.0-full.zip     完整发布包：三端源码 + 产物 + 全部文档（不含 .git）
-  X32Remote-v1.1.0-assets.zip   仅产物：iOS IPA + Android APK + 发布说明（用于上传）
+  X32Remote-v<版本>-full.zip     完整发布包：全部源码 + 产物 + 全部文档（不含 .git）
+  X32Remote-v<版本>-assets.zip   仅产物：Android APK + iOS IPA + 发布说明
 
 排除规则：.git / .localverify / __pycache__ / .build / DerivedData / 临时文件。
 """
+import argparse
 import os
 import pathlib
 import zipfile
 
-ROOT = pathlib.Path(r"E:/AI/workbuddy/x32遥控")
+ROOT = pathlib.Path(__file__).resolve().parent.parent
 OUT = ROOT / "outputs"
+
+DEFAULT_VERSION = "1.1.1"
+# 本版要随包发布的 Android 产物（相对 outputs/ 的文件名）
+DEFAULT_APK = "X32Remote-1.1.0.apk"
+DEFAULT_IPA = "X32Remote-unsigned.ipa"
 
 # 目录名 / 文件名 黑名单（任一命中即跳过，含子串匹配）
 EXCLUDE_DIRS = {".git", ".localverify", "__pycache__", ".build", "DerivedData",
@@ -21,26 +32,31 @@ EXCLUDE_DIRS = {".git", ".localverify", "__pycache__", ".build", "DerivedData",
 EXCLUDE_SUFFIX = (".pyc", ".pyo", ".log", ".DS_Store", ".xcuserstate")
 EXCLUDE_NAMES = {".DS_Store", "Package.resolved"}
 
-# 完整包的内容（源路径, 打包内的相对路径）；源为目录则整棵打入
-FULL_ITEMS = [
-    ("X32Remote-ios",                  "X32Remote-ios"),
-    ("X32Simulator",                   "X32Simulator"),
-    ("Android-安装使用说明.md",         "docs/Android-安装使用说明.md"),
-    ("iOS-真机直装指南.md",             "docs/iOS-真机直装指南.md"),
-    ("共享协议规范.md",                 "docs/共享协议规范.md"),
-    ("RELEASE_NOTES_v1.1.0.md",        "docs/RELEASE_NOTES_v1.1.0.md"),
-    ("outputs/X32Remote-1.0.0.apk",     "artifacts/X32Remote-1.0.0.apk"),
-    ("outputs/X32Remote-unsigned.ipa",  "artifacts/X32Remote-unsigned.ipa"),
-]
 
-# 仅产物的包
-ASSET_ITEMS = [
-    ("outputs/X32Remote-unsigned.ipa",  "X32Remote-unsigned.ipa"),
-    ("outputs/X32Remote-1.0.0.apk",     "X32Remote-1.0.0.apk"),
-    ("RELEASE_NOTES_v1.1.0.md",         "RELEASE_NOTES_v1.1.0.md"),
-]
+def full_items(apk: str, ipa: str, notes: str, ver: str) -> list:
+    return [
+        ("X32Remote-ios",              "X32Remote-ios"),
+        ("X32Simulator",               "X32Simulator"),
+        ("tools",                      "tools"),
+        ("Android-安装使用说明.md",     "docs/Android-安装使用说明.md"),
+        ("iOS-真机直装指南.md",         "docs/iOS-真机直装指南.md"),
+        ("共享协议规范.md",             "docs/共享协议规范.md"),
+        (notes,                         f"docs/RELEASE_NOTES_v{ver}.md"),
+        (f"outputs/{apk}",              f"artifacts/{apk}"),
+        (f"outputs/{ipa}",              f"artifacts/{ipa}"),
+    ]
 
-README = """X32 Remote v1.1.0 —— 发布包说明
+
+def asset_items(apk: str, ipa: str, notes: str) -> list:
+    return [
+        (f"outputs/{apk}",  apk),
+        (f"outputs/{ipa}",  ipa),
+        (notes,             pathlib.Path(notes).name),
+    ]
+
+
+def make_readme(ver: str, apk: str, ipa: str) -> str:
+    return f"""X32 Remote v{ver} —— 发布包说明
 ================================
 
 适配调音台：Behringer X32 / Midas M32（OSC over UDP，端口 10023）
@@ -48,19 +64,20 @@ README = """X32 Remote v1.1.0 —— 发布包说明
 目录结构
 --------
   docs/          所有说明文档
-    RELEASE_NOTES_v1.1.0.md    ← 先看这个：本版新增与升级注意
+    RELEASE_NOTES_v{ver}.md   ← 先看这个：本版改动与升级注意
     iOS-真机直装指南.md         iOS 从签名到安装的完整流程
     Android-安装使用说明.md     Android 安装与使用
-    共享协议规范.md             三端共同遵循的协议契约（v1.1）
+    共享协议规范.md             三端共同遵循的协议契约
   artifacts/     可直接安装的成品
-    X32Remote-unsigned.ipa     iOS（需自行签名，见 docs）
-    X32Remote-1.0.0.apk        Android（直接安装）
+    {ipa}     iOS（需自行签名，见 docs）
+    {apk}        Android（直接安装）
   X32Remote-ios/  iOS 工程源码（SwiftUI + SwiftPM 本地包）
   X32Simulator/   服务端 + Web 控制台（Python 单文件）
+  tools/          发布与校验工具
 
 快速开始
 --------
-Android：把 artifacts/X32Remote-1.0.0.apk 传到手机安装。
+Android：把 artifacts/{apk} 传到手机安装。
 iOS    ：读 docs/iOS-真机直装指南.md。IPA 未签名，需用 Sideloadly 以
          免费 Apple ID 签名后安装（每 7 天重签）。要求 iOS 17.0+。
 网页版 ：python X32Simulator/x32_simulator.py --port 10023 --web-port 28080
@@ -68,14 +85,17 @@ iOS    ：读 docs/iOS-真机直装指南.md。IPA 未签名，需用 Sideloadly
 
 本版重点
 --------
-iOS 端补齐「桥接模式」与「时间轴调度器」，三端功能全面对齐。
-并修掉三处语义偏差（wait 双重计时 / unmute_all 漏 31 路 / 卡片链缺喘息）。
+把 v1.1.0 在 iOS 端修好的三处语义偏差，同样修到 Android：
+  1. wait 曾 Thread.sleep 阻塞整个引擎线程且双重计时 → 改真 no-op
+  2. unmute_all 只写 48 路 → 补齐 8 组共 79 路
+  3. fade_from 未预置 frm → 取起点前先写入 frm
+另修 Android 卡片链接续会把自己停掉（误调 run()）并补 0.4 秒喘息。
 
 已知限制
 --------
 1. iOS 后台约 30 秒挂起 → 只能当前台遥控器，当不了常驻服务端。需常驻请用 Android。
 2. iOS 卡片库升级后回落到出厂卡片（两代格式差异大，不做静默迁移）。
-3. Android 的时间轴引擎存在同源三处偏差，计划下一版修复。
+3. M32 / Wing 地址差异未适配，仅覆盖 X32 系列。
 """
 
 
@@ -92,7 +112,6 @@ def add_path(zf: zipfile.ZipFile, src: pathlib.Path, arc: str, counter: dict) ->
     if src.is_dir():
         for dirpath, dirnames, filenames in os.walk(src):
             d = pathlib.Path(dirpath)
-            # 原地剪枝，避免走进黑名单目录
             dirnames[:] = [x for x in dirnames
                            if x not in EXCLUDE_DIRS and not excluded(d / x)]
             for fn in filenames:
@@ -111,25 +130,40 @@ def add_path(zf: zipfile.ZipFile, src: pathlib.Path, arc: str, counter: dict) ->
         raise FileNotFoundError(src)
 
 
-def build(name: str, items: list, extra_readme: bool) -> pathlib.Path:
+def build(name: str, items: list, counter_out: dict, readme: str = None) -> pathlib.Path:
     target = OUT / name
     counter = {"n": 0, "bytes": 0}
     with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
-        if extra_readme:
-            zf.writestr("README.txt", README)
+        if readme:
+            zf.writestr("README.txt", readme)
         for rel_src, arc in items:
-            src = ROOT / rel_src
-            add_path(zf, src, arc, counter)
+            add_path(zf, ROOT / rel_src, arc, counter)
     mb = target.stat().st_size / 1048576
     print(f"  {name}: {counter['n']} 个文件, 未压缩 {counter['bytes']/1048576:.1f} MB, "
           f"压缩后 {mb:.2f} MB")
+    counter_out.update(counter)
     return target
 
 
 def main() -> int:
-    print("打包 v1.1.0 发布包")
-    full = build("X32Remote-v1.1.0-full.zip", FULL_ITEMS, extra_readme=True)
-    assets = build("X32Remote-v1.1.0-assets.zip", ASSET_ITEMS, extra_readme=False)
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--version", default=DEFAULT_VERSION)
+    ap.add_argument("--apk", default=DEFAULT_APK, help="outputs/ 下的 Android 产物名")
+    ap.add_argument("--ipa", default=DEFAULT_IPA, help="outputs/ 下的 iOS 产物名")
+    args = ap.parse_args()
+    ver = args.version
+    notes = f"RELEASE_NOTES_v{ver}.md"
+
+    if not (ROOT / notes).is_file():
+        print(f"! 缺少发布说明 {notes}，请先创建")
+        return 1
+
+    print(f"打包 v{ver} 发布包")
+    full = build(f"X32Remote-v{ver}-full.zip",
+                 full_items(args.apk, args.ipa, notes, ver), {},
+                 readme=make_readme(ver, args.apk, args.ipa))
+    assets = build(f"X32Remote-v{ver}-assets.zip",
+                   asset_items(args.apk, args.ipa, notes), {})
 
     print("\n输出:")
     for p in (full, assets):
