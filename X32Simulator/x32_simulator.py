@@ -139,6 +139,267 @@ def decode_packet(data: bytes):
     return [OscMsg(address, args)]
 
 
+# ---------------------------------------------------------------- 混响 / FX 机架
+# X32 有 8 个 FX 槽. 混响类算法的参数**索引随算法变化**(官方文档里 Hall/Plate/Room/
+# Chamber/Vintage 各有自己的参数页), 因此这里把"时间/预延迟/阻尼"抽象出来, 索引集中
+# 在这一张表里 —— 真机联调时只需改这张表, 不用动逻辑。
+#   time     混响时间 (RT) 的参数索引, 值单位 = 秒
+#   predelay 预延迟的参数索引,       值单位 = 毫秒
+#   damp     阻尼/高频衰减的参数索引, 值单位 = 0..1
+#   tmin/tmax 该算法混响时间的合法范围 (秒), Tap 换算结果按此钳制
+FX_COUNT = 8
+REVERB_ALGOS = {
+    "HALL":    {"label": "大厅混响", "time": 1, "predelay": 2, "damp": 4, "tmin": 0.4, "tmax": 10.0},
+    "PLATE":   {"label": "板式混响", "time": 1, "predelay": 2, "damp": 4, "tmin": 0.3, "tmax": 8.0},
+    "ROOM":    {"label": "房间混响", "time": 1, "predelay": 2, "damp": 4, "tmin": 0.2, "tmax": 5.0},
+    "CHAMBER": {"label": "密室混响", "time": 1, "predelay": 2, "damp": 4, "tmin": 0.3, "tmax": 6.0},
+    "VINTAGE": {"label": "复古混响", "time": 1, "predelay": 2, "damp": 4, "tmin": 0.3, "tmax": 6.0},
+}
+# 出厂默认混响参数 (秒 / 毫秒 / 0..1), 索引与上表对应
+REVERB_DEFAULTS = {
+    "HALL":    {1: 2.40, 2: 25.0, 4: 0.45},
+    "PLATE":   {1: 1.80, 2: 15.0, 4: 0.30},
+    "ROOM":    {1: 1.10, 2: 12.0, 4: 0.55},
+    "CHAMBER": {1: 1.60, 2: 20.0, 4: 0.40},
+    "VINTAGE": {1: 1.50, 2: 18.0, 4: 0.35},
+}
+# Tap 定拍 / 时值换算
+TAP_INTERVAL_MIN = 0.15      # 两次点击靠得比这还近 → 抖动, 忽略
+TAP_RESET_GAP = 2.0          # 超过这么久没点 → 视为新的一组, 重头开始
+TAP_MAX_INTERVALS = 8        # 最多用最近 8 个间隔求均值
+TAP_BPM_MIN, TAP_BPM_MAX = 30.0, 300.0
+NOTE_BEATS = {"1/16": 0.25, "1/8": 0.5, "1/4": 1.0, "1/2": 2.0, "1": 4.0, "2": 8.0}
+
+
+def fx_par_kind(pnum):
+    """参数号 → kind。用 'fx_par_01' 这样既能在 (kind, idx) 管道里走, 又能反解参数号。"""
+    return "fx_par_%02d" % int(pnum)
+
+
+def fx_par_num(kind):
+    """kind → 参数号; 不是 FX 参数则返回 None。"""
+    if isinstance(kind, str) and kind.startswith("fx_par_"):
+        try:
+            return int(kind[7:])
+        except ValueError:
+            return None
+    return None
+
+
+def fx_algo(slot):
+    """取某个槽的算法定义; 未装载混响则返回 None。"""
+    t = STATE.fx.get(slot, {}).get("type", "")
+    return REVERB_ALGOS.get(t)
+
+
+def fx_par_clamp(slot, pnum, value):
+    """按参数语义钳制: 时间夹到算法范围, 预延迟 0-200ms, 阻尼 0..1, 其余 0..1。"""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    algo = fx_algo(slot)
+    if algo:
+        if pnum == algo["time"]:
+            return min(max(v, algo["tmin"]), algo["tmax"])
+        if pnum == algo["predelay"]:
+            return min(max(v, 0.0), 200.0)
+        if pnum == algo["damp"]:
+            return min(max(v, 0.0), 1.0)
+    return min(max(v, 0.0), 1.0)
+
+
+# ================================================================ 控台驱动层
+#
+# 卡片动作、桥接转发、状态回包 全部走在 (kind, idx) 这个**语义管道**上 —— 它里面
+# 不含任何协议信息（ch_fader 就是"某个输入通道的推子"）。把 kind 翻译成真实 OSC
+# 地址的活，全部收敛到 ConsoleProfile。换控台 = 换一个 profile 实例，动作层不动。
+#
+# ⚠️ 约定（很重要）：对"本控台不支持"的 kind，addr() 必须返回 None，而不是抛异常
+#    或返回一个"看着像对"的地址。调用方见到 None 要记一条日志再跳过 —— 让"不支持"
+#    变成**看得见的降级**，而不是"静默写到了别的地方"。这正是本项目栽过的跟头
+#    （见共享协议规范 §3.5：地址格式化异常被 try/except 吞掉，桥接真台时主输出
+#    推子从来没被转发过，日志里只剩一行看不出问题的"转发失败"）。
+
+CTRL_PROFILE_ID = "x32"
+
+
+class ConsoleProfile:
+    """控台驱动基类。子类只需填元信息 + 实现 addr()。
+
+    接口刻意留了 transport 字段：X32/M32/Wing 与 Yamaha 大多走 OSC，但
+    Allen & Heath 是 TCP MIDI、部分 Yamaha 型号也吃 MIDI —— 那种情况下
+    "地址翻译"之外还需要一层消息编码。把传输类型摆在接口上，是为了将来接
+    A&H 时不用推翻这套抽象，只需在编码层加一条分支。
+    """
+
+    id = ""
+    label = ""
+    vendor = ""
+    transport = "osc"      # "osc" | "midi" | ...
+    ready = False          # 地址表是否可用；False 时所有写入被拒绝并记日志
+    verified = False       # True = 地址表经真机核对过（ready 但非 verified，
+                           # 表示"照公开资料填了结构，但没上过真台"）
+    note = ""
+    counts = {}            # 各分组规模：卡片目标上限与导入校验用
+    caps = ()              # 支持的语义能力：UI 灰显 / 导入校验用
+
+    def addr(self, kind, idx):
+        """(kind, idx) → 真实地址；本控台不支持则返回 None。"""
+        return None
+
+    def supports(self, kind):
+        return self.addr(kind, 0) is not None
+
+    def pending(self):
+        """未标定时列出还需要提供地址映射的 kind（供 UI 与规范 §12 使用）。"""
+        return []
+
+
+class X32Profile(ConsoleProfile):
+    """X32 —— 权威实现，地址表与真机 OSC 表逐条对齐。
+
+    M32 是 Midas 贴牌的同代产品，OSC 地址表与 X32 **完全一致**，因此直接继承
+    本类（见 M32Profile），只换显示名 —— 所谓"支持 M32"不需要任何新协议代码。
+    """
+
+    id = "x32"
+    label = "X32"
+    vendor = "Behringer"
+    ready = True
+    verified = True
+    counts = {"ch": 32, "bus": 16, "dca": 8, "auxin": 6, "usb": 2,
+              "fxret": 8, "mtx": 6, "main": 1, "fx": FX_COUNT}
+    caps = ("fader", "mute", "dca", "dca_member", "scene", "fx", "fx_par",
+            "name", "meter", "raw_osc")
+
+    def addr(self, kind, idx):
+        if kind == "ch_dca":
+            return "/ch/%02d/mix/dca" % idx
+        if kind == "fx_type":
+            return "/fx/%d/type" % idx
+        if kind == "fx_name":
+            return "/fx/%d/config/name" % idx
+        if kind == "fx_on":
+            return "/fx/%d/on" % idx
+        if kind == "fx_mix":
+            return "/fx/%d/mix" % idx
+        p = fx_par_num(kind)
+        if p is not None:
+            return "/fx/%d/par/%02d" % (idx, p)
+        # ⚠️ Main 必须单独返回：`/main/st/mix/fader` 里**没有 %02d 占位符**，
+        #    走 `% idx` 会抛 TypeError（历史 bug，见共享协议规范 §3.5 第 4 条）。
+        if kind == "main_fader":
+            return "/main/st/mix/fader"
+        if kind == "main_on":
+            return "/main/st/mix/on"
+        if kind.endswith("_fader"):
+            pat = FADER_ADDR.get(kind)
+            return pat % idx if pat else None
+        pat = ON_ADDR.get(kind)
+        return pat % idx if pat else None
+
+
+class M32Profile(X32Profile):
+    """M32 —— 与 X32 同协议（Midas 贴牌），驱动完全复用，仅显示名不同。"""
+
+    id = "m32"
+    label = "M32"
+    vendor = "Midas"
+
+
+class _StubProfile(ConsoleProfile):
+    """未标定控台的骨架基类。
+
+    ⚠️ 这里**故意**让 addr() 保持返回 None，而不是编一套"看起来像"的地址。
+    因为地址蒙错的后果是"写到了别的参数上" —— 现场听起来就是莫名其妙的声音
+    变化，比"完全不动作"难排查得多。所以未标定的控台一律**拒绝写入并记日志**，
+    把问题摆在明面上。
+
+    接入一个新控台的做法：照 X32Profile 实现 addr()（清单见 pending()），
+    然后把 ready 置 True；经真机核对后再置 verified = True。
+    """
+
+    ready = False
+
+    def pending(self):
+        base = ["ch_fader", "ch_on", "bus_fader", "bus_on", "dca_fader",
+                "dca_on", "main_fader", "main_on"]
+        base += [g + "_fader" for g in ("auxin", "usb", "fxret", "mtx")]
+        base += [g + "_on" for g in ("auxin", "usb", "fxret", "mtx")]
+        base += ["ch_dca", "fx_type", "fx_on", "fx_mix", "fx_name", "fx_par_NN"]
+        return base
+
+
+class WingProfile(_StubProfile):
+    id = "wing"
+    label = "Wing"
+    vendor = "Behringer"
+    note = "Wing 是全新平台，OSC 地址空间与 X32 不通用，地址表待填"
+    counts = {"ch": 48, "bus": 16, "dca": 8, "auxin": 8, "usb": 4,
+              "fxret": 8, "mtx": 8, "main": 1, "fx": 16}
+    caps = ("fader", "mute", "dca", "scene", "fx", "raw_osc")
+
+
+class YamahaProfile(_StubProfile):
+    id = "yamaha"
+    label = "Yamaha DM3 / TF / QL"
+    vendor = "Yamaha"
+    note = "Yamaha 各型号的 OSC/MIDI 接口不一致，需按型号分别标定"
+    counts = {"ch": 48, "bus": 24, "dca": 12, "auxin": 8, "usb": 2,
+              "fxret": 8, "mtx": 12, "main": 1, "fx": 8}
+    caps = ("fader", "mute", "dca", "scene", "raw_osc")
+
+
+class AHProfile(_StubProfile):
+    id = "ah"
+    label = "Allen & Heath dLive / SQ"
+    vendor = "Allen & Heath"
+    transport = "midi"
+    note = "A&H 走 TCP MIDI 而非 OSC，除地址表外还需一层 MIDI 消息编码，接口已预留 transport 字段"
+    counts = {"ch": 64, "bus": 32, "dca": 16, "auxin": 8, "usb": 2,
+              "fxret": 8, "mtx": 16, "main": 1, "fx": 8}
+    caps = ("fader", "mute", "dca", "scene")
+
+
+CONSOLE_PROFILES = {p.id: p for p in (
+    X32Profile(), M32Profile(), WingProfile(), YamahaProfile(), AHProfile())}
+
+
+def profile():
+    """当前生效的控台驱动（未知 id 回落到 X32）。"""
+    return CONSOLE_PROFILES.get(CTRL_PROFILE_ID) or CONSOLE_PROFILES["x32"]
+
+
+def set_profile(pid):
+    """切换控台驱动。返回 (ok, 描述文本)。"""
+    global CTRL_PROFILE_ID
+    p = CONSOLE_PROFILES.get(str(pid))
+    if p is None:
+        return False, "未知控台: %s" % pid
+    CTRL_PROFILE_ID = p.id
+    log("CONSOLE 切换到 %s%s" % (p.label, "" if p.ready else "（待标定：写入将被拒绝）"))
+    save_user_config()
+    return True, p.label
+
+
+def console_listing():
+    """给 UI 用的控台清单（含能力与就绪状态）。"""
+    return [{"id": p.id, "label": p.label, "vendor": p.vendor,
+             "transport": p.transport, "ready": p.ready, "verified": p.verified,
+             "note": p.note, "counts": dict(p.counts),
+             "caps": list(p.caps), "pending": p.pending()}
+            for p in CONSOLE_PROFILES.values()]
+
+
+def addr_for_write(kind, idx):
+    """(kind, idx) → 真台地址。桥接转发与状态回包共用同一入口，避免两处走样。
+
+    返回 None 表示**当前控台不支持该 kind**（调用方须跳过并记日志）。
+    """
+    return profile().addr(kind, idx)
+
+
 # ---------------------------------------------------------------- 调音台状态
 
 class MixerState:
@@ -153,6 +414,16 @@ class MixerState:
         self.mtx = {i: {"fader": 0.75, "on": 1} for i in range(1, 7)}    # 矩阵输出 Matrix 1-6
         self.main = {"fader": 0.75, "on": 1}
         self.scene = 1
+        # FX 机架 1-8: 混响器. par 存**原生单位**参数值 (时间=秒 / 预延迟=毫秒 / 阻尼=0..1),
+        # 参数索引随算法变化, 映射表见 REVERB_ALGOS (默认值需真机标定)
+        self.fx = {i: {"type": "", "name": "", "on": 1, "mix": 0.25, "par": {}}
+                   for i in range(1, FX_COUNT + 1)}
+        for i, algo in enumerate(("HALL", "PLATE", "ROOM", "CHAMBER")):
+            if i + 1 <= FX_COUNT:
+                self.fx[i + 1]["type"] = algo
+                self.fx[i + 1]["par"] = dict(REVERB_DEFAULTS[algo])
+        self.fx[1]["name"] = "主厅堂"
+        self.fx[2]["name"] = "人声板"
         # DCA 成员表: {dca_idx: [ch_idx, ...]}; 手动推 DCA 时成员推子按 dB 差量级联
         # (与真台一致: /ch/XX/mix/dca 位掩码设置归属, 默认每 8 路一组)
         self.dca_members = {i: [] for i in range(1, 9)}
@@ -245,6 +516,21 @@ def match_address(pattern: str):
             kind = {"fader": "main_fader", "on": "main_on"}.get(segs[3])
             if kind:
                 results.append((kind, 0))
+        elif len(segs) >= 3 and segs[0] == "fx" and segs[1].isdigit():
+            # FX 机架: /fx/<槽>/type | on | mix | par/<参数号> | config/name
+            # ⚠️ 槽号不补零 (/fx/1/...), 参数号补零 (/fx/1/par/01)
+            slot = int(segs[1])
+            if 1 <= slot <= FX_COUNT:
+                if len(segs) == 3:
+                    kind = {"type": "fx_type", "on": "fx_on", "mix": "fx_mix"}.get(segs[2])
+                    if kind:
+                        results.append((kind, slot))
+                elif len(segs) == 4 and segs[2] == "par" and segs[3].isdigit():
+                    p = int(segs[3])
+                    if 1 <= p <= 64:
+                        results.append((fx_par_kind(p), slot))
+                elif len(segs) == 4 and segs[2] == "config" and segs[3] == "name":
+                    results.append(("fx_name", slot))
     return results
 
 
@@ -264,7 +550,27 @@ def get_value(kind, idx):
         for g in ("auxin", "usb", "fxret", "mtx"):
             if kind == g + "_fader": return float(STATE.__dict__[g][idx]["fader"])
             if kind == g + "_on":    return int(STATE.__dict__[g][idx]["on"])
+        if 1 <= idx <= FX_COUNT:
+            fx = STATE.fx[idx]
+            if kind == "fx_type": return fx["type"]
+            if kind == "fx_name": return fx["name"]
+            if kind == "fx_on":   return int(fx["on"])
+            if kind == "fx_mix":  return float(fx["mix"])
+            p = fx_par_num(kind)
+            if p is not None:     return float(fx["par"].get(p, 0.0))
     return None
+
+
+def target_exists(kind, idx):
+    """本地台面是否存在这个目标。
+
+    换控台后规模可能大于本地（例如 Wing 48 路 vs 本地 32 路），
+    目标超出范围时要**明确跳过并记日志**，不能让 KeyError 冒出去。
+    """
+    try:
+        return get_value(kind, idx) is not None
+    except (KeyError, IndexError, TypeError):
+        return False
 
 
 # 网页分组前缀 → 推子/静音 kind 映射 (/api/set 与 /api/setbatch 共用)
@@ -306,6 +612,22 @@ def set_value(kind, idx, value, source="manual"):
         elif kind == "dca_on":   STATE.dca[idx]["on"] = 1 if value else 0
         elif kind == "main_fader": STATE.main["fader"] = min(max(float(value), 0.0), 1.0)
         elif kind == "main_on":  STATE.main["on"] = 1 if value else 0
+        elif 1 <= idx <= FX_COUNT:
+            fx = STATE.fx[idx]
+            if kind == "fx_type":
+                fx["type"] = str(value).upper()[:8]
+                # 换算法要重新铺一套该算法的默认参数, 否则参数索引会串味
+                if fx["type"] in REVERB_ALGOS:
+                    fx["par"] = dict(REVERB_DEFAULTS.get(fx["type"], {}))
+                else:
+                    fx["par"] = {}
+            elif kind == "fx_name": fx["name"] = str(value)[:12]
+            elif kind == "fx_on":   fx["on"] = 1 if value else 0
+            elif kind == "fx_mix":  fx["mix"] = min(max(float(value), 0.0), 1.0)
+            else:
+                p = fx_par_num(kind)
+                if p is not None:
+                    fx["par"][p] = fx_par_clamp(idx, p, value)
         else:
             for g in ("auxin", "usb", "fxret", "mtx"):
                 if kind == g + "_fader":
@@ -318,6 +640,14 @@ def set_value(kind, idx, value, source="manual"):
         _bridge_forward(kind, idx, value)
     if cascade_from is not None:
         _dca_cascade(idx, cascade_from, float(value))
+    # 混响时间改动 → 按同步模式广播到联动组。
+    # 三个入口(软件改 / Tap 换算 / 真台回读)最终都汇聚到 set_value, 所以只在这里挂一次;
+    # 广播出去的写入用 source="action", 不会再触发本分支 —— 天然断开回环。
+    p = fx_par_num(kind)
+    if p is not None and source in ("manual", "sync"):
+        algo = fx_algo(idx)
+        if algo and p == algo["time"]:
+            _fx_time_fanout(idx, get_value(kind, idx), source)
 
 
 def _push_manual_now(kind, idx):
@@ -340,7 +670,10 @@ def _push_manual_now(kind, idx):
     if not subs:
         return
     try:
-        pkt = encode_message(value_reply(kind, idx))
+        reply = value_reply(kind, idx)
+        if reply is None:      # 当前控台没有该目标的地址
+            return
+        pkt = encode_message(reply)
     except Exception:
         return
     for s in subs:
@@ -354,30 +687,53 @@ def _bridge_forward(kind, idx, value):
     """桥接模式下把写入转成 OSC 发往真台, 并登记回声抑制记录。"""
     try:
         if kind == "ch_dca":
-            addr = "/ch/%02d/mix/dca" % idx
             arg = int(value) & 0xFF
-        elif kind.endswith("_fader"):
-            addr = FADER_ADDR[kind] % idx
-            arg = min(max(float(value), 0.0), 1.0)
+        elif kind in ("fx_type", "fx_name"):
+            arg = str(value)[:12]
+        elif kind.endswith("_fader") or kind == "fx_mix" or fx_par_num(kind) is not None:
+            arg = float(value)
         else:
-            addr = ON_ADDR[kind] % idx
             arg = 1 if value else 0
+        addr = addr_for_write(kind, idx)      # ⚠️ Main 无 %02d, 必须走统一映射 (见该函数注释)
+        if addr is None:
+            # 当前控台不支持这个目标 → 明说, 不要静默吞掉 (静默是这类 bug 的老家)
+            p = profile()
+            log("BRIDGE 跳过 %s %s: 当前控台「%s」未提供该地址%s"
+                % (kind, idx, p.label, "（驱动待标定）" if not p.ready else ""))
+            return
         sock = BRIDGE_SOCK[0]
         if sock is None:
             return
         sock.sendto(encode_message(OscMsg(addr, [arg])), BRIDGE["addr"])
         with BRIDGE_LOCK:
-            FWD_RECENT[(kind, idx)] = [float(arg), time.time()]
+            FWD_RECENT[(kind, idx)] = [arg, time.time()]
     except Exception as e:
         log("BRIDGE 转发失败 %s: %r" % (kind, e))
+
+
+def _fwd_is_echo(key, value):
+    """判断一条回读是不是自己刚转发造成的回声 (值相同 + 2 秒内)。"""
+    with BRIDGE_LOCK:
+        rec = FWD_RECENT.get(key)
+    if not rec:
+        return False
+    if time.time() - rec[1] >= 2.0:
+        return False
+    a, b = rec[0], value
+    if isinstance(a, str) or isinstance(b, str):
+        return str(a) == str(b)
+    try:
+        fa, fb = float(a), float(b)
+    except (TypeError, ValueError):
+        return False
+    # 时间/预延迟这类原生单位参数跨度大, 绝对容差 0.02 不够用, 补一个 0.5% 相对容差
+    return abs(fa - fb) <= max(0.02, abs(fb) * 0.005)
 
 
 def _bridge_apply_readback(kind, idx, value):
     """真台回读: 回声(自己刚转发过的值)静默吸收; 台面上的手动变化按冲突策略处理。"""
     key = (kind, idx)
-    with BRIDGE_LOCK:
-        rec = FWD_RECENT.get(key)
-    if rec and time.time() - rec[1] < 2.0 and abs(rec[0] - float(value)) < 0.02:
+    if _fwd_is_echo(key, value):
         set_value(kind, idx, value, source="sync")     # 自己写入的回声, 只对齐本地
         return
     # 真台端的变化: 渐变驱动中的通道 → 手动接管冲突; 其余静默同步
@@ -394,22 +750,40 @@ def _bridge_apply_readback(kind, idx, value):
 
 
 def _bridge_full_sync(sock):
-    """全量状态回读: 向真台发一轮 GET (Bundle), 用回包填本地台面。"""
-    counts = {"ch": 32, "bus": 16, "dca": 8, "auxin": 6, "usb": 2, "fxret": 8, "mtx": 6}
+    """全量状态回读: 向真台发一轮 GET (Bundle), 用回包填本地台面。
+
+    地址一律经 addr_for_write 取, 当前控台不支持的目标直接跳过 —— 这样换控台后
+    不会往真台发一堆它不认识的地址。
+    """
+    p = profile()
+    counts = p.counts
     gets = []
+
+    def _get(kind, idx):
+        a = addr_for_write(kind, idx)
+        if a:
+            gets.append(OscMsg(a, []))
+
     for tmap in (FADER_ADDR, ON_ADDR):
-        for k, tpl in tmap.items():
-            ids = range(1, counts[kind_group(k)] + 1) if not k.startswith("main_") else [0]
+        for k in tmap:
+            grp = kind_group(k)
+            ids = [0] if k.startswith("main_") else range(1, counts.get(grp, 0) + 1)
             for i in ids:
-                gets.append(OscMsg(tpl if k.startswith("main_") else tpl % i, []))
-    for i in range(1, 33):
-        gets.append(OscMsg("/ch/%02d/mix/dca" % i, []))
+                _get(k, i)
+    for i in range(1, counts.get("ch", 0) + 1):
+        _get("ch_dca", i)
+    # FX 机架: 类型 / 开关 / 混合比 / 各混响算法的 时间·预延迟·阻尼 参数
+    for s in range(1, counts.get("fx", 0) + 1):
+        for k in ("fx_type", "fx_on", "fx_mix"):
+            _get(k, s)
+        for pn in sorted({1, 2, 4}):
+            _get(fx_par_kind(pn), s)
     for chunk in (gets[x:x + 64] for x in range(0, len(gets), 64)):
         try:
             sock.sendto(encode_bundle(chunk), BRIDGE["addr"])
         except OSError as e:
             log("BRIDGE 全量同步发送失败: %r" % e)
-    log("BRIDGE 全量状态同步已请求 (%d 项)" % len(gets))
+    log("BRIDGE 全量状态同步已请求 (%d 项, 控台 %s)" % (len(gets), p.label))
 
 
 def bridge_client(ip, port):
@@ -679,7 +1053,9 @@ ON_ADDR = {"ch_on": "/ch/%02d/mix/on",
            "mtx_on": "/mtx/%02d/mix/on",
            "main_on": "/main/st/mix/on"}
 KIND_LABEL = {"ch": "通道", "bus": "输出Bus", "dca": "DCA", "main": "Main",
-              "auxin": "AuxIn", "usb": "USB", "fxret": "FX返回", "mtx": "Matrix"}
+              "auxin": "AuxIn", "usb": "USB", "fxret": "FX返回", "mtx": "Matrix",
+              "fx_par": "FX参数", "fx_type": "FX算法", "fx_name": "FX名称",
+              "fx_on": "FX开关", "fx_mix": "FX混合比"}
 
 
 def kind_group(kind):
@@ -713,16 +1089,21 @@ def target_label(group, idx):
 
 
 def value_reply(kind, idx):
+    """(kind, idx) → 状态回包的 OSC 消息。
+
+    返回 None 表示**当前控台不支持该目标**（调用方须过滤掉，不能塞进 bundle）。
+    """
     v = get_value(kind, idx)
-    if kind.startswith("main_"):
-        # Main 地址无 %02d 占位符, 不能走统一格式化
-        addr = FADER_ADDR[kind] if kind.endswith("_fader") else ON_ADDR[kind]
-        return OscMsg(addr, [v])
-    if kind.endswith("_fader"):
-        return OscMsg(FADER_ADDR[kind] % idx, [v])
+    a = addr_for_write(kind, idx)
+    if a is None or v is None:
+        return None
     if kind == "ch_dca":
-        return OscMsg("/ch/%02d/mix/dca" % idx, [int(v)])
-    return OscMsg(ON_ADDR[kind] % idx, [int(v)])
+        return OscMsg(a, [int(v)])
+    if kind.endswith("_fader") or kind == "fx_mix" or fx_par_num(kind) is not None:
+        return OscMsg(a, [float(v)])
+    if kind in ("fx_type", "fx_name"):
+        return OscMsg(a, [str(v)])
+    return OscMsg(a, [int(v)])
 
 
 def handle(msg: OscMsg, addr, sock):
@@ -815,12 +1196,25 @@ def handle(msg: OscMsg, addr, sock):
     if msg.args:
         kind, idx = matches[0]
         raw = msg.args[0]
-        if isinstance(raw, str) and raw:
-            raw = float(raw)          # X32 有时用字符串传小数
+        if isinstance(raw, str):
+            try:
+                raw = float(raw)      # X32 有时用字符串传小数
+            except ValueError:
+                pass                  # FX 类型/名称本来就是字符串("/fx/1/type HALL"), 原样往下传
         set_value(kind, idx, raw)
         label = KIND_LABEL.get(kind_group(kind), kind)
         if kind == "ch_dca":
             log("    SET %s %02d DCA掩码=%d" % (label, idx, int(raw) & 0xFF))
+        elif kind == "fx_on":
+            log("    SET FX%d 开关=%s" % (idx, "开" if raw else "旁通"))
+        elif kind == "fx_type":
+            log("    SET FX%d 算法=%s" % (idx, raw))
+        elif kind == "fx_name":
+            log("    SET FX%d 名称=%s" % (idx, raw))
+        elif kind == "fx_mix":
+            log("    SET FX%d 混合比=%.3f" % (idx, float(raw)))
+        elif fx_par_num(kind) is not None:
+            log("    SET FX%d 参数%02d = %.3f" % (idx, fx_par_num(kind), float(raw)))
         elif kind.endswith("_on"):
             log("    SET %s %02d mute=%s" % (label, idx if idx else 1, "开" if raw else "静音"))
         else:
@@ -828,7 +1222,10 @@ def handle(msg: OscMsg, addr, sock):
         return
 
     # get: 单条 -> 单消息回包; 多条 -> Bundle 回包
-    replies = [value_reply(k, i) for k, i in matches]
+    replies = [r for r in (value_reply(k, i) for k, i in matches) if r is not None]
+    if not replies:
+        log("    (当前控台不支持 %d 个匹配目标, 无回包)" % len(matches))
+        return
     if len(replies) == 1:
         sock.sendto(encode_message(replies[0]), addr)
     else:
@@ -842,13 +1239,10 @@ PUSH_KINDS = (list(FADER_ADDR.keys()) + list(ON_ADDR.keys()))
 def _push_state_diffs(sock, subscribers):
     """每次 tick 对比缓存, 把发生变化的推子/静音推给订阅者 (模拟真台变更推送)。"""
     sent = 0
+    counts = profile().counts
     for kind in PUSH_KINDS:
-        if kind.startswith("main_"):
-            ids = [0]
-        else:
-            n = {"ch": 32, "bus": 16, "dca": 8, "auxin": 6, "usb": 2,
-                 "fxret": 8, "mtx": 6}[kind_group(kind)]
-            ids = range(1, n + 1)
+        ids = [0] if kind.startswith("main_") else \
+            range(1, counts.get(kind_group(kind), 0) + 1)
         for i in ids:
             v = get_value(kind, i)
             if v is None:
@@ -858,7 +1252,10 @@ def _push_state_diffs(sock, subscribers):
             if old is not None and abs(old - v) < 1e-4:
                 continue
             PUSH_CACHE[key] = v
-            pkt = encode_message(value_reply(kind, i))
+            reply = value_reply(kind, i)
+            if reply is None:      # 当前控台没有这个目标的地址 → 不推送
+                continue
+            pkt = encode_message(reply)
             for s in subscribers:
                 try:
                     sock.sendto(pkt, s)
@@ -1180,6 +1577,193 @@ def _interrupted(kind, idx):
     return (kind, idx) in INTERRUPTS
 
 
+# ---------------------------------------------------------------- 混响同步 / Tap 定拍
+# 目标: 一次 Tap 或一次改动, 把「混响时间」按同步模式铺到联动组内所有混响槽;
+# 而且**双向**成立 —— 真台上改了混响, 也同步回本地并铺给组内其他槽。
+#
+# 三种同步模式 (谁说了算):
+#   software 软件主导: 软件改动 → 铺组内 + 下发真台; 真台回读只镜像自己, 不再外扩
+#   console  台面主导: 真台改动 → 铺组内 + 镜像到软件; 软件改动只改该槽, 不外扩
+#   both     双向互同步: 谁改都铺给组内
+#
+# 防回环的关键: 铺给其他槽的写入一律用 source="action", 它**不会再触发铺散**
+# (见 set_value 末尾的钩子), 而且每次转发都记进 FWD_RECENT, 真台回读到的回声
+# 由 _fwd_is_echo 吸收 —— 所以 software→真台→回读 与 真台→本地→真台 两条链
+# 都在两跳内收敛, 不会无限震荡。
+FX_SYNC = {"mode": "software", "group": [1, 2], "followTap": True,
+           "bpm": 120.0, "note": "1/4", "dotted": False}
+TAP_STATE = {"times": [], "count": 0, "bpm": 0.0}
+FX_SYNC_LOCK = threading.Lock()
+FX_MODE_LABEL = {"software": "软件主导", "console": "台面主导", "both": "双向互同步"}
+
+
+def note_seconds(bpm, note="1/4", dotted=False):
+    """BPM + 时值 → 秒数。四分音符 = 1 拍 = 60/BPM 秒; 附点 = ×1.5。"""
+    beats = NOTE_BEATS.get(str(note), 1.0)
+    if dotted:
+        beats *= 1.5
+    bpm = min(max(float(bpm or 120.0), TAP_BPM_MIN), TAP_BPM_MAX)
+    return beats * 60.0 / bpm
+
+
+def tap_reset():
+    with FX_SYNC_LOCK:
+        TAP_STATE["times"] = []
+        TAP_STATE["count"] = 0
+        TAP_STATE["bpm"] = 0.0
+
+
+def tap_register(now=None):
+    """记一次 Tap, 返回 (bpm, 点击次数, 是否已成拍)。
+    · 两次点击间隔 < TAP_INTERVAL_MIN → 判为抖动, 忽略
+    · 距上次点击 > TAP_RESET_GAP → 视为新的一组, 清空重来
+    · 取最近 TAP_MAX_INTERVALS 个间隔的**均值** → BPM (比只用最后一次稳得多)
+    """
+    now = time.time() if now is None else float(now)
+    with FX_SYNC_LOCK:
+        t = TAP_STATE
+        if t["times"] and now - t["times"][-1] > TAP_RESET_GAP:
+            t["times"] = []
+            t["count"] = 0
+        if t["times"] and now - t["times"][-1] < TAP_INTERVAL_MIN:
+            return t["bpm"], t["count"], len(t["times"]) >= 2
+        t["times"].append(now)
+        t["count"] += 1
+        if len(t["times"]) > TAP_MAX_INTERVALS + 1:
+            t["times"] = t["times"][-(TAP_MAX_INTERVALS + 1):]
+        if len(t["times"]) < 2:
+            return 0.0, t["count"], False
+        gaps = [t["times"][i + 1] - t["times"][i] for i in range(len(t["times"]) - 1)]
+        t["bpm"] = min(max(60.0 / (sum(gaps) / len(gaps)), TAP_BPM_MIN), TAP_BPM_MAX)
+        FX_SYNC["bpm"] = t["bpm"]
+    return TAP_STATE["bpm"], TAP_STATE["count"], True
+
+
+def fx_sync_targets():
+    """联动组里的混响槽。组为空时退化为「所有装了混响算法的槽」, 免得 Tap 变成空动作。"""
+    with FX_SYNC_LOCK:
+        g = [int(s) for s in FX_SYNC.get("group", [])
+             if isinstance(s, (int, float)) and 1 <= int(s) <= FX_COUNT]
+    if g:
+        return sorted(set(g))
+    return [s for s in range(1, FX_COUNT + 1) if fx_algo(s)]
+
+
+def _fx_time_fanout(src_slot, seconds, source):
+    """把一个混响时间铺给联动组里的其他槽。
+    source='manual' = 来自软件;  source='sync' = 来自真台回读。"""
+    with FX_SYNC_LOCK:
+        mode = FX_SYNC.get("mode", "software")
+    if mode == "software" and source == "sync":
+        return                      # 软件主导: 真台改哪个就只镜像哪个, 不外扩
+    if mode == "console" and source == "manual":
+        return                      # 台面主导: 软件改动不外扩
+    algo = fx_algo(src_slot)
+    if not algo:
+        return
+    kind = fx_par_kind(algo["time"])
+    spread = []
+    for s in fx_sync_targets():
+        if s == src_slot or not fx_algo(s):
+            continue
+        cur = get_value(kind, s)
+        if cur is not None and abs(float(cur) - float(seconds)) < 1e-4:
+            continue                # 已经一样了, 不写也不转发 (省一次 OSC)
+        set_value(kind, s, float(seconds), source="action")
+        spread.append(s)
+    if spread:
+        log("REVERB 同步[%s] FX%d 时间 %.2fs → 组内 %s" % (
+            FX_MODE_LABEL.get(mode, mode), src_slot, float(seconds),
+            "/".join("FX%d" % s for s in spread)))
+
+
+def fx_set_param(slot, field, value, source="manual"):
+    """混响槽的统一写入口。field ∈ type/on/mix/name/time/predelay/damp。
+    返回 (写入后的值, 错误串)。"""
+    try:
+        slot = int(slot)
+    except (TypeError, ValueError):
+        return None, "bad slot"
+    if not (1 <= slot <= FX_COUNT):
+        return None, "bad slot"
+    field = str(field)
+    if field == "type":
+        t = str(value).strip().upper()
+        if t and t not in REVERB_ALGOS:
+            return None, "unknown algo"
+        set_value("fx_type", slot, t, source)
+        return get_value("fx_type", slot), None
+    if field == "name":
+        set_value("fx_name", slot, str(value)[:12], source)
+        return get_value("fx_name", slot), None
+    if field == "on":
+        set_value("fx_on", slot, 1 if value else 0, source)
+        return get_value("fx_on", slot), None
+    if field == "mix":
+        set_value("fx_mix", slot, min(max(float(value), 0.0), 1.0), source)
+        return get_value("fx_mix", slot), None
+    algo = fx_algo(slot)
+    if not algo or field not in ("time", "predelay", "damp"):
+        return None, "slot has no reverb" if not algo else "unknown field"
+    p = algo[field]
+    v = fx_par_clamp(slot, p, value)
+    set_value(fx_par_kind(p), slot, v, source)   # 若是时间参数, set_value 内部会触发铺散
+    return v, None
+
+
+def fx_tap_apply():
+    """把 Tap 出的 BPM 按当前时值换算成混响时间, 写进联动组 (受 followTap 控制)。
+    返回 (换算秒数 / None, 明细列表 或 错误串)。"""
+    with FX_SYNC_LOCK:
+        bpm = FX_SYNC.get("bpm") or TAP_STATE["bpm"]
+        note = FX_SYNC.get("note", "1/4")
+        dotted = bool(FX_SYNC.get("dotted"))
+        follow = bool(FX_SYNC.get("followTap"))
+    if not bpm or bpm <= 0:
+        return None, "还没 Tap 出拍子"
+    secs = note_seconds(bpm, note, dotted)
+    if not follow:
+        return secs, []             # followTap 关着: 只返回算好的时间, 不写槽
+    written = []
+    for s in fx_sync_targets():
+        algo = fx_algo(s)
+        if not algo:
+            continue
+        clamped = min(max(secs, algo["tmin"]), algo["tmax"])
+        # source="action": 一次性写全部目标, 不再触发铺散 (铺散是给"单点改动"用的)
+        set_value(fx_par_kind(algo["time"]), s, clamped, source="action")
+        written.append({"slot": s, "time": clamped, "clamped": abs(clamped - secs) > 1e-4})
+    log("REVERB Tap %.1f BPM × %s%s = %.2fs → %d 个混响槽" % (
+        bpm, note, "(附点)" if dotted else "", secs, len(written)))
+    return secs, written
+
+
+def fx_state():
+    """给网页/API 的混响快照。"""
+    slots = []
+    with STATE.lock:
+        for s in range(1, FX_COUNT + 1):
+            fx = STATE.fx[s]
+            algo = REVERB_ALGOS.get(fx["type"])
+            item = {"slot": s, "type": fx["type"], "label": algo["label"] if algo else "",
+                    "name": fx["name"], "on": int(fx["on"]), "mix": float(fx["mix"]),
+                    "time": None, "predelay": None, "damp": None,
+                    "tmin": algo["tmin"] if algo else None,
+                    "tmax": algo["tmax"] if algo else None}
+            if algo:
+                item["time"] = float(fx["par"].get(algo["time"], 0.0))
+                item["predelay"] = float(fx["par"].get(algo["predelay"], 0.0))
+                item["damp"] = float(fx["par"].get(algo["damp"], 0.0))
+            slots.append(item)
+    with FX_SYNC_LOCK:
+        sync = dict(FX_SYNC)
+        sync["group"] = list(FX_SYNC.get("group", []))
+        tap = {"count": TAP_STATE["count"], "bpm": TAP_STATE["bpm"]}
+    return {"slots": slots, "sync": sync, "tap": tap, "noteBeats": dict(NOTE_BEATS),
+            "algos": {k: {"label": v["label"], "tmin": v["tmin"], "tmax": v["tmax"]}
+                      for k, v in REVERB_ALGOS.items()}}
+
+
 # ---------------------------------------------------------------- 推子快照
 # 灵感来自"电动推子自动化":保存当前所有推子位置,一键让全部推子自动滑回
 
@@ -1355,6 +1939,13 @@ def save_user_config():
             json.dump({"quickKeys": QUICK_KEYS, "cards": SHOW_CARDS,
                        "keyCfg": KEY_CFG, "idSeq": ID_SEQ[0],
                        "bridgeTarget": BRIDGE_TARGET,
+                       "fxSync": dict(FX_SYNC),
+                       "console": CTRL_PROFILE_ID,
+                       "fxSlots": {str(s): {"type": STATE.fx[s]["type"],
+                                            "name": STATE.fx[s]["name"],
+                                            "mix": STATE.fx[s]["mix"],
+                                            "par": {str(p): v for p, v in STATE.fx[s]["par"].items()}}
+                                   for s in range(1, FX_COUNT + 1)},
                        "names": {"%s|%d" % k: v for k, v in STATE.names.items()}},
                       f, ensure_ascii=False, indent=1)
     except Exception as e:
@@ -1362,7 +1953,7 @@ def save_user_config():
 
 
 def load_user_config():
-    global BRIDGE_TARGET
+    global BRIDGE_TARGET, CTRL_PROFILE_ID
     try:
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
             d = json.load(f)
@@ -1399,8 +1990,41 @@ def load_user_config():
                     pass
         if isinstance(d.get("idSeq"), int):
             ID_SEQ[0] = max(ID_SEQ[0], d["idSeq"])
+        if isinstance(d.get("fxSync"), dict):
+            with FX_SYNC_LOCK:
+                for k in ("mode", "group", "followTap", "bpm", "note", "dotted"):
+                    if k in d["fxSync"]:
+                        FX_SYNC[k] = d["fxSync"][k]
+        if isinstance(d.get("fxSlots"), dict):
+            with STATE.lock:
+                for sk, sv in d["fxSlots"].items():
+                    try:
+                        s = int(sk)
+                    except (TypeError, ValueError):
+                        continue
+                    if not (1 <= s <= FX_COUNT) or not isinstance(sv, dict):
+                        continue
+                    t = str(sv.get("type", "")).upper()
+                    if t and t not in REVERB_ALGOS:
+                        continue
+                    STATE.fx[s]["type"] = t
+                    STATE.fx[s]["name"] = str(sv.get("name", ""))[:12]
+                    try:
+                        STATE.fx[s]["mix"] = min(max(float(sv.get("mix", 0.25)), 0.0), 1.0)
+                    except (TypeError, ValueError):
+                        pass
+                    par = sv.get("par")
+                    if isinstance(par, dict):
+                        STATE.fx[s]["par"] = {}
+                        for pk, pv in par.items():
+                            try:
+                                STATE.fx[s]["par"][int(pk)] = float(pv)
+                            except (TypeError, ValueError):
+                                pass
         if isinstance(d.get("bridgeTarget"), str) and d["bridgeTarget"].strip():
             BRIDGE_TARGET = d["bridgeTarget"].strip()
+        if isinstance(d.get("console"), str) and d["console"] in CONSOLE_PROFILES:
+            CTRL_PROFILE_ID = d["console"]
         log("已加载自定义配置: %d 个控制键, %d 张演出卡片%s"
             % (len(QUICK_KEYS), len(SHOW_CARDS),
                (", 记住的真台地址 %s" % BRIDGE_TARGET) if BRIDGE_TARGET else ""))
@@ -1475,9 +2099,140 @@ FADE_ACT_KINDS = ("fade_all", "fade_odd_even", "fade_ch", "fade_bus",
                   "fade_from", "fade_from_bus", "rel_db")
 
 
+# ---------------------------------------------------------------- 通用动作 set
+#
+# 背景: 原有 12 个动作是"常见演出套装"（全体渐变 / 奇偶过渡 / 相对增减 dB …），
+# 覆盖面广但补不全 —— 例如"把 DCA 3 拉到 80%""把 FX1 混响时间改成 2.4 秒"就做不到。
+#
+# 通用动作把它收敛成一件事: 指定**目标**和**值**。
+#   {"kind":"set", "target":{"group":"dca","id":3,"param":"fader"}, "value":0.8}
+#   {"kind":"set", "target":{"group":"fx","id":1,"param":"time"}, "value":2.4}
+#   {"kind":"set", "target":{"group":"scene","id":5}}
+#   target 里带 duration>0 时走渐变 (仅 param="fader" 有意义)。
+#
+# ⚠️ target 描述的是**语义**（哪个分组的第几路、改哪个参数），不含任何协议信息；
+#    落到真实地址的活交给 ConsoleProfile（见"控台驱动层"）。所以同一个 set 动作
+#    天然跨控台 —— 这不是额外做的适配，而是它本来就走在语义管道上。
+
+SET_GROUPS = ("ch", "bus", "dca", "main", "auxin", "usb", "fxret", "mtx",
+              "fx", "scene")
+SET_PARAMS = {
+    "ch": ("fader", "on"), "bus": ("fader", "on"), "dca": ("fader", "on"),
+    "main": ("fader", "on"), "auxin": ("fader", "on"), "usb": ("fader", "on"),
+    "fxret": ("fader", "on"), "mtx": ("fader", "on"),
+    "fx": ("type", "name", "on", "mix", "time", "predelay", "damp"),
+    "scene": ("load",),
+}
+SET_GROUP_LABEL = {"ch": "通道", "bus": "Bus", "dca": "DCA", "main": "主输出",
+                   "auxin": "AuxIn", "usb": "USB", "fxret": "FX返回",
+                   "mtx": "Matrix", "fx": "FX", "scene": "场景"}
+SET_PARAM_LABEL = {"fader": "推子", "on": "开关", "type": "算法", "name": "名称",
+                   "mix": "混合比", "time": "混响时间", "predelay": "预延迟",
+                   "damp": "阻尼", "load": "调用"}
+
+
+def set_target_id(target):
+    """取出目标的编号。main 固定 0（只有一路）；scene 的编号即场景号。"""
+    group = (target or {}).get("group")
+    if group == "main":
+        return 0
+    try:
+        return int(float((target or {}).get("id", 1)))
+    except (TypeError, ValueError):
+        return 1
+
+
+def resolve_set_target(group, param, idx):
+    """(group, param, idx) → 语义 kind; 组合不合法或不适用时返回 None。
+
+    这里是通用动作与控台驱动层的接缝: 只产出 kind，不产出地址。
+    """
+    if group not in SET_GROUPS:
+        return None
+    if param is None:
+        param = "load" if group == "scene" else "fader"
+    if param not in SET_PARAMS.get(group, ()):
+        return None
+    if group == "scene":
+        return "scene"                    # 场景是"动作"而非"值", 单独走
+    if group == "fx":
+        if param in ("type", "name", "on", "mix"):
+            return "fx_" + param
+        algo = fx_algo(idx)               # 时间/预延迟/阻尼的参数号随算法变化
+        if not algo:
+            return None                   # 空槽没有这些参数
+        return fx_par_kind(algo[param])
+    return "%s_%s" % (group, param)
+
+
+def _exec_set(act):
+    """通用动作: 设置某个语义目标的值。"""
+    tg = act.get("target") or {}
+    group = tg.get("group")
+    param = tg.get("param", "fader")
+    idx = set_target_id(tg)
+
+    if group == "scene":
+        n = max(1, idx)
+        with STATE.lock:
+            STATE.scene = n
+        log("SHOW 切场景 %d" % n)
+        return
+
+    kind = resolve_set_target(group, param, idx)
+    if kind is None:
+        log("SHOW 跳过设置 %s.%s #%d: 参数组合不被支持" % (group, param, idx))
+        return
+    p = profile()
+    if p.addr(kind, idx) is None:
+        log("SHOW 跳过设置 %s.%s #%d: 控台「%s」不支持%s"
+            % (group, param, idx, p.label, "（驱动待标定）" if not p.ready else ""))
+        return
+    if not target_exists(kind, idx):
+        log("SHOW 跳过设置 %s.%s #%d: 本地台面没有这个目标" % (group, param, idx))
+        return
+    set_value(kind, idx, act.get("value", 0.0), source="action")
+    log("SHOW 设置 %s" % _act_label(act))
+
+
+def _exec_osc(act):
+    """原始 OSC 动作: 直接发一条自定义消息。
+
+    ⚠️ 这个动作**不是跨控台**的 —— 地址是控台专有的。换控台后同一条消息可能指向
+    别的参数（甚至无效），所以 UI 上要明确标注。行为分两种：
+      1. 地址能被本机解析（match_address 认得）→ 走 set_value：本地状态同步 + 桥接转发；
+      2. 解析不出来 → 只发往桥接的真台；没有桥接则记日志忽略。
+    两条路都会写日志，不会静默。
+    """
+    a = str(act.get("address", ""))
+    args = list(act.get("args") or [])
+    m = match_address(a)
+    if m and args:
+        kind, idx = m[0]
+        set_value(kind, idx, args[0], source="action")
+        log("SHOW 原始 OSC %s %s (已应用到本地)" % (a, args))
+        return
+    sock = BRIDGE_SOCK[0]
+    if sock is None or BRIDGE["addr"] is None:
+        log("SHOW 原始 OSC %s: 未桥接真台, 已忽略" % a)
+        return
+    try:
+        sock.sendto(encode_message(OscMsg(a, args)), BRIDGE["addr"])
+        log("SHOW 原始 OSC %s %s (已发往真台)" % (a, args))
+    except Exception as e:
+        log("SHOW 原始 OSC 发送失败: %r" % e)
+
+
 def _act_duration(act):
     """动作占用时间轴的秒数; 瞬时动作(静音/场景)为 0。"""
     k = act.get("kind")
+    if k == "set":
+        # 通用设置默认**瞬时**（duration 缺省为 0）；给了 duration 才占时间轴走渐变
+        try:
+            d = float(act.get("duration", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            d = 0.0
+        return max(0.05, d) if d > 0 else 0.0
     if k == "wait" or k in FADE_ACT_KINDS:
         try:
             return max(0.05, float(act.get("duration", 3.0)))
@@ -1527,6 +2282,28 @@ def _act_label(act):
             lbl = "、".join(target_label(grp, int(i)) for i in ids_)
             d = float(act.get("delta_db", 3.0))
             return "%s %s%.1f dB" % (lbl, "+" if d >= 0 else "−", abs(d))
+        if k == "set":
+            tg = act.get("target") or {}
+            g = tg.get("group")
+            p = tg.get("param", "fader")
+            i = set_target_id(tg)
+            if g == "scene":
+                return "切场景 %d" % i
+            if g == "fx":
+                if p in ("type", "name"):
+                    return "FX%d %s=%s" % (i, SET_PARAM_LABEL.get(p, p), act.get("value", ""))
+                if p == "on":
+                    return "FX%d %s" % (i, "开启" if act.get("value") else "旁通")
+                if p == "mix":
+                    return "FX%d 混合比→%.0f%%" % (i, float(act.get("value", 0)) * 100)
+                return "FX%d %s→%.2f" % (i, SET_PARAM_LABEL.get(p, p),
+                                         float(act.get("value", 0)))
+            lbl = target_label(g, i)
+            if p == "on":
+                return "%s %s" % (lbl, "开启" if act.get("value") else "静音")
+            return "%s →%.0f%%" % (lbl, float(act.get("value", 0)) * 100)
+        if k == "osc":
+            return "原始 OSC %s" % act.get("address", "")
     except Exception:
         pass
     return str(k)
@@ -1568,6 +2345,21 @@ def _fade_targets_for(act):
             cur_db = STATE.fader_to_db(get_value(fk, int(i)))
             out.append((fk, int(i), db_to_fader(min(max(cur_db + delta, -90.0), 10.0))))
         return out
+    if k == "set":
+        tg = act.get("target") or {}
+        g = tg.get("group")
+        p = tg.get("param", "fader")
+        if p != "fader":
+            return None                  # 只有推子类能渐变, 其余落到瞬时路径
+        i = set_target_id(tg)
+        kind = resolve_set_target(g, p, i)
+        if kind is None or not profile().addr(kind, i) or not target_exists(kind, i):
+            return None                  # 组合不合法 / 控台不支持 / 本地无此目标 → 退化为瞬时
+        try:
+            to = float(act.get("value", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            to = 0.0
+        return [(kind, i, min(max(to, 0.0), 1.0))]
     return None
 
 
@@ -1600,6 +2392,10 @@ def _exec_instant(act):
                 set_value(g + "_on", i, 1, source="action")
         set_value("main_on", 0, 1, source="action")
         log("SHOW 全部取消静音")
+    elif k == "set":
+        _exec_set(act)
+    elif k == "osc":
+        _exec_osc(act)
 
 
 def _apply_fade(fade, ratio):
@@ -1765,6 +2561,83 @@ def _run_card_on_timeline(card):
 CURVES = ("linear", "ease_out", "ease_in", "smooth")
 
 
+def _clean_set_action(a, num):
+    """校验通用动作。group/param 必须在白名单内，id 按当前控台规模钳制。"""
+    tg = a.get("target")
+    if not isinstance(tg, dict):
+        return None
+    group = tg.get("group")
+    if group not in SET_GROUPS:
+        return None
+    # scene 的 param 是 "load"（切场景没有"值"的概念），其余默认 "fader"
+    param = tg.get("param") or ("load" if group == "scene" else "fader")
+    if param not in SET_PARAMS.get(group, ()):
+        return None
+    try:
+        idx = int(float(tg.get("id", 1)))
+    except (TypeError, ValueError):
+        idx = 1
+    if group == "main":
+        idx = 0
+    elif group == "scene":
+        idx = min(max(idx, 1), 99)
+    else:
+        # 按**当前控台**的规模钳制：换到 64 通道的台子后, 卡片能写到 64 路
+        cap = profile().counts.get(group, 32)
+        idx = min(max(idx, 1), max(1, cap))
+
+    out = {"kind": "set", "target": {"group": group, "param": param, "id": idx}}
+    if group == "fx" and param == "type":
+        out["value"] = str(a.get("value", ""))[:8].upper()
+    elif group == "fx" and param == "name":
+        out["value"] = str(a.get("value", ""))[:12]
+    elif param == "on":
+        out["value"] = 1 if num("value", 0.0, 0.0, 1.0) >= 0.5 else 0
+    elif param == "fader":
+        out["value"] = num("value", 0.0, 0.0, 1.0)
+    elif group == "fx":
+        # 混响时间/预延迟/阻尼吃**原生单位**（秒/毫秒），范围交给 fx_par_clamp 按算法钳制
+        out["value"] = num("value", 0.0, -1000.0, 20000.0)
+    else:
+        out["value"] = num("value", 0.0, 0.0, 1.0)
+    if a.get("duration") is not None:
+        out["duration"] = num("duration", 0.0, 0.0, 60.0)
+    if a.get("at") is not None:
+        out["at"] = num("at", 0.0, 0.0, 600.0)
+    return out
+
+
+def _clean_osc_action(a, num):
+    """校验原始 OSC 动作。
+
+    ⚠️ 这个动作是**控台专有**的：地址写死，换控台后可能指向别的参数（甚至无效）。
+    这里只做防呆（地址格式、参数个数与类型），**不做语义校验** —— 地址对不对只有
+    用户自己知道。这正是它必须以独立动作类型出现、并带醒目提示的原因。
+    """
+    addr = str(a.get("address", "")).strip()
+    if not addr.startswith("/") or len(addr) > 128 or " " in addr:
+        return None
+    args = a.get("args")
+    if not isinstance(args, list):
+        args = [] if a.get("value") is None else [a.get("value")]
+    clean = []
+    for v in args[:8]:
+        if isinstance(v, bool):
+            clean.append(1 if v else 0)
+        elif isinstance(v, (int, float)):
+            clean.append(float(v))
+        elif isinstance(v, str):
+            clean.append(v[:64])
+        else:
+            return None
+    out = {"kind": "osc", "address": addr}
+    if clean:
+        out["args"] = clean
+    if a.get("at") is not None:
+        out["at"] = num("at", 0.0, 0.0, 600.0)
+    return out
+
+
 def _clean_action(a):
     """校验网页提交的动作, 只放行白名单类型与合法数值。"""
     if not isinstance(a, dict):
@@ -1772,7 +2645,7 @@ def _clean_action(a):
     k = a.get("kind")
     if k not in ("mute", "mute_bus", "scene", "unmute_all", "wait",
                  "fade_all", "fade_odd_even", "fade_ch", "fade_bus",
-                 "fade_from", "fade_from_bus", "rel_db"):
+                 "fade_from", "fade_from_bus", "rel_db", "set", "osc"):
         return None
 
     def num(key, default, lo, hi):
@@ -1800,6 +2673,10 @@ def _clean_action(a):
 
     curve = a.get("curve") if a.get("curve") in CURVES else "linear"
     out = {"kind": k}
+    if k == "set":
+        return _clean_set_action(a, num)
+    if k == "osc":
+        return _clean_osc_action(a, num)
     if k == "mute":
         out["chs"] = ids("ch", "chs", 1, 32)
     elif k == "mute_bus":
@@ -1876,6 +2753,13 @@ def snapshot_state(since_log=None):
         "main": STATE.main,
         "meters": levels,
         "scene": scene,
+        "fx": fx_state(),
+        "console": {"id": profile().id, "label": profile().label,
+                    "vendor": profile().vendor, "transport": profile().transport,
+                    "ready": profile().ready, "verified": profile().verified,
+                    "note": profile().note, "caps": list(profile().caps),
+                    "counts": dict(profile().counts),
+                    "all": console_listing()},
         "cards": SHOW_CARDS,
         "show": dict(SHOW_STATE),
         "events": list(EVENTS)[-6:],
@@ -2060,6 +2944,84 @@ class WebHandler(BaseHTTPRequestHandler):
                 KEY_CFG["ramp"] = min(max(float(data["ramp"]), 0.0), 5.0)
             log("KEYCFG 步长 %.1f dB, 渐变 %.1f 秒" % (KEY_CFG["step_db"], KEY_CFG["ramp"]))
             self._send(200, "application/json", b'{"ok":true}')
+
+        elif path == "/api/fx":
+            # 混响槽写入: {slot, field, value}  field ∈ type/on/mix/name/time/predelay/damp
+            v, err = fx_set_param(data.get("slot"), data.get("field"), data.get("value"),
+                                  source="manual")
+            if err:
+                self._send(400, "application/json",
+                           json.dumps({"ok": False, "error": err}).encode("utf-8"))
+                return
+            save_user_config()
+            self._send(200, "application/json",
+                       json.dumps({"ok": True, "value": v}).encode("utf-8"))
+
+        elif path == "/api/tap":
+            # Tap 定拍: action='tap' 记一次点击 / 'reset' 清空 / 'apply' 按当前时值换算并写入
+            act = str(data.get("action", "tap"))
+            if act == "reset":
+                tap_reset()
+                self._send(200, "application/json", b'{"ok":true,"reset":true}')
+                return
+            if act == "tap":
+                bpm, count, locked = tap_register()
+                self._send(200, "application/json",
+                           json.dumps({"ok": True, "bpm": round(bpm, 1), "count": count,
+                                       "locked": locked}).encode("utf-8"))
+                return
+            if act == "apply":
+                secs, written = fx_tap_apply()
+                if isinstance(written, str):
+                    self._send(400, "application/json",
+                               json.dumps({"ok": False, "error": written}).encode("utf-8"))
+                    return
+                self._send(200, "application/json",
+                           json.dumps({"ok": True, "seconds": round(secs, 3),
+                                       "written": written}).encode("utf-8"))
+                return
+            self._send(400, "application/json", b'{"ok":false,"error":"bad action"}')
+
+        elif path == "/api/fxsync":
+            # 混响同步设置: {mode, group, followTap, note, dotted}
+            with FX_SYNC_LOCK:
+                mode = str(data.get("mode", FX_SYNC["mode"]))
+                if mode in FX_MODE_LABEL:
+                    FX_SYNC["mode"] = mode
+                if isinstance(data.get("group"), list):
+                    FX_SYNC["group"] = sorted({int(s) for s in data["group"]
+                                               if isinstance(s, (int, float))
+                                               and 1 <= int(s) <= FX_COUNT})
+                if "followTap" in data:
+                    FX_SYNC["followTap"] = bool(data["followTap"])
+                if "note" in data and str(data["note"]) in NOTE_BEATS:
+                    FX_SYNC["note"] = str(data["note"])
+                if "dotted" in data:
+                    FX_SYNC["dotted"] = bool(data["dotted"])
+                snapshot = dict(FX_SYNC)
+            save_user_config()
+            log("REVERB 同步设置: %s · 联动组 %s · 跟随Tap %s · 时值 %s%s" % (
+                FX_MODE_LABEL.get(snapshot["mode"], snapshot["mode"]),
+                "/".join("FX%d" % s for s in snapshot["group"]) or "(空·全部混响槽)",
+                "开" if snapshot["followTap"] else "关",
+                snapshot["note"], "(附点)" if snapshot["dotted"] else ""))
+            self._send(200, "application/json",
+                       json.dumps({"ok": True, "sync": snapshot}).encode("utf-8"))
+
+        elif path == "/api/ctrlprofile":
+            # 切换控台驱动: {id: "x32" | "m32" | "wing" | "yamaha" | "ah"}
+            ok, msg = set_profile(data.get("id"))
+            if not ok:
+                self._send(400, "application/json",
+                           json.dumps({"ok": False, "error": msg}).encode("utf-8"))
+                return
+            p = profile()
+            self._send(200, "application/json", json.dumps({
+                "ok": True, "id": p.id, "label": p.label, "vendor": p.vendor,
+                "ready": p.ready, "verified": p.verified,
+                "warning": "" if p.ready else
+                "该控台驱动尚未标定：所有写入会被拒绝并记日志，卡片不会真正控制到台子",
+            }).encode("utf-8"))
 
         elif path == "/api/console":
             # 数据读取与调用流程: 空台子 / 回传数据
@@ -2572,6 +3534,28 @@ WEB_PAGE = """<!DOCTYPE html>
         font-weight:700;flex:none}
   .fadj:active{background:var(--accent);color:#141414}
   @media (max-width:768px){ .fadj{min-width:30px;padding:9px 4px} }
+  /* ---- 混响控制 (FX 槽) ---- */
+  .fxpars{display:flex;flex-direction:column;gap:7px;margin-top:9px}
+  .fxrow{display:flex;align-items:center;gap:10px}
+  .fxlab{font-size:12px;color:var(--sub);width:66px;flex:none}
+  .fxrow input[type=range]{flex:1;min-width:0;height:28px;-webkit-appearance:none;appearance:none;
+                           background:transparent}
+  /* 与推子行同一套滑杆外观，免得混响页看起来像另一个产品 */
+  .fxrow input[type=range]::-webkit-slider-runnable-track{height:7px;border-radius:4px;
+    background:linear-gradient(90deg,#0d0f13,#31374a);box-shadow:inset 0 1px 3px rgba(0,0,0,.6)}
+  .fxrow input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;height:28px;
+    margin-top:-11px;border-radius:6px;background:linear-gradient(180deg,#3d4454,#22262f);
+    border:1px solid #4d566b;box-shadow:0 3px 8px rgba(0,0,0,.55)}
+  .fxrow input[type=range]::-moz-range-track{height:7px;border-radius:4px;
+    background:linear-gradient(90deg,#0d0f13,#31374a)}
+  .fxrow input[type=range]::-moz-range-thumb{width:20px;height:26px;border-radius:6px;
+    background:linear-gradient(180deg,#3d4454,#22262f);border:1px solid #4d566b}
+  .fxval{font-size:12px;width:70px;text-align:right;flex:none;color:var(--txt);
+         font-variant-numeric:tabular-nums}
+  .fx-tag{margin-left:auto;white-space:nowrap}
+  #fxGroup .chip{display:inline-flex;align-items:center;gap:5px;padding:6px 10px;
+                 border:1px solid var(--line);border-radius:9px;background:var(--card2);font-size:12px}
+  #fxGroup .chip.on{border-color:var(--accent);background:rgba(255,180,84,.14);color:var(--accent)}
   /* ---- 危险卡长按确认 ---- */
   .tile{position:relative}
   .card{position:relative}
@@ -2619,11 +3603,70 @@ WEB_PAGE = """<!DOCTYPE html>
   <div class="tilegrid" id="tileKeys"></div>
 </div>
 
+<div class="page" id="pg-fx"><h3>🎛 混响控制 (Tap 定拍 · 混响时间同步)</h3>
+  <div class="ds">这里是 X32 的 <b>FX 效果槽 1-8</b>。给槽选一个混响算法后, 就能调<b>混响时间</b>、预延迟、阻尼与混合比。
+    <b>Tap 定拍</b>可直接把混响时间算到节拍上, 再按「同步设置」铺给联动的其他槽。</div>
+
+  <div class="card">
+    <div class="nm">🥁 Tap 定拍</div>
+    <div class="ds">连点 2 下以上。取最近 8 个间隔的均值算 BPM(比只看最后一拍稳得多); 间隔超过 2 秒自动重新开始, 靠得太近的抖动会被忽略。</div>
+    <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:10px 0">
+      <button id="tapBtn" onpointerdown="tapHit()"
+        style="font-size:22px;font-weight:800;letter-spacing:.08em;padding:18px 40px;border:0;
+               border-radius:16px;background:var(--accent);color:#141414;cursor:pointer">TAP</button>
+      <div style="font-size:13px;line-height:1.7">
+        <b id="tapBpm" style="font-size:17px;font-variant-numeric:tabular-nums">— BPM</b><br>
+        <span class="ds" id="tapInfo" style="margin:0">连点 2 下以上定拍</span>
+      </div>
+      <button style="background:#565d6d;color:#fff;padding:9px 14px" onclick="tapReset()">清零</button>
+      <button style="background:var(--green);color:#141414;padding:9px 16px;font-weight:700" onclick="tapApply()">↧ 换算并写入</button>
+    </div>
+    <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+      <label style="font-size:13px">时值
+        <select id="fxNote" onchange="fxSyncSet()" class="nkin"></select></label>
+      <label style="font-size:13px;display:flex;gap:5px;align-items:center">
+        <input type="checkbox" id="fxDotted" onchange="fxSyncSet()"> 附点 ×1.5</label>
+      <span class="ds" id="fxTapSecs" style="margin:0"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="nm">🔗 同步设置</div>
+    <div class="ds">决定「谁说了算」, 避免软件与真台互写产生回声回环。改动会自动下发真台(桥接模式)。</div>
+    <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:8px 0">
+      <label style="font-size:13px">模式
+        <select id="fxMode" onchange="fxSyncSet()" class="nkin">
+          <option value="software">软件主导 (软件改→铺全组; 真台改只镜像)</option>
+          <option value="console">台面主导 (真台改→铺全组; 软件改不外扩)</option>
+          <option value="both">双向互同步 (谁改都铺全组)</option>
+        </select></label>
+      <label style="font-size:13px;display:flex;gap:5px;align-items:center">
+        <input type="checkbox" id="fxFollow" onchange="fxSyncSet()"> 跟随 Tap (Tap 结果自动写入联动组)</label>
+    </div>
+    <div class="ds" style="margin:0 0 6px">联动组 — 勾选的槽互相同步混响时间(全不勾 = 所有混响槽):</div>
+    <div id="fxGroup" style="display:flex;gap:6px;flex-wrap:wrap"></div>
+  </div>
+
+  <h3>🎚 效果槽 1-8</h3>
+  <div id="fxlist"></div>
+</div>
+
 <div class="page" id="pg-set">
   <div class="infobox">
     UDP 端口 <b>10023</b> · 电平表订阅者 <b id="subs">0</b><br>
     手机 App:设置 → 调音台 IP 填本机局域网 IP,或用自动发现<br>
     本网页与 UDP 共享同一台"虚拟调音台",改动实时互通
+  </div>
+  <h3>🎛 控台型号 (驱动层)</h3>
+  <div class="card">
+    <div class="ds">卡片动作、控制键、桥接转发都走同一套「语义目标」管道,由控台驱动翻译成真实地址。
+      换控台只需在这里切换 —— X32 与 M32 同协议(M32 是 Midas 贴牌),驱动完全复用。</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <select id="ctrlSel" class="nkin" onchange="setConsole(this.value)" style="min-width:230px"></select>
+      <span class="scenechip" id="ctrlStat">…</span>
+    </div>
+    <div id="ctrlNote" class="ds" style="margin-top:8px"></div>
+    <div id="ctrlCaps" class="ds" style="margin-top:6px"></div>
   </div>
   <h3>📱 手机 / 安卓平板连接</h3>
   <div class="card">
@@ -2706,6 +3749,7 @@ WEB_PAGE = """<!DOCTYPE html>
 
 <nav>
   <button class="on" data-p="cards"><span class="ic">🎬</span>卡片</button>
+  <button data-p="fx"><span class="ic">🎛</span>混响</button>
   <button data-p="keys"><span class="ic">⚡</span>控制键</button>
   <button data-p="mix"><span class="ic">🎚</span>调音台</button>
   <button data-p="set"><span class="ic">⚙️</span>设置</button>
@@ -2730,6 +3774,8 @@ WEB_PAGE = """<!DOCTYPE html>
         <option value="fade_ch">通道渐变 (可多选)</option><option value="fade_bus">Bus 渐变 (可多选)</option>
         <option value="fade_from">通道从指定值渐变</option><option value="fade_from_bus">Bus 从指定值渐变</option>
         <option value="rel_db">相对增减 dB (可多选)</option>
+        <option value="set">⚡ 通用设置 (任意目标 + 值)</option>
+        <option value="osc">⚠️ 原始 OSC (高级 · 仅当前控台)</option>
       </select>
       <span id="caParams" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;width:100%"></span>
       <button onclick="addAct()">＋加入动作</button>
@@ -2847,6 +3893,7 @@ function init(){
   h='';  for(let i=1;i<=6;i++)  h+=rowHTML('t',i); $('#mtxlist').innerHTML=h;
   h='';  for(let i=1;i<=8;i++)  h+=rowHTML('d',i); $('#dcalist').innerHTML=h;
   $('#mainrow').innerHTML=rowHTML('m',0);
+  buildFx();
   document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{
     document.querySelectorAll('nav button').forEach(x=>x.classList.remove('on'));
     document.querySelectorAll('.page').forEach(x=>x.classList.remove('on'));
@@ -2894,6 +3941,49 @@ function recallSnap(id,sel){ api('/api/snapshot',{action:'recall',id:id,seconds:
 function delSnap(id){ api('/api/snapshot',{action:'delete',id:id}); }
 function stopRecall(){ api('/api/snapshot',{action:'stop'}); }
 function setKeyCfg(){ api('/api/keycfg',{step_db:+$('#stepSel').value,ramp:+$('#rampSel').value}); }
+
+// ---- 控台驱动切换 ----
+function setConsole(id){
+  fetch('/api/ctrlprofile',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({id:id})}).then(r=>r.json()).then(d=>{
+      if(!d.ok){ showToast(d.error||'切换失败'); return; }
+      showToast('控台 → '+d.label+(d.warning?'（未标定）':''));
+    }).catch(()=>showToast('切换失败'));
+}
+function renderConsole(){
+  const sel=$('#ctrlSel');
+  if(!sel||!S||!S.console) return;
+  const c=S.console;
+  if(sel.options.length!==c.all.length){
+    sel.innerHTML=c.all.map(p=>
+      `<option value="${p.id}">${p.label}${p.ready?'':'（待标定）'}</option>`).join('');
+  }
+  if(document.activeElement!==sel) sel.value=c.id;
+  const st=$('#ctrlStat');
+  if(st){
+    st.textContent=c.ready?(c.verified?'✓ 已标定':'⚠ 未核对'):'⚠ 待标定';
+    st.style.color=c.ready?(c.verified?'#22c55e':'#d9a13c'):'#ef4444';
+  }
+  const nt=$('#ctrlNote');
+  if(nt){
+    if(c.ready&&c.verified){
+      nt.innerHTML=`地址表已与真机核对 · 通道 <b>${c.counts.ch}</b> · Bus <b>${c.counts.bus}</b>`
+        +` · DCA <b>${c.counts.dca}</b> · FX <b>${c.counts.fx}</b>`;
+    } else if(c.ready){
+      nt.innerHTML='⚠️ '+(c.note||'地址表未经真机核对');
+    } else {
+      nt.innerHTML=`⚠️ <b>${c.label}</b> 的驱动尚未标定：${c.note||''}<br>`
+        +`此状态下所有写入会被<b>拒绝并记日志</b>,卡片不会真正控制到台子 —— 这是刻意的,`
+        +`免得蒙错地址写到别的参数上。`;
+    }
+  }
+  const cp=$('#ctrlCaps');
+  if(cp){
+    cp.textContent=(!c.ready&&c.pending.length)
+      ? ('需要提供的地址映射: '+c.pending.slice(0,8).join(' / ')+(c.pending.length>8?' …':''))
+      : '';
+  }
+}
 
 // 控制键长按连发: 按下立即触发一次, 按住 500ms 后每 150ms 重复
 let kpT=null,kpI=null;
@@ -3008,7 +4098,20 @@ let caMulti=[];                       // 当前动作类型下勾选的目标编
 const CA_MULTI={mute:'ch',mute_bus:'bus',fade_ch:'ch',fade_bus:'bus'};
 const CA_LABEL={mute:'静音通道',mute_bus:'静音 Bus',scene:'切场景',unmute_all:'全部取消静音',wait:'等待',
   fade_all:'全体推子渐变',fade_odd_even:'奇偶过渡',fade_ch:'通道渐变',fade_bus:'Bus 渐变',
-  fade_from:'通道从指定值渐变',fade_from_bus:'Bus 从指定值渐变',rel_db:'相对增减 dB'};
+  fade_from:'通道从指定值渐变',fade_from_bus:'Bus 从指定值渐变',rel_db:'相对增减 dB',
+  set:'通用设置',osc:'原始 OSC'};
+
+// ---- 通用动作 set 的分组 / 参数表（必须与服务端 SET_GROUPS/SET_PARAMS 对齐）----
+// 分组是**语义**的,落到哪个地址由控台驱动决定 —— 所以同一张卡片能换控台使用。
+const ST_GROUPS=[['ch','输入通道',32],['bus','Bus 输出',16],['dca','DCA 编组',8],
+  ['main','主输出',1],['auxin','Aux In',6],['usb','USB 返回',2],['fxret','FX 返回',8],
+  ['mtx','Matrix',6],['fx','FX 效果槽',8],['scene','场景',99]];
+const ST_PARAMS={ch:['fader','on'],bus:['fader','on'],dca:['fader','on'],main:['fader','on'],
+  auxin:['fader','on'],usb:['fader','on'],fxret:['fader','on'],mtx:['fader','on'],
+  fx:['time','predelay','damp','mix','on','type','name'],scene:['load']};
+const ST_PLABEL={fader:'推子 %',on:'开关 (1开启/0静音)',mix:'混合比 (0-1)',
+  time:'混响时间 (秒)',predelay:'预延迟 (毫秒)',damp:'阻尼 (0-1)',
+  type:'算法 (HALL/PLATE/ROOM/…)',name:'名称 (文本)',load:'切场景'};
 function numIn(id,label,def){
   return `<input id="${id}" type="number" value="${def}" placeholder="${label}" class="nkin" style="width:84px">`;
 }
@@ -3049,8 +4152,49 @@ function updCaParams(){
       <option value="ch">输入通道</option><option value="bus">Bus 输出</option><option value="dca">DCA 编组</option></select>`
     +`<span id="caRelChips" style="display:inline-flex"></span>`
     +numIn('caDb','±dB',3)+numIn('caSec','秒数',2)+curveSel();
+  else if(k==='set') h+=setFormHTML();
+  else if(k==='osc') h+=oscFormHTML();
   $('#caParams').innerHTML=h;
   if(k==='rel_db') updRelChips();
+  if(k==='set') stGroupChg();
+}
+// ---- 通用设置表单 ----
+function setFormHTML(){
+  return `<select id="stGroup" class="nkin" onchange="stGroupChg()">`
+    + ST_GROUPS.map(x=>`<option value="${x[0]}">${x[1]}</option>`).join('') + `</select>`
+    + `<input id="stId" type="number" value="1" min="1" class="nkin" style="width:78px" title="目标编号">`
+    + `<select id="stParam" class="nkin" onchange="stParamChg()"></select>`
+    + `<span id="stValWrap"></span>`
+    + `<input id="stDur" type="number" value="0" min="0" step="0.5" class="nkin" style="width:104px"
+             title="仅推子类支持渐变;0 = 瞬间到位">`;
+}
+function stGroupChg(){
+  const g=$('#stGroup').value;
+  const ps=ST_PARAMS[g]||['fader'];
+  $('#stParam').innerHTML=ps.map(p=>`<option value="${p}">${ST_PLABEL[p]||p}</option>`).join('');
+  const idEl=$('#stId');
+  const row=ST_GROUPS.find(x=>x[0]===g)||['','',32];
+  const cap=row[2]||32;
+  if(g==='main'){ idEl.value=0; idEl.disabled=true; }
+  else { idEl.disabled=false; idEl.max=cap; if(!+idEl.value||+idEl.value>cap) idEl.value=1; }
+  stParamChg();
+}
+function stParamChg(){
+  const p=$('#stParam').value, w=$('#stValWrap');
+  if(!w) return;
+  if(p==='on') w.innerHTML=`<select id="stValSel" class="nkin"><option value="1">开启</option><option value="0">静音 / 旁通</option></select>`;
+  else if(p==='type') w.innerHTML=`<select id="stValSel" class="nkin">`
+    + ['HALL','PLATE','ROOM','CHAMBER','VINTAGE',''].map(x=>`<option value="${x}">${x||'(清空)'}</option>`).join('') + `</select>`;
+  else if(p==='name') w.innerHTML=`<input id="stValTxt" class="nkin" style="width:120px" maxlength="12" placeholder="名称">`;
+  else if(p==='load') w.innerHTML=`<span class="ds" style="margin:0">按上面的编号切换场景</span>`;
+  else w.innerHTML=`<input id="stValNum" type="number" class="nkin" style="width:100px" step="0.01" value="${
+    p==='fader'?80:(p==='time'?2.4:(p==='predelay'?20:0.45))}">`;
+}
+// ---- 原始 OSC 表单 ----
+function oscFormHTML(){
+  return `<input id="oscAddr" class="nkin" style="flex:1;min-width:190px" placeholder="/ch/05/mix/fader" maxlength="128">`
+    + `<input id="oscArgs" class="nkin" style="flex:1;min-width:140px" placeholder="参数,逗号分隔(可留空) 如 0.8">`
+    + `<div class="ds" style="width:100%;color:#d9a13c">⚠️ 原始 OSC 是<b>控台专有</b>的:地址写死,换到别的控台可能指向别的参数、甚至完全无效。通用需求请优先用上面的「通用设置」。</div>`;
 }
 function updRelChips(){
   const g=$('#caGrp')?$('#caGrp').value:'ch';
@@ -3084,6 +4228,40 @@ function addAct(){
     a.delta_db=Math.min(Math.max(+g('caDb')||3,-30),30);
     a.duration=Math.max(+g('caSec')||2,0.5);
     a.curve=g('caCurve');
+    caActs.push(a); renderActs(); return;
+  }
+  if(k==='set'){
+    const grp=$('#stGroup').value, p=$('#stParam').value;
+    let i=+($('#stId').value)||0;
+    if(grp==='main') i=0;
+    if(grp!=='main'&&grp!=='scene'&&i<1){ cardErr('请填写目标编号'); return; }
+    if(grp==='scene'&&i<1){ cardErr('请填写场景号'); return; }
+    a.target={group:grp,param:p,id:i};
+    if(p==='on') a.value=(+($('#stValSel')?$('#stValSel').value:0))?1:0;
+    else if(p==='type') a.value=($('#stValSel')?$('#stValSel').value:'HALL');
+    else if(p==='name') a.value=($('#stValTxt')?$('#stValTxt').value.trim():'');
+    else if(p==='load') a.value=1;
+    else {
+      let v=+($('#stValNum')?$('#stValNum').value:0)||0;
+      if(p==='fader') v=pct(v);          // 表单里填百分比, 传 0..1
+      a.value=v;
+    }
+    const d=+($('#stDur')?$('#stDur').value:0)||0;
+    if(d>0&&p==='fader') a.duration=Math.max(d,0.5);   // 只有推子类能渐变
+    else if(d>0) cardErr('提示:非推子参数不支持渐变,已按瞬间执行');
+    caActs.push(a); renderActs(); return;
+  }
+  if(k==='osc'){
+    const addr=($('#oscAddr')?$('#oscAddr').value.trim():'');
+    if(!addr){ cardErr('请填写 OSC 地址'); return; }
+    if(addr[0]!=='/'){ cardErr('OSC 地址必须以 / 开头,例如 /ch/05/mix/fader'); return; }
+    if(addr.indexOf(' ')>=0){ cardErr('OSC 地址不能含空格'); return; }
+    a.address=addr;
+    const raw=($('#oscArgs')?$('#oscArgs').value.trim():'');
+    if(raw){
+      a.args=raw.split(',').map(s=>s.trim()).filter(s=>s!=='').map(s=>
+        (/^-?\\d+(\\.\\d+)?$/.test(s))?+s:s);      // 纯数字转数值, 其余当字符串
+    }
     caActs.push(a); renderActs(); return;
   }
   if(CA_MULTI[k]){
@@ -3128,6 +4306,23 @@ function actTxt(a){
     const ids=a[{ch:'chs',bus:'buses',dca:'dcas'}[g2]]||[];
     return `${lst(g2,ids)} ${a.delta_db>=0?'+':'−'}${Math.abs(+a.delta_db||0)}dB ${a.duration}秒 ${cv[a.curve]}`;
   }
+  if(a.kind==='set'){
+    const tg=a.target||{}, g2=tg.group, p=tg.param||'fader', i=(g2==='main')?0:(+tg.id||0);
+    const gname=((ST_GROUPS.find(x=>x[0]===g2)||['',g2])[1]);
+    if(g2==='scene') return '切到场景 '+i;
+    if(g2==='fx'){
+      if(p==='on') return `FX${i} ${a.value?'开启':'旁通'}`;
+      if(p==='type') return `FX${i} 算法=${a.value||'(清空)'}`;
+      if(p==='name') return `FX${i} 名称=${a.value}`;
+      if(p==='mix') return `FX${i} 混合比=${(+a.value||0).toFixed(2)}`;
+      return `FX${i} ${(ST_PLABEL[p]||p)} = ${a.value}`;
+    }
+    const lbl=(g2==='main')?'主输出':`${gname} ${String(i).padStart(2,'0')}`;
+    if(p==='on') return `${lbl} ${a.value?'开启':'静音'}`;
+    const dd=(+a.duration>0)?` 经${a.duration}秒`:'';
+    return `${lbl} →${Math.round((+a.value||0)*100)}%${dd}`;
+  }
+  if(a.kind==='osc') return `⚠️ 原始 OSC ${a.address}${(a.args&&a.args.length)?' '+a.args.join(' '):''}`;
   return '?';
 }
 function renderActs(){
@@ -3204,11 +4399,179 @@ document.addEventListener('keydown',e=>{ if(e.key==='Escape') closeCardModal(); 
 function delCard(id){ api('/api/carddel',{id:id}); }
 updNkIdx(); updCaParams(); renderActs(); updNmIdx();
 
+// ---- 混响控制: FX 槽 / Tap 定拍 / 混响时间同步 ----
+// 与服务端同一套语义: BPM 取最近 8 个间隔均值, 抖动(<0.15s)忽略, 超时(>2s)重开;
+// 时间 = 拍数 × 60/BPM (附点 ×1.5); 实际写入由服务端按算法范围钳制。
+const FX_ALGO_OPTS = [['', '— 空槽 —'], ['HALL', '大厅混响'], ['PLATE', '板式混响'],
+                      ['ROOM', '房间混响'], ['CHAMBER', '密室混响'], ['VINTAGE', '复古混响']];
+const FX_BEATS = {'1/16':0.25, '1/8':0.5, '1/4':1, '1/2':2, '1':4, '2':8};
+const FX_NOTE_OPTS = [['1/16','1/16 音符'], ['1/8','1/8 音符'], ['1/4','1/4 音符'],
+                      ['1/2','1/2 音符'], ['1','全音符'], ['2','2 小节']];
+function fxNoteSecs(bpm, note, dotted){
+  let beats = FX_BEATS[note] || 1;
+  if (dotted) beats *= 1.5;
+  bpm = Math.min(Math.max(+bpm || 120, 30), 300);
+  return beats * 60 / bpm;
+}
+function fxParsHTML(s, st){
+  if (!st || st.time === null || st.time === undefined)
+    return '<div class="ds" style="margin:0">这个槽没装混响算法 — 把左边的类型选成 大厅/板式/房间/密室/复古 就能调混响。</div>';
+  const row = (f, lab, unit, lo, hi, step, val, fmt) =>
+    `<div class="fxrow"><span class="fxlab">${lab}</span>
+      <input type="range" class="fxsl" data-f="${f}" min="${lo}" max="${hi}" step="${step}" value="${val}"
+        oninput="fxSlide(${s},'${f}',this)">
+      <span class="fxval" data-v="${f}">${fmt(val)}${unit}</span></div>`;
+  const n2 = v => v.toFixed(2), n0 = v => String(Math.round(v));
+  return row('time','混响时间',' s', st.tmin, st.tmax, 0.01, st.time, n2)
+       + row('predelay','预延迟',' ms', 0, 200, 1, st.predelay, n0)
+       + row('damp','阻尼','', 0, 1, 0.01, st.damp, n2)
+       + row('mix','混合比','', 0, 1, 0.01, st.mix, n2);
+}
+function fxCardHTML(s){
+  const opts = FX_ALGO_OPTS.map(([v,t]) => `<option value="${v}">${t}</option>`).join('');
+  return `<div class="card" id="fxc-${s}">
+    <div class="nm">FX${s}
+      <select class="nkin fx-type" onchange="fxSet(${s},'type',this.value)">${opts}</select>
+      <input class="nkin fx-name" style="width:110px" maxlength="12" placeholder="名称"
+        onchange="fxSet(${s},'name',this.value)">
+      <button class="mute fx-on" onclick="fxToggle(${s})" title="效果开关">M</button>
+      <span class="ds fx-tag" style="margin:0"></span></div>
+    <div class="fxpars"></div></div>`;
+}
+function buildFx(){
+  $('#fxNote').innerHTML = FX_NOTE_OPTS.map(([v,t]) => `<option value="${v}">${t}</option>`).join('');
+  let g = '';
+  for (let s = 1; s <= 8; s++)
+    g += `<label class="chip" id="fxg-${s}"><input type="checkbox" onchange="fxGroupSet()">FX${s}</label>`;
+  $('#fxGroup').innerHTML = g;
+  let h = '';
+  for (let s = 1; s <= 8; s++) h += fxCardHTML(s);
+  $('#fxlist').innerHTML = h;
+}
+function updFx(){
+  if (!S || !S.fx) return;
+  const slots = S.fx.slots || [], sync = S.fx.sync || {}, tap = S.fx.tap || {};
+  slots.forEach(st => {
+    const card = document.getElementById('fxc-' + st.slot);
+    if (!card) return;
+    const ts = card.querySelector('.fx-type');
+    if (document.activeElement !== ts && ts.value !== st.type) ts.value = st.type;
+    const nm = card.querySelector('.fx-name');
+    if (document.activeElement !== nm && nm.value !== st.name) nm.value = st.name;
+    card.querySelector('.fx-on').classList.toggle('on', !st.on);
+    const tag = card.querySelector('.fx-tag');
+    // 下拉里已经有算法名了，这里改显示该算法的时间范围（Tap 换算会被钳制到这个区间）
+    const txt = st.label ? (st.tmin + '–' + st.tmax + ' s') : '空槽';
+    if (tag.textContent !== txt) tag.textContent = txt;
+    // 算法变了就重建这一张卡的参数区 (range 的 min/max 随算法范围变)
+    const pars = card.querySelector('.fxpars');
+    if (pars.dataset.algo !== (st.type || '')){
+      pars.dataset.algo = st.type || '';
+      pars.innerHTML = fxParsHTML(st.slot, st);
+    }
+    const n2 = v => v.toFixed(2), n0 = v => String(Math.round(v));
+    [['time', n2, ' s'], ['predelay', n0, ' ms'], ['damp', n2, ''], ['mix', n2, '']].forEach(([f, fmt, unit]) => {
+      const sl = pars.querySelector(`.fxsl[data-f="${f}"]`); if (!sl) return;
+      const v = st[f]; if (v === null || v === undefined) return;
+      if (document.activeElement !== sl && +sl.value !== +fmt(v)) sl.value = +fmt(v);
+      const ve = pars.querySelector(`.fxval[data-v="${f}"]`);
+      if (ve) ve.textContent = fmt(v) + unit;
+    });
+  });
+  const msel = $('#fxMode');
+  if (msel && document.activeElement !== msel && msel.value !== sync.mode) msel.value = sync.mode;
+  const fck = $('#fxFollow'); if (fck && fck.checked !== !!sync.followTap) fck.checked = !!sync.followTap;
+  const nsel = $('#fxNote');
+  if (nsel && document.activeElement !== nsel && nsel.value !== sync.note) nsel.value = sync.note;
+  const dck = $('#fxDotted'); if (dck && dck.checked !== !!sync.dotted) dck.checked = !!sync.dotted;
+  const gset = new Set(sync.group || []);
+  for (let s = 1; s <= 8; s++){
+    const el = document.getElementById('fxg-' + s); if (!el) continue;
+    const inp = el.querySelector('input');
+    if (inp && inp.checked !== gset.has(s)) inp.checked = gset.has(s);
+    el.classList.toggle('on', gset.has(s));
+  }
+  const bpm = tap.bpm || 0;
+  $('#tapBpm').textContent = bpm ? (bpm.toFixed(1) + ' BPM') : '— BPM';
+  $('#tapInfo').textContent = bpm
+    ? ('已点 ' + (tap.count || 0) + ' 下 · 取最近 8 个间隔的均值')
+    : '连点 2 下以上定拍';
+  $('#fxTapSecs').textContent = bpm
+    ? ('当前时值换算 = ' + fxNoteSecs(bpm, sync.note, sync.dotted).toFixed(3) + ' 秒') : '';
+}
+function fxSet(s, field, value){ api('/api/fx', {slot:s, field:field, value:value}); }
+function fxToggle(s){
+  const st = ((S.fx && S.fx.slots) || []).find(x => x.slot === s);
+  if (!st) return;
+  api('/api/fx', {slot:s, field:'on', value: st.on ? 0 : 1});
+}
+// 拖参数时 60ms 合并一次请求, 免得刷爆
+const fxPend = {}; let fxPendT = null;
+function fxSlide(s, field, el){
+  const v = +el.value;
+  const card = document.getElementById('fxc-' + s);
+  const ve = card && card.querySelector(`.fxval[data-v="${field}"]`);
+  if (ve) ve.textContent = (field === 'predelay' ? String(Math.round(v)) : v.toFixed(2))
+    + (field === 'time' ? ' s' : (field === 'predelay' ? ' ms' : ''));
+  fxPend[s + '|' + field] = {slot:s, field:field, value:v};
+  if (!fxPendT) fxPendT = setTimeout(() => {
+    fxPendT = null;
+    const arr = Object.keys(fxPend).map(k => fxPend[k]);
+    for (const k in fxPend) delete fxPend[k];
+    arr.forEach(p => api('/api/fx', p));
+  }, 60);
+}
+function fxGroupSet(){
+  const g = [];
+  for (let s = 1; s <= 8; s++){
+    const el = document.getElementById('fxg-' + s);
+    if (el && el.querySelector('input').checked) g.push(s);
+  }
+  api('/api/fxsync', {group:g});
+}
+function fxSyncSet(){
+  api('/api/fxsync', {mode: $('#fxMode').value, followTap: $('#fxFollow').checked,
+                      note: $('#fxNote').value, dotted: $('#fxDotted').checked});
+}
+// Tap 计时放在服务端 (与协议规范同一份实现), 网页只管发点击
+function tapHit(){
+  fetch('/api/tap', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({action:'tap'})})
+  .then(r => r.json()).then(d => {
+    if (!d || !d.ok) return;
+    $('#tapBpm').textContent = d.bpm ? (d.bpm.toFixed(1) + ' BPM') : '— BPM';
+    $('#tapInfo').textContent = '已点 ' + d.count + ' 下' + (d.locked ? ' · 已成拍' : ' · 再点一下定拍');
+  }).catch(() => {});
+}
+function tapReset(){
+  api('/api/tap', {action:'reset'});
+  $('#tapBpm').textContent = '— BPM';
+  $('#tapInfo').textContent = '连点 2 下以上定拍';
+}
+function tapApply(){
+  const note = $('#fxNote') ? $('#fxNote').value : '1/4';
+  const dotted = $('#fxDotted') ? $('#fxDotted').checked : false;
+  api('/api/fxsync', {note: note, dotted: dotted});
+  fetch('/api/tap', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({action:'apply'})})
+  .then(r => r.json()).then(d => {
+    if (!d || !d.ok){ showToast('Tap 写入失败: ' + ((d && d.error) || '未知')); return; }
+    showToast('🎛 按 ' + note + (dotted ? ' 附点' : '') + ' 换算 = ' + d.seconds
+      + ' 秒, 已写入 ' + (d.written || []).length + ' 个混响槽');
+  }).catch(() => showToast('Tap 写入失败: 网络异常'));
+}
+
 // ---- 电动推子平滑动画: 显示值以缓动逼近目标值 ----
+// ⚠️ 这里必须用 forEach 逐个 try 之外, 还要先判空: 「控制键」/「卡片管理」等地方也用
+// .row 做布局, 但里面根本没有 <input>。早期版本直接 `sl.dataset.target` —— 一旦这些
+// 行被渲染出来(渲染发生在首帧之后), tick() 就抛 TypeError, 而
+// `requestAnimationFrame(tick)` 写在函数末尾, 异常一抛**整个缓动循环永久停摆**
+// (推子从"电动滑行"退化成"瞬移", 且只在控制台留一条报错)。改为跳过没有 input 的行。
 const anim = {};
 function tick(){
   document.querySelectorAll('.row').forEach(r=>{
     const sl=r.querySelector('input');
+    if(!sl) return;
     if(document.activeElement===sl) return;
     const t=parseFloat(sl.dataset.target);
     if(isNaN(t)) return;
@@ -3487,6 +4850,7 @@ function render(){
   $('#scene').textContent='场景 '+S.scene;
   if($('#scene2')) $('#scene2').textContent='场景 '+S.scene;
   $('#subs').textContent=S.subscribers;
+  renderConsole();
   $('#hdinfo').textContent='UDP 10023 · 场景 '+S.scene+' · 订阅 '+S.subscribers
     +(S.bridge&&S.bridge.on?(' · 🌉'+(S.bridge.live?'真台':'真台?')+' '+S.bridge.addr):'');
   $('#conn').style.background=S?'#22c55e':'#ef4444';
@@ -3500,6 +4864,7 @@ function render(){
       $('#scanHint').textContent='已记住 '+b.target+',服务启动时会自动重连';
   }
   renderSched();
+  updFx();
 
   // 名称有变化时刷新命名编辑器与各处下拉 (避免每 250ms 重建破坏交互)
   if($('#nmGroup')){

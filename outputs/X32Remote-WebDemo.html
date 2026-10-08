@@ -1,0 +1,2157 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#121419">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="X32 遥控试用">
+<title>X32 Remote · 网页试用版</title>
+<style>
+  :root{--bg:#121419;--card:#1c2029;--card2:#232833;--txt:#e9ebf0;--sub:#8d93a0;
+        --line:#2b303b;--accent:#ffb454;--accent2:#4da3ff;
+        --green:#3ecf8e;--red:#ff6b6b;--track:#0d0f13}
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{overscroll-behavior-y:contain}
+  body{font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
+       background:var(--bg);color:var(--txt);padding-bottom:74px;overflow-x:hidden;
+       -webkit-tap-highlight-color:transparent;touch-action:manipulation}
+  button,.mute,input[type=range],.tile{touch-action:manipulation}
+  ::selection{background:var(--accent);color:#141414}
+
+  header{position:sticky;top:0;z-index:9;
+         background:linear-gradient(180deg,#191d24,#14171d);color:#fff;
+         padding:12px 16px;font-size:15px;font-weight:700;letter-spacing:.03em;
+         display:flex;align-items:center;gap:9px;border-bottom:1px solid var(--line)}
+  header .dot{width:9px;height:9px;border-radius:50%;background:var(--green);
+              box-shadow:0 0 8px var(--green);animation:pulse 1.6s infinite;flex:none}
+  @keyframes pulse{50%{opacity:.4}}
+  header .tag{font-size:10px;font-weight:700;letter-spacing:.08em;flex:none;
+              background:rgba(255,180,84,.16);color:var(--accent);
+              border:1px solid rgba(255,180,84,.4);border-radius:20px;padding:2px 8px}
+  /* 中文长串在 flex 里没有断点，必须允许收缩，否则会撑宽整页 */
+  header small{font-weight:400;opacity:.6;margin-left:auto;font-size:11px;
+               font-variant-numeric:tabular-nums;text-align:right;line-height:1.35;
+               min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  header .brand{flex:none}
+  @media (max-width:420px){ header small{font-size:10px} }
+
+  nav{position:fixed;bottom:0;left:0;right:0;display:flex;z-index:10;
+      background:rgba(18,20,25,.93);backdrop-filter:blur(12px);border-top:1px solid var(--line)}
+  nav button{flex:1;border:0;background:none;padding:9px 0 8px;font-size:11px;
+             color:var(--sub);position:relative;cursor:pointer}
+  nav button.on{color:var(--accent);font-weight:700}
+  nav button.on::before{content:"";position:absolute;top:0;left:50%;transform:translateX(-50%);
+                        width:26px;height:3px;border-radius:0 0 3px 3px;background:var(--accent)}
+  nav .ic{display:block;font-size:19px;margin-bottom:2px}
+
+  .page{display:none;padding:14px 14px 20px;max-width:780px;margin:0 auto}
+  .page.on{display:block;animation:pagein .18s ease-out}
+  @keyframes pagein{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+  h3{display:flex;align-items:center;gap:10px;font-size:12px;color:var(--sub);
+     margin:20px 2px 10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+  h3::after{content:"";flex:1;height:1px;background:var(--line)}
+  h3:first-child{margin-top:4px}
+  .ds{font-size:12px;color:var(--sub);line-height:1.65}
+
+  .banner{background:linear-gradient(135deg,rgba(255,180,84,.13),rgba(77,163,255,.09));
+          border:1px solid rgba(255,180,84,.32);border-radius:14px;padding:12px 14px;
+          font-size:12.5px;line-height:1.7;margin-bottom:6px}
+  .banner b{color:var(--accent)}
+  .banner .cta{display:inline-flex;align-items:center;gap:6px;margin-top:9px;
+               background:var(--accent);color:#17130c;border:0;border-radius:10px;
+               padding:9px 16px;font-size:13px;font-weight:800;cursor:pointer}
+  .banner .cta:active{transform:scale(.96)}
+
+  /* ---------- 卡片瓷砖 ---------- */
+  .tilegrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(98px,1fr));gap:9px}
+  .tile{background:linear-gradient(180deg,var(--card2),var(--card));
+        border:1px solid var(--line);border-radius:13px;padding:13px 6px 11px;
+        text-align:center;font-size:14px;font-weight:700;cursor:pointer;user-select:none;
+        min-height:64px;display:flex;flex-direction:column;align-items:center;
+        justify-content:center;gap:4px;position:relative;overflow:hidden;
+        box-shadow:0 2px 8px rgba(0,0,0,.35),inset 0 1px 0 rgba(255,255,255,.05);
+        transition:transform .12s cubic-bezier(.22,1,.36,1),border-color .15s}
+  .tile small{font-weight:500;color:var(--sub);font-size:11px;line-height:1.35}
+  .tile:active{transform:scale(.94)}
+  .tile.run{background:linear-gradient(180deg,#33291a,#282017);border-color:#6b5426;color:var(--accent)}
+  .tile.run small{color:#c7a25e}
+  .tile.pin{border-color:rgba(255,180,84,.45)}
+  .tile.add{border-style:dashed;border-width:1.5px;color:var(--sub);opacity:.85;font-size:24px}
+  .tile.add small{font-weight:400;font-size:11px}
+  .tile.undo{border-color:rgba(77,163,255,.5);color:var(--accent2)}
+  .tile .live{font-size:10.5px;font-weight:500;color:var(--sub);line-height:1.35}
+  .tile .bar{width:82%;margin-top:5px}
+
+  /* ---------- 推子行 ---------- */
+  .row{display:flex;align-items:center;gap:10px;background:var(--card);
+       border:1px solid var(--line);border-radius:12px;padding:9px 12px;margin-bottom:8px;
+       box-shadow:0 1px 4px rgba(0,0,0,.3)}
+  .meter{width:9px;height:36px;border-radius:4px;background:var(--track);overflow:hidden;
+         display:flex;align-items:flex-end;flex:none;border:1px solid #23272f}
+  .meter i{display:block;width:100%;height:0%;
+           background:linear-gradient(to top,#3ecf8e 0 62%,#ffb454 62% 85%,#ff6b6b 85%);
+           transition:height .12s linear}
+  .num{font-size:11px;font-weight:600;color:var(--sub);width:64px;flex:none;letter-spacing:.03em}
+  .num b{display:block;font-size:15px;color:var(--txt);font-variant-numeric:tabular-nums}
+  .num small{display:block;font-size:10px;font-weight:500;color:#c7a25e;
+             white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .row input[type=range]{flex:1;-webkit-appearance:none;appearance:none;
+                         background:transparent;height:30px;min-width:0}
+  .row input[type=range]::-webkit-slider-runnable-track{height:7px;border-radius:4px;
+    background:linear-gradient(90deg,#0d0f13,#31374a);box-shadow:inset 0 1px 3px rgba(0,0,0,.6)}
+  .row input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:24px;height:32px;
+    margin-top:-13px;border-radius:6px;
+    background:linear-gradient(180deg,#3d4454,#22262f);border:1px solid #4d566b;
+    box-shadow:0 3px 8px rgba(0,0,0,.55),inset 0 1px 0 rgba(255,255,255,.12)}
+  .row input[type=range]::-moz-range-track{height:7px;border-radius:4px;
+    background:linear-gradient(90deg,#0d0f13,#31374a)}
+  .row input[type=range]::-moz-range-thumb{width:22px;height:30px;border-radius:6px;
+    background:linear-gradient(180deg,#3d4454,#22262f);border:1px solid #4d566b;
+    box-shadow:0 3px 8px rgba(0,0,0,.55)}
+  .db{font-size:11px;color:var(--sub);width:58px;text-align:right;flex:none;
+      font-variant-numeric:tabular-nums}
+  .mute{width:32px;height:32px;border-radius:50%;border:1.5px solid var(--line);
+        background:var(--card2);color:var(--sub);font-weight:800;font-size:13px;
+        flex:none;cursor:pointer;transition:background .15s,border-color .15s}
+  .mute.on{background:var(--red);border-color:var(--red);color:#fff;
+           box-shadow:0 0 10px rgba(255,107,107,.4)}
+  .fadj{background:var(--card2);color:var(--sub);border:1px solid var(--line);
+        border-radius:8px;min-width:26px;padding:6px 4px;font-size:13px;line-height:1;
+        font-weight:700;flex:none;cursor:pointer}
+  .fadj:active{background:var(--accent);color:#141414}
+
+  /* ---------- 卡片 / 表单 ---------- */
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;
+        padding:14px 16px;margin-bottom:10px;position:relative;
+        box-shadow:0 1px 4px rgba(0,0,0,.3)}
+  .card .nm{font-size:15px;font-weight:700;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .card .ds{font-size:12px;color:var(--sub);margin:5px 0 10px}
+  .card button{border:0;border-radius:10px;padding:9px 18px;font-size:13px;
+               font-weight:700;cursor:pointer;background:var(--accent);color:#17130c;
+               transition:transform .12s cubic-bezier(.22,1,.36,1),filter .15s}
+  .card button:active{transform:scale(.95)}
+  .card button:hover{filter:brightness(1.08)}
+  .card button.stop{background:var(--red);color:#fff}
+  .card button.ghost{background:#565d6d;color:#fff}
+  .keybtn{min-width:100px;min-height:48px;font-size:15px;border-radius:12px;border:0;
+          background:var(--accent);color:#17130c;font-weight:800;cursor:pointer}
+  .bar{height:5px;border-radius:3px;background:var(--track);margin-top:11px;overflow:hidden}
+  .bar i{display:block;height:100%;width:0;
+         background:linear-gradient(90deg,#c98a3a,var(--accent));transition:width .15s}
+  .prog{font-size:11px;color:var(--sub);margin-top:5px}
+  .infobox{background:var(--card);border:1px solid var(--line);border-radius:14px;
+           padding:14px 16px;font-size:13px;line-height:2}
+  .infobox b{color:var(--accent)}
+  #logbox{background:#0b0d10;color:#8fd6a2;font:11px/1.7 Menlo,Consolas,monospace;
+          border:1px solid var(--line);border-radius:14px;padding:12px 14px;
+          height:260px;overflow-y:auto;white-space:pre-wrap}
+  /* ---------- 混响控制 ---------- */
+  .fxpars{display:flex;flex-direction:column;gap:7px;margin-top:9px}
+  .fxrow{display:flex;align-items:center;gap:10px}
+  .fxlab{font-size:12px;color:var(--sub);width:66px;flex:none}
+  .fxrow input[type=range]{flex:1;min-width:0;height:30px;-webkit-appearance:none;appearance:none;
+                           background:transparent}
+  .fxrow input[type=range]::-webkit-slider-runnable-track{height:7px;border-radius:4px;
+    background:linear-gradient(90deg,#0d0f13,#31374a);box-shadow:inset 0 1px 3px rgba(0,0,0,.6)}
+  .fxrow input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;height:28px;
+    margin-top:-11px;border-radius:6px;background:linear-gradient(180deg,#3d4454,#22262f);
+    border:1px solid #4d566b;box-shadow:0 3px 8px rgba(0,0,0,.55)}
+  .fxrow input[type=range]::-moz-range-track{height:7px;border-radius:4px;background:#31374a}
+  .fxrow input[type=range]::-moz-range-thumb{width:20px;height:26px;border-radius:6px;
+    background:#3d4454;border:1px solid #4d566b}
+  .fxval{font-size:12px;width:70px;text-align:right;flex:none;
+         font-variant-numeric:tabular-nums;color:var(--txt)}
+  .fx-tag{margin-left:auto;white-space:nowrap}
+  .fxmini{background:var(--card2);color:var(--sub);border:1px solid var(--line);border-radius:8px;
+          padding:6px 10px;font-size:11.5px;font-weight:700;cursor:pointer;flex:none}
+  .fxmini:active{background:var(--accent2);color:#0f1115}
+  #fxGroup .chip{padding:7px 11px}
+  .fxnok{outline:1.5px solid var(--red);outline-offset:2px}
+  .scenechip{display:inline-block;background:rgba(255,180,84,.12);color:var(--accent);
+             border:1px solid rgba(255,180,84,.3);border-radius:20px;padding:3px 12px;
+             font-size:12px;font-weight:700;font-variant-numeric:tabular-nums}
+  .nkin{padding:9px 11px;border-radius:9px;border:1px solid var(--line);font-size:13px;
+        background:var(--card2);color:var(--txt);font-family:inherit}
+  .nkin::placeholder{color:#5b6170}
+  select.nkin{cursor:pointer}
+  .chipgrid{display:flex;flex-wrap:wrap;gap:6px;width:100%;margin:4px 0;
+            border-radius:10px;padding:2px}
+  .chipgrid.inv{outline:1.5px solid var(--red);outline-offset:2px}
+  .chip{padding:6px 9px;border-radius:8px;border:1px solid var(--line);background:var(--card2);
+        font-size:12px;font-weight:700;cursor:pointer;user-select:none;color:var(--txt);
+        display:inline-flex;gap:5px;align-items:baseline;transition:background .12s,border-color .12s}
+  .chip em{font-style:normal;font-weight:400;font-size:10px;color:var(--sub)}
+  .chip.on{background:rgba(255,180,84,.16);border-color:var(--accent);color:var(--accent)}
+  .chip.on em{color:#c7a25e}
+  .readyok{color:#22c55e;font-weight:700;font-size:11px}
+  .readyn{color:var(--sub);font-weight:400;font-size:11px}
+
+  .modal{display:none;position:fixed;inset:0;z-index:60;background:rgba(8,10,14,.72);
+         backdrop-filter:blur(3px);align-items:flex-end;justify-content:center}
+  .modal.on{display:flex}
+  .mdlg{background:var(--card);border:1px solid var(--line);border-radius:18px 18px 0 0;
+        width:100%;max-width:580px;max-height:88vh;overflow-y:auto;
+        padding:18px 18px calc(18px + env(safe-area-inset-bottom));animation:mup .22s ease}
+  @keyframes mup{from{transform:translateY(30px);opacity:0}}
+  @media(min-width:700px){.modal{align-items:center}.mdlg{border-radius:16px}}
+  .mhd{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+  .mhd b{font-size:16px}
+  .mclose{border:0;background:var(--card2);color:var(--sub);width:32px;height:32px;
+          border-radius:50%;font-size:15px;cursor:pointer;flex:none}
+  .merr{display:none;background:rgba(255,107,107,.12);border:1px solid var(--red);
+        color:var(--red);border-radius:10px;padding:8px 12px;font-size:13px;margin-top:10px}
+  .merr.on{display:block}
+  .btnspin{opacity:.55;pointer-events:none}
+
+  .toast{position:fixed;left:50%;bottom:88px;transform:translateX(-50%) translateY(14px);
+         background:#241505;color:var(--accent);border:1px solid rgba(255,180,84,.55);
+         border-radius:12px;padding:11px 18px;font-size:13px;font-weight:600;
+         box-shadow:0 6px 22px rgba(0,0,0,.55);z-index:9999;opacity:0;
+         transition:opacity .3s,transform .3s;max-width:86vw;pointer-events:none;text-align:center}
+  .toast.in{opacity:1;transform:translateX(-50%) translateY(0)}
+  .holdbar{position:absolute;left:0;bottom:0;height:4px;width:0;background:var(--red);
+           border-radius:3px;z-index:5;box-shadow:0 0 8px rgba(255,107,107,.6)}
+
+  @media (max-width:768px){
+    .mute{width:44px;height:44px}
+    .row input[type=range]{height:38px}
+    .fadj{min-width:30px;padding:9px 4px}
+    nav button{padding:11px 0 9px;font-size:12px}
+    nav .ic{font-size:21px}
+    .num{width:56px}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="dot" id="conn"></span>
+  <span class="brand">X32 Remote</span>
+  <span class="tag">网页试用版</span>
+  <small id="hdinfo">虚拟台 · 场景 1</small>
+</header>
+
+<!-- ==================== 卡片 ==================== -->
+<div class="page on" id="pg-cards">
+  <div class="banner">
+    这是<b>纯前端试用版</b>：内置一台虚拟 X32（32 输入 + 16 Bus + 8 DCA + 主输出），把服务端的时间轴卡片引擎原样搬到了浏览器里。
+    <b>点卡片即执行</b>，推子会像电动推子一样滑过去。
+    <button class="cta" onclick="demoRun()">▶ 一键演示</button>
+  </div>
+  <h3>🎬 演出卡片</h3>
+  <div class="ds" style="margin-bottom:10px">点按执行 · 再点一次停止。
+    含「全体」类动作的<b>危险卡需长按 0.8 秒</b>。执行中若手动拖推子，卡片只放开那一路，其余继续。</div>
+  <div class="tilegrid" id="undoRow" style="grid-template-columns:repeat(auto-fill,minmax(230px,1fr));margin-bottom:9px"></div>
+  <div class="tilegrid" id="tileCards"></div>
+  <h3>📌 场景预设</h3>
+  <div class="card">
+    <div class="nm">保存当前台面为预设</div>
+    <div class="ds">记录全部推子与静音状态；回归时静音立即恢复，推子平滑滑回——就像电动推子。</div>
+    <button onclick="saveSnap()">💾 保存预设</button>
+  </div>
+  <div id="snaplist"></div>
+</div>
+
+<!-- ==================== 控制键 ==================== -->
+<div class="page" id="pg-keys">
+  <h3>⚡ 控制键</h3>
+  <div class="ds" style="margin-bottom:10px">点按 = 按步长渐变增减目标推子，<b>按住可连发</b>。适合现场耳返、主输出这类微调。</div>
+  <div id="keylist"></div>
+</div>
+
+<!-- ==================== 调音台 ==================== -->
+<div class="page" id="pg-mix">
+  <h3>🎚 输入通道 1-32 <span class="scenechip" id="scene">场景 1</span></h3>
+  <div id="chlist"></div>
+  <h3>Aux In 辅助输入 1-6</h3><div id="auxlist"></div>
+  <h3>USB 播放返回 1-2</h3><div id="usblist"></div>
+  <h3>FX Return 效果返回 1-8</h3><div id="fxretlist"></div>
+  <h3>📤 输出 Bus 1-16</h3><div id="buslist"></div>
+  <h3>Matrix 矩阵输出 1-6</h3><div id="mtxlist"></div>
+  <h3>主输出 Main LR</h3><div id="mainrow"></div>
+  <h3>DCA 编组 1-8</h3><div id="dcalist"></div>
+</div>
+
+<!-- ==================== 混响 ==================== -->
+<div class="page" id="pg-fx">
+  <h3>🎛 混响控制 · Tap 定拍</h3>
+  <div class="ds" style="margin-bottom:10px">虚拟台内置 8 个效果槽。给槽选一个混响算法后就能调<b>混响时间</b>、预延迟、阻尼与混合比；
+    <b>Tap</b> 定拍可把混响时间算到节拍上，再按「同步设置」铺给联动的其他槽。语义与真实实现（服务端 / App）完全一致。</div>
+
+  <div class="card">
+    <div class="nm">🥁 Tap 定拍</div>
+    <div class="ds">连点 2 下以上。取最近 8 个间隔的均值算 BPM（比只看最后一拍稳得多）；间隔超过 2 秒自动重新开始，靠得太近的抖动会被忽略。</div>
+    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:10px 0">
+      <button id="tapBtn" style="font-size:20px;font-weight:800;letter-spacing:.08em;
+        padding:16px 34px;border-radius:16px">TAP</button>
+      <div style="font-size:13px;line-height:1.7">
+        <b id="tapBpm" style="font-size:17px;font-variant-numeric:tabular-nums">— BPM</b><br>
+        <span class="ds" id="tapInfo" style="margin:0">连点 2 下以上定拍</span></div>
+      <button class="ghost" onclick="tapReset()">清零</button>
+      <button style="background:var(--green);color:#0f1115;font-weight:800" onclick="tapApply()">↧ 换算并写入</button>
+    </div>
+    <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+      <label style="font-size:13px">时值 <select id="fxNote" class="nkin"></select></label>
+      <label style="font-size:13px;display:flex;gap:5px;align-items:center">
+        <input type="checkbox" id="fxDotted"> 附点 ×1.5</label>
+      <span class="ds" id="fxTapSecs" style="margin:0"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="nm">🔗 同步设置</div>
+    <div class="ds">决定「谁说了算」——软件与台面互相写最容易踩的坑是回声回环。切不同模式后，用下面每个槽的
+      「🎛 台面改」按钮模拟真台手动改动，就能直接看出差别。</div>
+    <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:8px 0">
+      <label style="font-size:13px">模式 <select id="fxMode" class="nkin">
+        <option value="software">软件主导（软件改→铺全组；台面改只镜像）</option>
+        <option value="console">台面主导（台面改→铺全组；软件改不外扩）</option>
+        <option value="both">双向互同步（谁改都铺全组）</option>
+      </select></label>
+      <label style="font-size:13px;display:flex;gap:5px;align-items:center">
+        <input type="checkbox" id="fxFollow"> 跟随 Tap（Tap 结果自动写入联动组）</label>
+    </div>
+    <div class="ds" style="margin:0 0 6px">联动组 — 勾选的槽互相同步混响时间（全不勾 = 所有混响槽）:</div>
+    <div id="fxGroup" style="display:flex;gap:6px;flex-wrap:wrap"></div>
+  </div>
+
+  <h3>🎚 效果槽 1-8</h3>
+  <div class="ds" style="margin-bottom:10px">每个槽的「🎛 台面改时间」用来模拟<b>真台上有人手动拧了混响</b>：
+    这条路径会经过回声抑制判断，是验证双向同步的地方。看「设置 → 日志」能读到每一步。</div>
+  <div id="fxlist"></div>
+</div>
+
+<!-- ==================== 设置 ==================== -->
+<div class="page" id="pg-set">
+  <div class="infobox">
+    <b>关于这个试用版</b><br>
+    引擎跑在你的浏览器里，台面只存在于本页内存（可选存到本地浏览器）。<br>
+    真实产品里，同一套卡片引擎分别跑在：<b>电脑服务端</b>（Web 控制台 + 桥接真台）、
+    <b>Android App</b>、<b>iOS App</b>。<br>
+    「混响」页里的 <b>Tap 定拍</b> 与 <b>混响时间同步</b> 用的是同一套语义，
+    包括三端共用的<b>回声抑制</b>（自己刚下发给真台的值，回读时直接吸收、不再二次广播）。
+  </div>
+  <h3>⚠️ 为什么不能直接连真调音台</h3>
+  <div class="card">
+    <div class="nm">浏览器发不了 UDP</div>
+    <div class="ds" style="margin-bottom:0">X32 用 UDP 10023 的 OSC 协议通信，而网页受沙箱限制只能发 HTTP/WebSocket，
+      <b>没有权限发原始 UDP 包</b>。所以真机控制必须由一个本地进程或原生 App 来做——这也是为什么桌面端要跑一个常驻服务、手机端要装 App。
+      本页演示的是<b>界面与引擎逻辑</b>，协议部分的语义（时间轴、冲突策略、79 路全体）与真实实现完全一致。</div>
+  </div>
+  <h3>🎛 控台型号 (驱动层)</h3>
+  <div class="card">
+    <div class="ds">卡片动作走的是同一套「语义目标」管道，由控台驱动翻译成真实地址 —— 所以
+      同一张卡片能换控台使用。X32 与 M32 同协议（M32 是 Midas 贴牌），驱动完全复用。</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <select id="ctrlSel" class="nkin" style="min-width:230px"></select>
+      <span id="ctrlStat" style="font-size:12px"></span>
+    </div>
+    <div id="ctrlNote" class="ds" style="margin-top:8px"></div>
+  </div>
+  <h3>🔧 控制键步长与渐变速度</h3>
+  <div class="card">
+    <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+      <label style="font-size:13px">步长
+        <select id="stepSel" class="nkin" style="margin-left:6px">
+          <option value="1.5">1.5 dB</option><option value="3" selected>3 dB</option><option value="6">6 dB</option>
+        </select></label>
+      <label style="font-size:13px">渐变
+        <select id="rampSel" class="nkin" style="margin-left:6px">
+          <option value="0">瞬间</option><option value="0.4" selected>0.4 秒</option>
+          <option value="1">1 秒</option><option value="2">2 秒</option>
+        </select></label>
+    </div>
+  </div>
+  <h3>🏷 通道命名</h3>
+  <div class="card">
+    <div class="ds">给通道起名字，卡片和推子行就显示「音乐」「人声」而不是「15」。</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <select id="nmGroup" class="nkin"></select>
+      <select id="nmIdx" class="nkin"></select>
+      <input id="nmVal" class="nkin" style="flex:1;min-width:120px" placeholder="名称(最长12字),留空=清除" maxlength="12">
+      <button onclick="saveName()">💾 保存</button>
+    </div>
+  </div>
+  <h3>🗑 管理卡片</h3>
+  <div id="cardlist"></div>
+  <h3>⌨️ 管理控制键</h3>
+  <div id="managelist"></div>
+  <h3>📦 配置导入 / 导出</h3>
+  <div class="card">
+    <div class="ds">导出 JSON 备份；导入会覆盖现有卡片／控制键／命名（台面推子状态不受影响）。</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <button onclick="doExport()">📤 导出配置</button>
+      <button class="ghost" onclick="document.getElementById('impFile').click()">📥 选择文件导入</button>
+      <button class="ghost" onclick="resetAll()">♻️ 恢复出厂</button>
+      <input type="file" id="impFile" accept=".json,application/json" style="display:none">
+    </div>
+  </div>
+  <h3>OSC / 引擎日志</h3>
+  <div id="logbox"></div>
+</div>
+
+<nav>
+  <button class="on" data-p="cards"><span class="ic">🎬</span>卡片</button>
+  <button data-p="fx"><span class="ic">🎛</span>混响</button>
+  <button data-p="keys"><span class="ic">⚡</span>控制键</button>
+  <button data-p="mix"><span class="ic">🎚</span>调音台</button>
+  <button data-p="set"><span class="ic">⚙️</span>设置</button>
+</nav>
+
+<!-- ==================== 卡片编辑弹窗 ==================== -->
+<div class="modal" id="cardModal">
+  <div class="mdlg" role="dialog" aria-label="编辑演出卡片">
+    <div class="mhd"><b id="cardModalTitle">➕ 新建演出卡片</b>
+      <button class="mclose" onclick="closeCardModal()" aria-label="关闭">✕</button></div>
+    <div class="ds">把一组动作按顺序拼成一张卡片。先放瞬时动作（静音／切场景），再放渐变动作；同一条动作可勾选多个目标。</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0">
+      <input id="ncName" class="nkin" placeholder="卡片名称 *必填" style="flex:1;min-width:150px">
+      <input id="ncDesc" class="nkin" placeholder="一句话描述(可选)" style="flex:2;min-width:160px">
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <select id="caKind" class="nkin"></select>
+      <span id="caParams" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;width:100%"></span>
+      <button onclick="addAct()">＋加入动作</button>
+    </div>
+    <div id="actChips" style="margin-top:8px"></div>
+    <div style="display:flex;gap:8px;align-items:center;margin-top:10px">
+      <span style="font-size:12px;color:var(--sub)">执行完自动接续:</span>
+      <select id="ncNext" class="nkin" style="flex:1"></select>
+    </div>
+    <div class="merr" id="cardErr"></div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px">
+      <button class="ghost" onclick="closeCardModal()">取消</button>
+      <button id="cardSaveBtn" style="background:var(--green)" onclick="saveCard()">💾 保存卡片</button>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* =====================================================================
+   X32 Remote · 网页试用版
+   把服务端 x32_simulator.py 的时间轴卡片引擎按原样语义搬到浏览器：
+     · tick 50ms；cursor 恒等于动作结束时刻（start = at ?? cursor; cursor = start + dur）
+     · 带 at 的动作并行；瞬时动作占 0 秒
+     · wait 是纯 no-op（不写值、不 sleep，等待完全由 cursor 偏移提供）
+     · fade_from 先把推子置到 frm，再取起点
+     · unmute_all 覆盖 8 组共 79 路
+     · 曲线 linear / ease_out / ease_in / smooth，公式与服务端一致
+     · 手动干预只冻结被碰的那一路（INTERRUPTS），其余动作继续
+     · 卡片链 next 有 0.4 秒喘息，防环（seen 集合 + 深度 16）
+     · 停止时渐变就地冻结，不写终值
+   ===================================================================== */
+
+/* ---------------------------------------------------------------- 常量 */
+const GROUPS = {
+  ch:    {label:'输入通道', n:32, row:'c', pad:true},
+  bus:   {label:'Bus 输出', n:16, row:'b'},
+  dca:   {label:'DCA 编组', n:8,  row:'d'},
+  auxin: {label:'Aux In',   n:6,  row:'a'},
+  usb:   {label:'USB 返回', n:2,  row:'u'},
+  fxret: {label:'FX 返回',  n:8,  row:'x'},
+  mtx:   {label:'Matrix',   n:6,  row:'t'},
+  main:  {label:'主输出',   n:1,  row:'m', zeroBased:true},
+};
+const GROUP_ORDER = ['ch','auxin','usb','fxret','bus','mtx','main','dca'];
+const ROW2GROUP = {};  GROUP_ORDER.forEach(g => ROW2GROUP[GROUPS[g].row] = g);
+// main 在服务端用 idx 0
+const idxRange = g => GROUPS[g].zeroBased ? [0] : Array.from({length:GROUPS[g].n}, (_,i)=>i+1);
+
+const FADE_KINDS = ['fade_all','fade_odd_even','fade_ch','fade_bus','fade_from','fade_from_bus','rel_db'];
+const DANGER     = ['unmute_all','fade_all','fade_odd_even'];
+const CURVES     = {linear:'直线', ease_out:'先快后慢', ease_in:'先慢后快', smooth:'S 形'};
+
+const ACTION_MENU = [
+  ['mute','静音通道 (可多选)'], ['mute_bus','静音 Bus (可多选)'], ['scene','切换场景'],
+  ['unmute_all','全部取消静音'], ['wait','等待 / 停顿'],
+  ['fade_all','全体推子渐变'], ['fade_odd_even','奇偶过渡'],
+  ['fade_ch','通道渐变 (可多选)'], ['fade_bus','Bus 渐变 (可多选)'],
+  ['fade_from','通道从指定值渐变'], ['fade_from_bus','Bus 从指定值渐变'],
+  ['rel_db','相对增减 dB (可多选)'],
+  ['set','⚡ 通用设置 (任意目标 + 值)'],
+  ['osc','⚠️ 原始 OSC (高级 · 仅当前控台)'],
+];
+const MULTI_GROUP = {mute:'ch', mute_bus:'bus', fade_ch:'ch', fade_bus:'bus'};
+
+/* =====================================================================
+   控台驱动层
+   卡片动作、控制键都走 (kind, idx) 这个**语义管道**（ch_fader 就是"某个输入
+   通道的推子"，里面不含任何协议信息）。把 kind 翻译成真实地址的活，全部收敛到
+   下面的 profile。换控台 = 换一个 profile，动作层一行都不用改。
+
+   ⚠️ 约定：不支持的 kind，addrFor() 必须返回 null —— 让"不支持"变成**看得见的
+   降级**，而不是静默写到别的地方。未标定的控台一律**拒绝写入并记日志**：宁可不动，
+   也不要蒙错地址（蒙错的后果是"写到了别的参数上"，比完全不动难排查得多）。
+   ===================================================================== */
+const X32_ADDR = {
+  fader: { ch_fader:'/ch/%02d/mix/fader', bus_fader:'/bus/%02d/mix/fader',
+           dca_fader:'/dca/%02d/fader', auxin_fader:'/auxin/%02d/mix/fader',
+           usb_fader:'/usb/%02d/mix/fader', fxret_fader:'/fxret/%02d/mix/fader',
+           mtx_fader:'/mtx/%02d/mix/fader', main_fader:'/main/st/mix/fader' },
+  on:    { ch_on:'/ch/%02d/mix/on', bus_on:'/bus/%02d/mix/on', dca_on:'/dca/%02d/on',
+           auxin_on:'/auxin/%02d/mix/on', usb_on:'/usb/%02d/mix/on',
+           fxret_on:'/fxret/%02d/mix/on', mtx_on:'/mtx/%02d/mix/on',
+           main_on:'/main/st/mix/on' },
+};
+// ⚠️ Main 地址没有 %02d 占位符，绝不可做格式化 —— 历史上这里抛过 TypeError
+//    并被 try/except 吞掉，导致桥接真台时主输出从来没被转发过（规范 §3.5 第 4 条）。
+const CTRL_PROFILES = {
+  x32: { label:'X32', vendor:'Behringer', transport:'osc', ready:true, verified:true,
+         note:'', addr:X32_ADDR,
+         counts:{ch:32, bus:16, dca:8, auxin:6, usb:2, fxret:8, mtx:6, fx:8} },
+  // M32 是 Midas 贴牌的同代产品，OSC 地址表与 X32 完全一致 —— 同一张表直接复用
+  m32: { label:'M32', vendor:'Midas', transport:'osc', ready:true, verified:true,
+         note:'', addr:X32_ADDR,
+         counts:{ch:32, bus:16, dca:8, auxin:6, usb:2, fxret:8, mtx:6, fx:8} },
+  wing: { label:'Wing', vendor:'Behringer', transport:'osc', ready:false, verified:false,
+          addr:null, note:'Wing 是全新平台，OSC 地址空间与 X32 不通用，地址表待填',
+          counts:{ch:48, bus:16, dca:8, auxin:8, usb:4, fxret:8, mtx:8, fx:16} },
+  yamaha: { label:'Yamaha DM3 / TF / QL', vendor:'Yamaha', transport:'osc',
+            ready:false, verified:false, addr:null,
+            note:'Yamaha 各型号的 OSC/MIDI 接口不一致，需按型号分别标定',
+            counts:{ch:48, bus:24, dca:12, auxin:8, usb:2, fxret:8, mtx:12, fx:8} },
+  ah: { label:'Allen & Heath dLive / SQ', vendor:'Allen & Heath', transport:'midi',
+        ready:false, verified:false, addr:null,
+        note:'A&H 走 TCP MIDI 而非 OSC，除地址表外还需一层 MIDI 消息编码',
+        counts:{ch:64, bus:32, dca:16, auxin:8, usb:2, fxret:8, mtx:16, fx:8} },
+};
+const ST_PENDING = ['ch_fader','ch_on','bus_fader','bus_on','dca_fader','dca_on',
+  'main_fader','main_on','auxin_fader','usb_fader','fxret_fader','mtx_fader',
+  'auxin_on','usb_on','fxret_on','mtx_on','ch_dca','fx_type','fx_on','fx_mix','fx_name'];
+let PROFILE_ID = 'x32';
+function profile(){ return CTRL_PROFILES[PROFILE_ID] || CTRL_PROFILES.x32; }
+function addrFor(kind, idx){
+  const p = profile();
+  if (!p.ready || !p.addr) return null;         // 未标定 → 明确的"不支持"
+  if (kind === 'ch_dca') return '/ch/' + String(idx).padStart(2,'0') + '/mix/dca';
+  if (kind.indexOf('fx_') === 0){
+    if (kind === 'fx_type') return '/fx/' + idx + '/type';
+    if (kind === 'fx_name') return '/fx/' + idx + '/config/name';
+    if (kind === 'fx_on')   return '/fx/' + idx + '/on';
+    if (kind === 'fx_mix')  return '/fx/' + idx + '/mix';
+    return '/fx/' + idx + '/par/' + kind.slice(7);   // fx_par_01 → /fx/1/par/01
+  }
+  if (kind === 'main_fader') return p.addr.fader.main_fader;   // 无占位符, 不格式化
+  if (kind === 'main_on')    return p.addr.on.main_on;
+  const m = (kind.slice(-6) === '_fader') ? 'fader' : 'on';   // '_fader' 是 6 个字符
+  const tpl = p.addr[m][kind];
+  return tpl ? tpl.replace('%02d', String(idx).padStart(2,'0')) : null;
+}
+function parseAddr(a){
+  let m = a.match(/^\/ch\/(\d+)\/mix\/(fader|on)$/);
+  if (m) return ['ch_' + m[2], +m[1]];
+  m = a.match(/^\/bus\/(\d+)\/mix\/(fader|on)$/);
+  if (m) return ['bus_' + m[2], +m[1]];
+  m = a.match(/^\/dca\/(\d+)\/(fader|on)$/);
+  if (m) return ['dca_' + m[2], +m[1]];
+  m = a.match(/^\/main\/st\/mix\/(fader|on)$/);
+  if (m) return ['main_' + m[1], 0];
+  m = a.match(/^\/(auxin|usb|fxret|mtx)\/(\d+)\/mix\/(fader|on)$/);
+  if (m) return [m[1] + '_' + m[3], +m[2]];
+  m = a.match(/^\/fx\/(\d+)\/(type|on|mix)$/);
+  if (m) return ['fx_' + m[2], +m[1]];
+  m = a.match(/^\/fx\/(\d+)\/par\/(\d+)$/);
+  if (m) return ['fx_par_' + m[2], +m[1]];
+  return null;
+}
+
+/* ---- 通用动作 set 的分组 / 参数表（与服务端 SET_GROUPS/SET_PARAMS 对齐）---- */
+const ST_GROUPS = [['ch','输入通道',32],['bus','Bus 输出',16],['dca','DCA 编组',8],
+  ['main','主输出',1],['auxin','Aux In',6],['usb','USB 返回',2],['fxret','FX 返回',8],
+  ['mtx','Matrix',6],['fx','FX 效果槽',8],['scene','场景',99]];
+const ST_PARAMS = { ch:['fader','on'], bus:['fader','on'], dca:['fader','on'],
+  main:['fader','on'], auxin:['fader','on'], usb:['fader','on'],
+  fxret:['fader','on'], mtx:['fader','on'],
+  fx:['time','predelay','damp','mix','on','type','name'], scene:['load'] };
+const ST_PLABEL = { fader:'推子 %', on:'开关 (1开启/0静音)', mix:'混合比 (0-1)',
+  time:'混响时间 (秒)', predelay:'预延迟 (毫秒)', damp:'阻尼 (0-1)',
+  type:'算法 (HALL/PLATE/ROOM/…)', name:'名称 (文本)', load:'切场景' };
+function setTargetId(tg){ return (tg && tg.group === 'main') ? 0 : (+((tg || {}).id) || 1); }
+function resolveSetTarget(g, p, idx){
+  if (!ST_PARAMS[g]) return null;
+  if (p === undefined || p === null || p === '') p = (g === 'scene') ? 'load' : 'fader';
+  if (ST_PARAMS[g].indexOf(p) < 0) return null;
+  if (g === 'scene') return 'scene';          // 场景是"动作"而非"值", 单独走
+  if (g === 'fx'){
+    if (['type','name','on','mix'].indexOf(p) >= 0) return 'fx_' + p;
+    const slot = (FX && FX[+idx]) ? FX[+idx] : null;
+    const algo = (slot && slot.type) ? FX_ALGOS[slot.type] : null;
+    if (!algo) return null;                   // 空槽没有时间/预延迟/阻尼
+    return 'fx_par_' + String(algo[p]).padStart(2,'0');
+  }
+  return g + '_' + p;
+}
+
+const LS_KEY = 'x32webdemo.v1';
+
+/* ---------------------------------------------------------------- 曲线 / dB */
+function curveRatio(r, curve){
+  r = Math.min(Math.max(r, 0), 1);
+  if (curve === 'ease_out') return 1 - Math.pow(1 - r, 2);
+  if (curve === 'ease_in')  return r * r;
+  if (curve === 'smooth')   return r * r * (3 - 2 * r);
+  return r;
+}
+function faderToDb(f){
+  if (f <= 0) return -90;
+  if (f >= 0.75) return (f - 0.75) / 0.25 * 10;
+  return 20 * Math.log10(f / 0.75);
+}
+function dbToFader(db){
+  db = Math.min(Math.max(db, -90), 10);
+  if (db <= -89.5) return 0;
+  if (db >= 10) return 1;
+  return db >= 0 ? 0.75 + db / 10 * 0.25 : 0.75 * Math.pow(10, db / 20);
+}
+const dbTxt = f => f <= 0.001 ? '-∞' : faderToDb(f).toFixed(1);
+
+/* ---------------------------------------------------------------- 台面状态 */
+const K2G = { ch_fader:'ch', bus_fader:'bus', dca_fader:'dca', auxin_fader:'auxin',
+              usb_fader:'usb', fxret_fader:'fxret', mtx_fader:'mtx', main_fader:'main' };
+
+let M;            // 台面：M[group][idx] = {fader, on}
+let NAMES;        // 命名：NAMES[group][idx] = '音乐'
+let CARDS, KEYS, KEYCFG, SNAPS;
+let scene = 1;
+
+function blankConsole(){
+  const M2 = {};
+  for (const g of GROUP_ORDER){
+    M2[g] = {};
+    for (const i of idxRange(g)) M2[g][i] = {fader:0.75, on:1};
+  }
+  M2.ch[15] = {fader:0.75, on:1};
+  return M2;
+}
+function blankNames(){
+  // 一台有代表性的初始命名，方便一眼看懂台面在干什么
+  const n = {ch:{}, bus:{}, dca:{}, auxin:{}, usb:{}, fxret:{}, mtx:{}, main:{}};
+  n.ch[1] = '话筒 1'; n.ch[2] = '话筒 2'; n.ch[3] = '吉他'; n.ch[4] = '贝斯';
+  n.ch[5] = '键盘'; n.ch[6] = '鼓组'; n.ch[7] = '和声'; n.ch[8] = '弦乐';
+  n.ch[15] = '音乐'; n.ch[16] = '主持人';
+  n.bus[1] = '主扩左'; n.bus[2] = '主扩右'; n.bus[15] = '耳返';
+  n.dca[1] = '乐器组'; n.dca[2] = '人声组';
+  n.main[0] = '主输出';
+  return n;
+}
+
+/* ---------------------------------------------------------------- 默认配置 */
+function defaultCards(){
+  return [
+    { id:'dinner', name:'🍽 晚宴模式', pin:true, next:'leave',
+      desc:'静音话筒 → 音乐 10 秒渐弱；完成后自动接续「散场模式」',
+      actions:[ {kind:'mute', chs:[1,2]},
+                {kind:'fade_from', ch:15, frm:0.75, to:0.30, duration:10, curve:'linear'} ] },
+
+    { id:'leave', name:'🚪 散场模式', desc:'全部取消静音 → 音乐从 0 经 5 秒渐强到 90%',
+      actions:[ {kind:'unmute_all'},
+                {kind:'fade_from', ch:15, frm:0.0, to:0.90, duration:5, curve:'linear'} ] },
+
+    { id:'speech', name:'🎤 演讲模式', desc:'切场景 2 → 音乐静音 → 话筒 1 用 S 形曲线 3 秒渐强到 90%',
+      actions:[ {kind:'scene', scene:2}, {kind:'mute', chs:[15]},
+                {kind:'fade_ch', chs:[1], to:0.90, duration:3, curve:'smooth'} ] },
+
+    { id:'timeline', name:'🧪 时间轴演示', desc:'等待 1.5 秒 ∥ 第 4 路并行淡出 → 第 5、6 路 3 秒推下（演示 at 并行与 cursor 顺延）',
+      actions:[ {kind:'wait', duration:1.5},
+                {kind:'fade_ch', chs:[4], to:0.0, duration:2, curve:'ease_in', at:0},
+                {kind:'fade_ch', chs:[5,6], to:0.25, duration:3, curve:'ease_out'} ] },
+
+    { id:'sync_down', name:'⏬ 全体推下 (3秒)', desc:'全部 79 路推子 3 秒同步拉到底，先快后慢收尾',
+      actions:[ {kind:'fade_all', to:0.0, duration:3, curve:'ease_out'} ] },
+
+    { id:'sync_up', name:'⏫ 全体拉回 (3秒)', desc:'全部推子 3 秒平滑拉回 0 dB，S 形缓入缓出',
+      actions:[ {kind:'fade_all', to:0.75, duration:3, curve:'smooth'} ] },
+
+    { id:'odd_even', name:'🎸 歌曲过渡 (基数进偶数出)', desc:'奇数通道 4 秒渐入到 80%，偶数同时渐出',
+      actions:[ {kind:'fade_odd_even', odd_to:0.8, even_to:0.0, duration:4, curve:'linear'} ] },
+
+    { id:'iem_up', name:'🎧 耳返 +3dB', desc:'耳返 Bus 15 相对提升 3 dB（rel_db 相对动作，2 秒）',
+      actions:[ {kind:'rel_db', group:'bus', buses:[15], delta_db:3, duration:2, curve:'smooth'} ] },
+
+    { id:'alllive', name:'🎵 All Live 自动混音', desc:'前 8 路推子随节拍自动起伏 12 秒——电动推子玩具同款',
+      actions:[] },
+  ];
+}
+function defaultKeys(){
+  return [
+    { id:'iem_up',  name:'耳返 增大',   icon:'🎧➕', kind:'bus',  idx:15, sign:+1 },
+    { id:'iem_dn',  name:'耳返 减小',   icon:'🎧➖', kind:'bus',  idx:15, sign:-1 },
+    { id:'main_up', name:'主输出 增大', icon:'🔊➕', kind:'main', idx:0,  sign:+1 },
+    { id:'main_dn', name:'主输出 减小', icon:'🔉➖', kind:'main', idx:0,  sign:-1 },
+    { id:'dca1_up', name:'乐器组 增大', icon:'🎸➕', kind:'dca',  idx:1,  sign:+1 },
+    { id:'dca1_dn', name:'乐器组 减小', icon:'🎸➖', kind:'dca',  idx:1,  sign:-1 },
+  ];
+}
+
+/* ---------------------------------------------------------------- 持久化 */
+function save(){
+  try{
+    localStorage.setItem(LS_KEY, JSON.stringify({CARDS, KEYS, KEYCFG, NAMES, M, scene, FX, FXSYNC, PROFILE_ID}));
+  }catch(e){ /* 隐私模式等场景忽略 */ }
+}
+function load(){
+  CARDS = defaultCards(); KEYS = defaultKeys();
+  KEYCFG = {step_db:3, ramp:0.4}; SNAPS = [];
+  M = blankConsole(); NAMES = blankNames(); scene = 1;
+  FX = defaultFx(); FXSYNC = defaultFxSync();
+  TAPST = {times:[], count:0, bpm:0}; FWD = {}; FX_FWD_CT = 0;
+  try{
+    const raw = localStorage.getItem(LS_KEY);
+    if (raw){
+      const d = JSON.parse(raw);
+      if (Array.isArray(d.CARDS) && d.CARDS.length) CARDS = d.CARDS;
+      if (Array.isArray(d.KEYS))  KEYS  = d.KEYS;
+      if (d.KEYCFG) KEYCFG = Object.assign(KEYCFG, d.KEYCFG);
+      if (d.NAMES)  NAMES = Object.assign(NAMES, d.NAMES);
+      if (d.M)      M = Object.assign(M, d.M);
+      if (typeof d.scene === 'number') scene = d.scene;
+      if (d.FX){
+        for (let s = 1; s <= 8; s++){
+          const src = d.FX[s] || d.FX[String(s)];
+          if (!src) continue;
+          const t = String(src.type || '').toUpperCase();
+          FX[s].type = (t && FX_ALGOS[t]) ? t : '';
+          FX[s].name = String(src.name || '').slice(0, 12);
+          FX[s].on   = src.on ? 1 : 0;
+          FX[s].mix  = Math.min(Math.max(+(src.mix != null ? src.mix : 0.25), 0), 1);
+          FX[s].par  = {};
+          if (src.par) for (const k in src.par){
+            const n = +src.par[k];
+            if (isFinite(n)) FX[s].par[+k] = n;
+          }
+        }
+      }
+      if (d.FXSYNC){
+        const y = d.FXSYNC;
+        FXSYNC.mode      = FX_MODE_LABEL[y.mode] ? y.mode : 'software';
+        FXSYNC.group     = Array.isArray(y.group)
+          ? y.group.map(Number).filter(x => x >= 1 && x <= 8) : [1, 2];
+        FXSYNC.followTap = y.followTap !== false;
+        FXSYNC.note      = FX_BEATS[y.note] ? y.note : '1/4';
+        FXSYNC.dotted    = !!y.dotted;
+        FXSYNC.bpm       = +y.bpm || 0;
+        TAPST.bpm        = FXSYNC.bpm;
+      }
+      if (typeof d.PROFILE_ID === 'string' && CTRL_PROFILES[d.PROFILE_ID]) PROFILE_ID = d.PROFILE_ID;
+    }
+  }catch(e){ /* 坏数据就退回默认 */ }
+}
+
+/* ================================================================ 引擎 */
+const ENG = {
+  running:null, name:'', progress:0, step:'',
+  gen:0, stopFlag:false,
+  fadeZone:new Map(),     // 'kind:idx' -> 卡片名
+  interrupts:new Set(),   // 本轮被接管的通道
+  timer:null,
+};
+const fk = (kind, idx) => kind + ':' + idx;
+
+function getValue(kind, idx){
+  const g = K2G[kind] || kind.replace('_fader','');
+  return (M[g] && M[g][idx]) ? M[g][idx].fader : 0;
+}
+function isOn(kind, idx){
+  const g = (kind||'').replace('_on','');
+  return (M[g] && M[g][idx]) ? M[g][idx].on : 1;
+}
+/** source: 'manual' 触发冲突检测，'action'/'dca'/'sync' 不触发 */
+function setValue(kind, idx, value, source){
+  if (source === 'manual') checkManual(kind, idx);
+  if (kind.endsWith('_fader')){
+    const g = K2G[kind];
+    if (M[g] && M[g][idx]) M[g][idx].fader = Math.min(1, Math.max(0, +value));
+  } else if (kind.endsWith('_on')){
+    const g = kind.replace('_on','');
+    if (M[g] && M[g][idx]) M[g][idx].on = value ? 1 : 0;
+  }
+}
+
+function registerFade(targets, cardName){
+  targets.forEach(([k,i]) => { ENG.interrupts.delete(fk(k,i)); ENG.fadeZone.set(fk(k,i), cardName); });
+}
+function unregisterFade(targets){
+  targets.forEach(([k,i]) => ENG.fadeZone.delete(fk(k,i)));
+}
+function checkManual(kind, idx){
+  const key = fk(kind, idx);
+  const zone = ENG.fadeZone.get(key);
+  if (!zone || ENG.interrupts.has(key)) return;
+  ENG.interrupts.add(key);
+  const g = (K2G[kind] || kind.replace('_fader',''));
+  toast('⚠️ ' + label(g, idx) + ' 手动接管 — 卡片「' + zone + '」停止驱动该通道，其余动作继续');
+  log('CONFLICT ' + label(g,idx) + ' 被手动接管（卡片「' + zone + '」）');
+}
+
+/* ---- 动作时长 / 标签 / 目标 ---- */
+function actDuration(a){
+  const k = a.kind;
+  if (k === 'set'){
+    // 通用设置默认**瞬时**（duration 缺省 0）；给了 duration 才占时间轴走渐变
+    const d = +(a.duration !== undefined ? a.duration : 0) || 0;
+    return d > 0 ? Math.max(0.05, d) : 0;
+  }
+  if (k === 'wait' || FADE_KINDS.indexOf(k) >= 0)
+    return Math.max(0.05, +(a.duration !== undefined ? a.duration : 3) || 3);
+  return 0;
+}
+function fadeTargetsFor(a){
+  const k = a.kind, out = [];
+  if (k === 'fade_all'){
+    const to = +(a.to !== undefined ? a.to : 0);
+    for (let i=1;i<=32;i++) out.push(['ch_fader', i, to]);
+    for (let i=1;i<=16;i++) out.push(['bus_fader', i, to]);
+    for (let i=1;i<=8;i++)  out.push(['dca_fader', i, to]);
+    for (let i=1;i<=6;i++)  out.push(['auxin_fader', i, to]);
+    for (let i=1;i<=2;i++)  out.push(['usb_fader', i, to]);
+    for (let i=1;i<=8;i++)  out.push(['fxret_fader', i, to]);
+    for (let i=1;i<=6;i++)  out.push(['mtx_fader', i, to]);
+    out.push(['main_fader', 0, to]);
+    return out;
+  }
+  if (k === 'fade_odd_even'){
+    const o = +(a.odd_to !== undefined ? a.odd_to : 0.8);
+    const e = +(a.even_to !== undefined ? a.even_to : 0);
+    for (let i=1;i<=32;i++) out.push(['ch_fader', i, i % 2 === 1 ? o : e]);
+    return out;
+  }
+  if (k === 'fade_ch')  return (a.chs || [a.ch || 1]).map(i => ['ch_fader', +i, +(a.to !== undefined ? a.to : 0.8)]);
+  if (k === 'fade_bus') return (a.buses || [a.bus || 1]).map(i => ['bus_fader', +i, +(a.to !== undefined ? a.to : 0.8)]);
+  if (k === 'fade_from')     return [['ch_fader',  +(a.ch  || 1), +(a.to !== undefined ? a.to : 0.9)]];
+  if (k === 'fade_from_bus') return [['bus_fader', +(a.bus || 1), +(a.to !== undefined ? a.to : 0.9)]];
+  if (k === 'rel_db'){
+    const grp = a.group || 'ch';
+    const map = {ch:'ch_fader', bus:'bus_fader', dca:'dca_fader'};
+    const key = {ch:'chs', bus:'buses', dca:'dcas'}[grp];
+    const delta = +(a.delta_db !== undefined ? a.delta_db : 3);
+    return (a[key] || [1]).map(i => {
+      const cur = faderToDb(getValue(map[grp], +i));
+      return [map[grp], +i, dbToFader(Math.min(Math.max(cur + delta, -90), 10))];
+    });
+  }
+  if (k === 'set'){
+    const tg = a.target || {}, g = tg.group, p = tg.param || 'fader';
+    if (p !== 'fader') return null;        // 只有推子类能渐变, 其余落到瞬时路径
+    const i = setTargetId(tg);
+    const kind = resolveSetTarget(g, p, i);
+    if (!kind || !addrFor(kind, i)) return null;   // 组合不合法 / 控台不支持 → 退化瞬时
+    return [[kind, i, Math.min(Math.max(+(a.value || 0), 0), 1)]];
+  }
+  return null;
+}
+function execInstant(a){
+  const k = a.kind;
+  if (k === 'mute'){
+    (a.chs || [a.ch || 1]).forEach(c => setValue('ch_on', +c, 0, 'action'));
+    log('SHOW 静音: ' + (a.chs || [a.ch]).map(c => label('ch', +c)).join('、'));
+  } else if (k === 'mute_bus'){
+    (a.buses || [a.bus || 1]).forEach(b => setValue('bus_on', +b, 0, 'action'));
+    log('SHOW 静音: ' + (a.buses || [a.bus]).map(b => label('bus', +b)).join('、'));
+  } else if (k === 'scene'){
+    scene = +(a.scene || 1);
+    log('SHOW 切换到场景 ' + scene);
+  } else if (k === 'unmute_all'){
+    // 与服务端一致：8 组共 79 路（main idx = 0）
+    for (let i=1;i<=32;i++) setValue('ch_on', i, 1, 'action');
+    for (let i=1;i<=16;i++) setValue('bus_on', i, 1, 'action');
+    for (let i=1;i<=8;i++)  setValue('dca_on', i, 1, 'action');
+    for (let i=1;i<=6;i++)  setValue('auxin_on', i, 1, 'action');
+    for (let i=1;i<=2;i++)  setValue('usb_on', i, 1, 'action');
+    for (let i=1;i<=8;i++)  setValue('fxret_on', i, 1, 'action');
+    for (let i=1;i<=6;i++)  setValue('mtx_on', i, 1, 'action');
+    setValue('main_on', 0, 1, 'action');
+    log('SHOW 全部取消静音（8 组 79 路）');
+  } else if (k === 'set'){
+    execSet(a);
+  } else if (k === 'osc'){
+    execOsc(a);
+  }
+  // wait：故意什么都不做。等待效果完全由时间轴 cursor 偏移提供。
+}
+/* 通用动作：指定语义目标 + 值。kind 由驱动层翻译成地址，所以天然跨控台。 */
+function execSet(a){
+  const tg = a.target || {}, g = tg.group, p = tg.param || 'fader';
+  const idx = setTargetId(tg);
+  if (g === 'scene'){ scene = Math.max(1, idx); log('SHOW 切场景 ' + scene); return; }
+  const kind = resolveSetTarget(g, p, idx);
+  if (!kind){
+    log('SHOW 跳过设置 ' + g + '.' + p + ' #' + idx + '：参数组合不被支持'
+        + ((g === 'fx') ? '（空槽没有时间/预延迟/阻尼）' : ''));
+    return;
+  }
+  const pr = profile();
+  const ad = addrFor(kind, idx);
+  if (!ad){
+    log('SHOW 跳过设置 ' + g + '.' + p + ' #' + idx + '：控台「' + pr.label + '」不支持'
+        + (pr.ready ? '' : '（驱动待标定）'));
+    return;
+  }
+  if (g === 'fx') fxSetField(idx, p, a.value, 'action');   // FX 走独立写入路径
+  else setValue(kind, idx, a.value, 'action');
+  log('SHOW 设置 ' + actLabel(a) + '  →  ' + ad);
+}
+/* 原始 OSC：⚠️ 控台专有，不是跨控台的。地址能不能被识别决定它落到哪。 */
+function execOsc(a){
+  const addr = a.address || '', args = a.args || [];
+  const m = parseAddr(addr);
+  if (m && args.length){
+    setValue(m[0], m[1], args[0], 'action');
+    log('SHOW 原始 OSC ' + addr + ' ' + JSON.stringify(args) + '（已应用到本地虚拟台）');
+    return;
+  }
+  log('SHOW 原始 OSC ' + addr + '：地址未识别，且试用版没有真台可发，已忽略');
+}
+function applyFade(spec, ratio){
+  spec.starts.forEach(([k,i,a,b]) => {
+    if (ENG.interrupts.has(fk(k,i))) return;   // 被接管的通道跳过
+    setValue(k, i, a + (b - a) * ratio, 'action');
+  });
+}
+function stopAll(){
+  ENG.gen++;
+  ENG.stopFlag = true;
+  if (ENG.timer){ clearInterval(ENG.timer); ENG.timer = null; }
+  ENG.fadeZone.clear();
+  ENG.running = null; ENG.step = ''; ENG.progress = 1;
+}
+
+function runCard(cardId, depth, seen){
+  const card = CARDS.find(c => c.id === cardId);
+  if (!card) return;
+  if (depth === 0){ seen = new Set(); autoSnapshot(card.name); }
+  if (seen.has(cardId)){ toast('检测到卡片链循环，已停止接续'); return; }
+  seen.add(cardId);
+
+  stopAll();                 // 新卡片打断上一次（与服务端 SHOW_STOP 语义一致）
+  ENG.stopFlag = false;
+  const gen = ENG.gen;
+  ENG.running = card.id; ENG.name = card.name; ENG.progress = 0; ENG.step = '';
+
+  if (card.id === 'alllive'){ runAllLive(card, gen, seen, depth); return; }
+
+  const acts = (card.actions || []).slice();
+  (card.fades || []).forEach(lg => acts.push({
+    kind:'fade_from', ch:lg.ch, frm:lg.from, to:lg.to,
+    duration:lg.duration !== undefined ? lg.duration : 3, curve:lg.curve || 'linear'
+  }));
+
+  // 时间轴排布
+  const tl = [];
+  let cursor = 0;
+  acts.forEach((act, n) => {
+    const hasAt = act.at !== undefined && act.at !== null && act.at !== '';
+    const start = hasAt ? +act.at : cursor;
+    const dur = actDuration(act);
+    tl.push({n:n, act:act, start:start, dur:dur});
+    cursor = start + dur;
+  });
+  const total = Math.max(0.001, ...tl.map(e => e.start + e.dur));
+  log('SHOW 启动卡片: ' + card.name + '（' + acts.length + ' 个动作，时间轴 ' + total.toFixed(1) + ' 秒）');
+
+  const t0 = performance.now() / 1000;
+  const fired = new Set();
+  const active = new Map();
+
+  ENG.timer = setInterval(() => {
+    if (gen !== ENG.gen || ENG.stopFlag){
+      clearInterval(ENG.timer); ENG.timer = null;
+      active.forEach(f => unregisterFade(f.targets));
+      return;
+    }
+    const t = performance.now() / 1000 - t0;
+
+    tl.forEach(ev => {
+      const n = ev.n, act = ev.act;
+      if (t < ev.start) return;
+      if (!fired.has(n)){
+        fired.add(n);
+        ENG.step = (n + 1) + '/' + acts.length + ' · ' + actLabel(act);
+        if (ev.dur <= 0.001){ execInstant(act); return; }
+        const targets = fadeTargetsFor(act);
+        if (targets === null){ execInstant(act); return; }
+        // fade_from：先把推子置到 frm，这样起点就是 frm
+        if (act.kind === 'fade_from' || act.kind === 'fade_from_bus'){
+          setValue(targets[0][0], targets[0][1], +(act.frm !== undefined ? act.frm : 0), 'action');
+        }
+        const starts = targets.map(([k,i,b]) => [k, i, getValue(k,i), b]);
+        registerFade(targets, card.name);
+        active.set(n, {targets:targets, starts:starts});
+        log('SHOW ▶ ' + actLabel(act) + '（' + ev.dur.toFixed(1) + ' 秒，曲线 ' + (act.curve || 'linear') + '）');
+      }
+      if (active.has(n)){
+        const f = active.get(n);
+        if (t >= ev.start + ev.dur){
+          applyFade(f, 1.0);
+          unregisterFade(f.targets);
+          log('SHOW ✓ ' + actLabel(act));
+          active.delete(n);
+        } else {
+          applyFade(f, curveRatio((t - ev.start) / ev.dur, act.curve || 'linear'));
+        }
+      }
+    });
+
+    if (fired.size === tl.length && active.size === 0 && t >= total - 0.05){
+      clearInterval(ENG.timer); ENG.timer = null;
+      ENG.progress = 1;
+      chainNext(card, gen, seen, depth);
+      return;
+    }
+    ENG.progress = Math.min(1, t / total);
+  }, 50);
+}
+
+function chainNext(card, gen, seen, depth){
+  const nxt = card.next ? CARDS.find(c => c.id === card.next) : null;
+  if (!nxt){ ENG.running = null; ENG.step = ''; return; }
+  ENG.progress = 1;
+  log('SHOW 卡片链: 「' + card.name + '」完成 → 接续「' + nxt.name + '」');
+  setTimeout(() => {
+    if (gen !== ENG.gen || ENG.stopFlag) return;
+    if (seen.has(nxt.id)){ toast('卡片链存在循环，已停止接续'); ENG.running = null; return; }
+    if (depth + 1 >= 16){ toast('卡片链超过 16 张，已停止接续'); ENG.running = null; return; }
+    runCard(nxt.id, depth + 1, seen);
+  }, 400);   // 卡片链之间的喘息
+}
+
+/* ---- All Live 演示：前 8 路随节拍起伏 12 秒 ---- */
+function runAllLive(card, gen, seen, depth){
+  const base = {};
+  for (let i=1;i<=8;i++) base[i] = M.ch[i].fader;
+  const targets = [];
+  for (let i=1;i<=8;i++) targets.push(['ch_fader', i, 0]);
+  registerFade(targets, card.name);
+  const dur = 12, t0 = performance.now() / 1000;
+  log('SHOW All Live 演示开始：通道 01-08 推子自动起舞 ' + dur + ' 秒');
+  ENG.timer = setInterval(() => {
+    if (gen !== ENG.gen || ENG.stopFlag){
+      clearInterval(ENG.timer); ENG.timer = null; unregisterFade(targets); return;
+    }
+    const t = performance.now() / 1000 - t0;
+    if (t >= dur){
+      clearInterval(ENG.timer); ENG.timer = null;
+      for (let i=1;i<=8;i++) if (!ENG.interrupts.has(fk('ch_fader', i))) setValue('ch_fader', i, base[i], 'action');
+      unregisterFade(targets);
+      log('SHOW All Live 演示结束，推子已归位');
+      ENG.progress = 1;
+      chainNext(card, gen, seen, depth);
+      return;
+    }
+    for (let i=1;i<=8;i++){
+      if (ENG.interrupts.has(fk('ch_fader', i))) continue;
+      const v = base[i] + 0.20 * Math.sin(t * 2.4 + i * 0.85) * Math.sin(t * 0.7);
+      setValue('ch_fader', i, Math.min(1, Math.max(0, v)), 'action');
+    }
+    ENG.step = 'All Live · ' + t.toFixed(1) + 's';
+    ENG.progress = t / dur;
+  }, 80);
+}
+
+/* ---- 一键演示：晚宴模式（自带链到散场）---- */
+function demoRun(){
+  switchPage('mix');
+  setTimeout(() => { runCard('dinner', 0, null); }, 350);
+  setTimeout(() => { switchPage('cards'); }, 2600);
+}
+
+/* ---------------------------------------------------------------- 快照 / 撤销 */
+let AUTO = [];   // 自动撤销点（最多 5 个）
+function snapshotState(){
+  const s = {scene:scene};
+  for (const g of GROUP_ORDER){
+    s[g] = {};
+    for (const i of idxRange(g)) s[g][i] = {fader:M[g][i].fader, on:M[g][i].on};
+  }
+  return s;
+}
+function autoSnapshot(name){
+  AUTO.push({name:'自动 · ' + name.slice(0, 20), state:snapshotState()});
+  if (AUTO.length > 5) AUTO.shift();
+  canUndo = true;
+}
+let canUndo = false;
+function undoLast(){
+  const s = AUTO.pop();
+  if (!s) return;
+  restoreState(s.state);
+  canUndo = AUTO.length > 0;
+  toast('↩️ 已回到「' + s.name + '」执行前的台面');
+  log('UNDO 撤销至 ' + s.name);
+}
+function saveSnap(){
+  SNAPS.unshift({id:Date.now(), name:'预设 ' + (SNAPS.length + 1), time:nowStr(), state:snapshotState()});
+  if (SNAPS.length > 8) SNAPS.pop();
+  save(); render();
+  toast('💾 已保存预设 — 把推子拖乱，再点「回归」看它滑回来');
+}
+function recallSnap(id){
+  const s = SNAPS.find(x => x.id === id);
+  if (!s) return;
+  restoreState(s.state);
+  toast('⏪ 回归中…看「调音台」页推子自动滑回');
+}
+function restoreState(st){
+  if (typeof st.scene === 'number'){ scene = st.scene; }
+  for (const g of GROUP_ORDER){
+    if (!st[g]) continue;
+    for (const i of idxRange(g)){
+      if (!st[g][i]) continue;
+      M[g][i].on = st[g][i].on;
+      M[g][i].fader = st[g][i].fader;   // 显示层会用缓动滑过去 = 电动推子
+    }
+  }
+}
+function delSnap(id){ SNAPS = SNAPS.filter(x => x.id !== id); save(); render(); }
+
+/* ---------------------------------------------------------------- 控制键 */
+const KEYRAMP = {};        // 'kind:idx' -> 代次，新的按键打断上一次渐变
+function pressKey(id){
+  const k = KEYS.find(x => x.id === id);
+  if (!k) return;
+  const kind = k.kind + '_fader';
+  const cur = faderToDb(getValue(kind, k.idx));
+  const target = Math.min(Math.max(cur + k.sign * KEYCFG.step_db, -90), 10);
+  const val = dbToFader(target);
+  const ramp = +KEYCFG.ramp || 0;
+  if (ramp <= 0){ setValue(kind, k.idx, val, 'manual'); return; }
+  const key = fk(kind, k.idx);
+  KEYRAMP[key] = (KEYRAMP[key] || 0) + 1;
+  const myGen = KEYRAMP[key];
+  const from = getValue(kind, k.idx);      // 始终从当前值算起，连发也能平滑累加
+  const t0 = performance.now() / 1000;
+  const timer = setInterval(() => {
+    if (myGen !== KEYRAMP[key]){ clearInterval(timer); return; }   // 被新一次按键接管
+    const r = (performance.now() / 1000 - t0) / ramp;
+    if (r >= 1){ clearInterval(timer); setValue(kind, k.idx, val, 'manual'); return; }
+    setValue(kind, k.idx, from + (val - from) * curveRatio(r, 'smooth'), 'manual');
+  }, 40);
+}
+let kpT = null, kpI = null;
+function kpStart(id){
+  pressKey(id); kpStop();
+  kpT = setTimeout(() => { kpI = setInterval(() => pressKey(id), 150); }, 500);
+}
+function kpStop(){ if (kpT){ clearTimeout(kpT); kpT = null; } if (kpI){ clearInterval(kpI); kpI = null; } }
+document.addEventListener('pointerup', kpStop);
+document.addEventListener('pointercancel', kpStop);
+
+/* ================================================================
+   混响控制 (FX 槽 1-8) · Tap 定拍 · 混响时间同步
+   与服务端 x32_simulator.py 同一套语义：
+     · 混响算法参数索引随算法变化 → 集中在一张表里（time/predelay/damp）
+     · Tap：间隔 <0.15s 判为抖动忽略；距上次 >2s 视为新一组；取最近 8 个间隔均值算 BPM
+     · 时间 = 拍数 × 60/BPM（四分音符 = 1 拍；附点 ×1.5），再按算法范围钳制
+     · 同步三模式：software 软件主导 / console 台面主导 / both 双向互同步
+     · 防回环：铺给其他槽的写入用 action 语义（不再触发铺散），且每次下发都记
+       回声抑制记录 FWD；真台回读若命中记录就直接吸收，不再二次广播
+   ================================================================ */
+const FX_ALGOS = {
+  HALL:    {label:'大厅混响', time:1, predelay:2, damp:4, tmin:0.4, tmax:10.0, def:{1:2.40, 2:25, 4:0.45}},
+  PLATE:   {label:'板式混响', time:1, predelay:2, damp:4, tmin:0.3, tmax: 8.0, def:{1:1.80, 2:15, 4:0.30}},
+  ROOM:    {label:'房间混响', time:1, predelay:2, damp:4, tmin:0.2, tmax: 5.0, def:{1:1.10, 2:12, 4:0.55}},
+  CHAMBER: {label:'密室混响', time:1, predelay:2, damp:4, tmin:0.3, tmax: 6.0, def:{1:1.60, 2:20, 4:0.40}},
+  VINTAGE: {label:'复古混响', time:1, predelay:2, damp:4, tmin:0.3, tmax: 6.0, def:{1:1.50, 2:18, 4:0.35}},
+};
+const FX_ALGO_OPTS = [['','— 空槽 —'], ['HALL','大厅混响'], ['PLATE','板式混响'],
+                      ['ROOM','房间混响'], ['CHAMBER','密室混响'], ['VINTAGE','复古混响']];
+const FX_BEATS = {'1/16':0.25, '1/8':0.5, '1/4':1, '1/2':2, '1':4, '2':8};
+const FX_NOTE_OPTS = [['1/16','1/16 音符'], ['1/8','1/8 音符'], ['1/4','1/4 音符'],
+                      ['1/2','1/2 音符'], ['1','全音符'], ['2','2 小节']];
+const FX_MODE_LABEL = {software:'软件主导', console:'台面主导', both:'双向互同步'};
+const FX_TAP_MIN = 0.15, FX_TAP_GAP = 2.0, FX_TAP_MAX = 8;
+
+let FX, FXSYNC, TAPST, FWD, FX_FWD_CT;
+function defaultFx(){
+  const f = {};
+  for (let s = 1; s <= 8; s++) f[s] = {type:'', name:'', on:1, mix:0.25, par:{}};
+  [['HALL','主厅堂'], ['PLATE','人声板'], ['ROOM','鼓房'], ['CHAMBER','人声密室']]
+    .forEach(([t, n], i) => {
+      const s = i + 1; f[s].type = t; f[s].name = n;
+      f[s].par = Object.assign({}, FX_ALGOS[t].def);
+    });
+  return f;
+}
+function defaultFxSync(){
+  return {mode:'software', group:[1,2], followTap:true, note:'1/4', dotted:false, bpm:0};
+}
+const fxAlgo = s => (FX[s] && FX_ALGOS[FX[s].type]) || null;
+const fxTimePar = s => { const a = fxAlgo(s); return a ? a.time : null; };
+const fxNow = () => performance.now() / 1000;
+
+function fxParClamp(s, p, v){
+  v = +v || 0;
+  const a = fxAlgo(s);
+  if (a){
+    if (p === a.time)     return Math.min(Math.max(v, a.tmin), a.tmax);
+    if (p === a.predelay) return Math.min(Math.max(v, 0), 200);
+    if (p === a.damp)     return Math.min(Math.max(v, 0), 1);
+  }
+  return Math.min(Math.max(v, 0), 1);
+}
+function fxTargets(){
+  const g = (FXSYNC.group || []).filter(s => s >= 1 && s <= 8);
+  if (g.length) return Array.from(new Set(g)).sort((a, b) => a - b);
+  return [1,2,3,4,5,6,7,8].filter(s => fxAlgo(s));   // 组为空 → 所有混响槽
+}
+/** 下发真台（这里模拟成记一条回声抑制记录） */
+function fxForward(s, p, v){ FWD[s + '|' + p] = {v:v, t:fxNow()}; FX_FWD_CT++; }
+function fwdIsEcho(s, p, v){
+  const r = FWD[s + '|' + p];
+  if (!r || fxNow() - r.t >= 2) return false;
+  return Math.abs(r.v - v) <= Math.max(0.02, Math.abs(v) * 0.005);
+}
+/** 把混响时间铺给联动组（source: 'manual' 软件改 / 'sync' 台面回读） */
+function fxTimeFanout(src, seconds, source){
+  const a = fxAlgo(src); if (!a) return;
+  if (FXSYNC.mode === 'software' && source === 'sync') return;
+  if (FXSYNC.mode === 'console'  && source === 'manual') return;
+  const p = a.time, spread = [];
+  fxTargets().forEach(s => {
+    if (s === src || !fxAlgo(s)) return;
+    if (Math.abs((FX[s].par[p] || 0) - seconds) < 1e-4) return;
+    FX[s].par[p] = fxParClamp(s, p, seconds);
+    fxForward(s, p, FX[s].par[p]);
+    spread.push(s);
+  });
+  if (spread.length)
+    log('REVERB 同步[' + FX_MODE_LABEL[FXSYNC.mode] + '] FX' + src + ' 时间 '
+      + seconds.toFixed(2) + 's → 组内 ' + spread.map(s => 'FX' + s).join('/'));
+}
+/** 混响槽统一写入口（field: type/on/mix/name/time/predelay/damp） */
+function fxSetField(s, field, value, source){
+  s = +s; if (!FX[s]) return null;
+  source = source || 'manual';
+  if (field === 'type'){
+    const t = String(value || '').toUpperCase();
+    if (t && !FX_ALGOS[t]) return null;
+    FX[s].type = t;
+    FX[s].par = t ? Object.assign({}, FX_ALGOS[t].def) : {};   // 换算法重新铺默认参数
+    save(); return t;
+  }
+  if (field === 'name'){ FX[s].name = String(value || '').slice(0, 12); save(); return FX[s].name; }
+  if (field === 'on'){ FX[s].on = value ? 1 : 0; save(); return FX[s].on; }
+  if (field === 'mix'){
+    FX[s].mix = Math.min(Math.max(+value || 0, 0), 1); save(); return FX[s].mix;
+  }
+  const a = fxAlgo(s);
+  if (!a || ['time','predelay','damp'].indexOf(field) < 0) return null;
+  const p = a[field];
+  fxWritePar(s, p, value, source);
+  return FX[s].par[p];
+}
+function fxWritePar(s, p, value, source){
+  const v = fxParClamp(s, p, value);
+  FX[s].par[p] = v;
+  if ((source === 'manual' || source === 'sync') && p === fxTimePar(s)){
+    fxForward(s, p, v);                   // 下发真台
+    fxTimeFanout(s, v, source);           // 按同步模式铺给组内其他槽
+  }
+  save();
+  return v;
+}
+/** 模拟"真台上有人手动改了混响" —— 走回读路径，会先过回声抑制 */
+function fxConsoleReadback(s, p, value){
+  if (fwdIsEcho(s, p, value)){
+    FX[s].par[p] = fxParClamp(s, p, value);
+    log('BRIDGE 真台回声已吸收 FX' + s + ' 参数' + p + ' = ' + value.toFixed(2)
+      + '（自己刚下发的，不再二次广播）');
+    save(); return;
+  }
+  log('BRIDGE 真台回读 FX' + s + ' 参数' + p + ' → ' + value.toFixed(2) + '（台面上的外部改动）');
+  fxWritePar(s, p, value, 'sync');
+}
+function fxNudgeConsole(s){
+  const p = fxTimePar(s); if (p === null) { toast('FX' + s + ' 还没装混响算法'); return; }
+  const cur = FX[s].par[p] || 0;
+  const next = Math.round((cur + 0.4) * 100) / 100;
+  fxConsoleReadback(s, p, next);
+  toast('🎛 模拟真台把 FX' + s + ' 混响时间改成 ' + next.toFixed(2) + ' 秒');
+}
+
+/* ---- Tap 定拍 ---- */
+function fxNoteSecs(bpm, note, dotted){
+  let beats = FX_BEATS[note] || 1;
+  if (dotted) beats *= 1.5;
+  bpm = Math.min(Math.max(+bpm || 120, 30), 300);
+  return beats * 60 / bpm;
+}
+function tapRegister(){
+  const t = fxNow(), ts = TAPST.times;
+  if (ts.length && t - ts[ts.length - 1] > FX_TAP_GAP){ TAPST.times = []; TAPST.count = 0; }
+  if (TAPST.times.length && t - TAPST.times[TAPST.times.length - 1] < FX_TAP_MIN) return TAPST.bpm;
+  TAPST.times.push(t); TAPST.count++;
+  if (TAPST.times.length > FX_TAP_MAX + 1) TAPST.times = TAPST.times.slice(-(FX_TAP_MAX + 1));
+  if (TAPST.times.length < 2) return 0;
+  let sum = 0;
+  for (let i = 1; i < TAPST.times.length; i++) sum += TAPST.times[i] - TAPST.times[i - 1];
+  const avg = sum / (TAPST.times.length - 1);
+  TAPST.bpm = Math.min(Math.max(60 / avg, 30), 300);
+  FXSYNC.bpm = TAPST.bpm;
+  return TAPST.bpm;
+}
+function tapReset(){
+  TAPST.times = []; TAPST.count = 0; TAPST.bpm = 0; FXSYNC.bpm = 0;
+  save(); updFxTap();
+}
+function tapApply(){
+  const bpm = FXSYNC.bpm || TAPST.bpm;
+  if (!bpm){ toast('先连点 TAP 几下把拍子定出来'); return; }
+  const secs = fxNoteSecs(bpm, FXSYNC.note, FXSYNC.dotted);
+  if (!FXSYNC.followTap){
+    toast('「跟随 Tap」关着 — 只算出 ' + secs.toFixed(2) + ' 秒，没写入任何槽');
+    log('REVERB Tap ' + bpm.toFixed(1) + ' BPM = ' + secs.toFixed(3) + 's（跟随 Tap 已关，不写入）');
+    return;
+  }
+  const written = [];
+  fxTargets().forEach(s => {
+    const a = fxAlgo(s); if (!a) return;
+    const v = fxParClamp(s, a.time, secs);
+    FX[s].par[a.time] = v; fxForward(s, a.time, v);
+    written.push(s);
+  });
+  const clamped = written.some(s => Math.abs(FX[s].par[fxTimePar(s)] - secs) > 1e-4);
+  log('REVERB Tap ' + bpm.toFixed(1) + ' BPM × ' + FXSYNC.note + (FXSYNC.dotted ? '（附点）' : '')
+    + ' = ' + secs.toFixed(3) + 's → ' + written.length + ' 个混响槽' + (clamped ? '（部分被算法范围钳制）' : ''));
+  save();
+  toast('🎛 ' + secs.toFixed(2) + ' 秒已写入 ' + written.length + ' 个混响槽' + (clamped ? '（部分被钳制）' : ''));
+}
+
+/* ---- 混响 UI ---- */
+function fxParsHTML(s, st){
+  if (st.time === null)
+    return '<div class="ds" style="margin:0">这个槽没装混响算法 — 把上面的类型选成 大厅/板式/房间/密室/复古 就能调混响。</div>';
+  const n2 = v => v.toFixed(2), n0 = v => String(Math.round(v));
+  const row = (f, lab, unit, lo, hi, step, val, fmt) =>
+    '<div class="fxrow"><span class="fxlab">' + lab + '</span>' +
+      '<input type="range" class="fxsl" data-f="' + f + '" min="' + lo + '" max="' + hi +
+      '" step="' + step + '" value="' + val + '" data-slot="' + s + '">' +
+      '<span class="fxval" data-v="' + f + '">' + fmt(val) + unit + '</span></div>';
+  return row('time', '混响时间', ' s', st.tmin, st.tmax, 0.01, st.time, n2)
+       + row('predelay', '预延迟', ' ms', 0, 200, 1, st.predelay, n0)
+       + row('damp', '阻尼', '', 0, 1, 0.01, st.damp, n2)
+       + row('mix', '混合比', '', 0, 1, 0.01, st.mix, n2);
+}
+function fxCardHTML(s){
+  const opts = FX_ALGO_OPTS.map(([v, t]) => '<option value="' + v + '">' + t + '</option>').join('');
+  return '<div class="card" id="fxc-' + s + '">' +
+    '<div class="nm">FX' + s +
+      ' <select class="nkin fx-type" data-slot="' + s + '">' + opts + '</select>' +
+      ' <input class="nkin fx-name" data-slot="' + s + '" style="width:104px" maxlength="12" placeholder="名称">' +
+      ' <button class="mute fx-on" data-slot="' + s + '" title="效果开关">M</button>' +
+      ' <span class="ds fx-tag" style="margin:0"></span></div>' +
+    '<div class="fxpars" data-slot="' + s + '"></div>' +
+    '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:9px">' +
+      '<button class="fxmini" data-console="' + s + '">🎛 台面改时间 +0.4s</button>' +
+      '<span class="ds" style="margin:0">模拟真台上有人手动拧了混响</span>' +
+    '</div></div>';
+}
+function buildFx(){
+  document.getElementById('fxNote').innerHTML =
+    FX_NOTE_OPTS.map(([v, t]) => '<option value="' + v + '">' + t + '</option>').join('');
+  let g = '';
+  for (let s = 1; s <= 8; s++)
+    g += '<span class="chip" data-fxg="' + s + '">FX' + s + '</span>';
+  document.getElementById('fxGroup').innerHTML = g;
+  let h = '';
+  for (let s = 1; s <= 8; s++) h += fxCardHTML(s);
+  document.getElementById('fxlist').innerHTML = h;
+
+  // 事件绑定（一次性）
+  document.getElementById('fxlist').addEventListener('input', e => {
+    const sl = e.target.closest('.fxsl'); if (!sl) return;
+    const s = +sl.dataset.slot, f = sl.dataset.f, v = +sl.value;
+    const ve = sl.parentNode.querySelector('.fxval[data-v="' + f + '"]');
+    if (ve) ve.textContent = (f === 'predelay' ? String(Math.round(v)) : v.toFixed(2))
+      + (f === 'time' ? ' s' : (f === 'predelay' ? ' ms' : ''));
+    clearTimeout(FX_SLIDE_T);
+    FX_SLIDE_T = setTimeout(() => fxSetField(s, f, v, 'manual'), 60);
+  });
+  document.getElementById('fxlist').addEventListener('change', e => {
+    const t = e.target;
+    if (t.classList.contains('fx-type')) fxSetField(+t.dataset.slot, 'type', t.value, 'manual');
+    else if (t.classList.contains('fx-name')) fxSetField(+t.dataset.slot, 'name', t.value, 'manual');
+  });
+  document.getElementById('fxlist').addEventListener('click', e => {
+    const on = e.target.closest('.fx-on');
+    if (on){ const s = +on.dataset.slot; fxSetField(s, 'on', FX[s].on ? 0 : 1, 'manual'); return; }
+    const cc = e.target.closest('[data-console]');
+    if (cc) fxNudgeConsole(+cc.dataset.console);
+  });
+  document.getElementById('fxGroup').addEventListener('click', e => {
+    const c = e.target.closest('[data-fxg]'); if (!c) return;
+    const s = +c.dataset.fxg, g = FXSYNC.group || [], i = g.indexOf(s);
+    if (i >= 0) g.splice(i, 1); else g.push(s);
+    FXSYNC.group = g.sort((a, b) => a - b);
+    save(); renderFxGroup();
+    toast('联动组: ' + (FXSYNC.group.length ? FXSYNC.group.map(x => 'FX' + x).join('、') : '空（= 所有混响槽）'));
+  });
+  document.getElementById('tapBtn').addEventListener('pointerdown', () => {
+    const bpm = tapRegister();
+    updFxTap();
+    if (bpm) log('REVERB Tap ' + bpm.toFixed(1) + ' BPM（已点 ' + TAPST.count + ' 下）');
+  });
+  document.getElementById('fxMode').addEventListener('change', function(){
+    FXSYNC.mode = this.value; save();
+    log('REVERB 同步模式 → ' + FX_MODE_LABEL[FXSYNC.mode]);
+    toast('同步模式: ' + FX_MODE_LABEL[FXSYNC.mode]);
+  });
+  document.getElementById('fxFollow').addEventListener('change', function(){
+    FXSYNC.followTap = this.checked; save();
+  });
+  document.getElementById('fxNote').addEventListener('change', function(){
+    FXSYNC.note = this.value; save(); updFxTap();
+  });
+  document.getElementById('fxDotted').addEventListener('change', function(){
+    FXSYNC.dotted = this.checked; save(); updFxTap();
+  });
+}
+let FX_SLIDE_T = null;
+function renderFxGroup(){
+  const g = new Set(FXSYNC.group || []);
+  document.querySelectorAll('#fxGroup [data-fxg]').forEach(el => {
+    const on = g.has(+el.dataset.fxg);
+    el.classList.toggle('on', on);
+    el.classList.toggle('fxnok', !on);
+  });
+}
+function updFxTap(){
+  const bpm = TAPST.bpm || 0;
+  document.getElementById('tapBpm').textContent = bpm ? bpm.toFixed(1) + ' BPM' : '— BPM';
+  document.getElementById('tapInfo').textContent = bpm
+    ? ('已点 ' + TAPST.count + ' 下 · 取最近 ' + FX_TAP_MAX + ' 个间隔的均值')
+    : '连点 2 下以上定拍';
+  document.getElementById('fxTapSecs').textContent = bpm
+    ? ('当前时值换算 = ' + fxNoteSecs(bpm, FXSYNC.note, FXSYNC.dotted).toFixed(3) + ' 秒') : '';
+}
+function renderFx(){
+  const n2 = v => v.toFixed(2), n0 = v => String(Math.round(v));
+  for (let s = 1; s <= 8; s++){
+    const st = FX[s], a = fxAlgo(s);
+    const card = document.getElementById('fxc-' + s); if (!card) continue;
+    const ts = card.querySelector('.fx-type');
+    if (document.activeElement !== ts && ts.value !== st.type) ts.value = st.type;
+    const nm = card.querySelector('.fx-name');
+    if (document.activeElement !== nm && nm.value !== st.name) nm.value = st.name;
+    card.querySelector('.fx-on').classList.toggle('on', !st.on);
+    const tag = card.querySelector('.fx-tag');
+    // 下拉里已经有算法名了，这里改显示该算法的时间范围（Tap 换算会被钳制到这个区间）
+    const txt = a ? (a.tmin + '–' + a.tmax + ' s') : '空槽';
+    if (tag.textContent !== txt) tag.textContent = txt;
+
+    const pars = card.querySelector('.fxpars');
+    const view = {time: a ? st.par[a.time] : null,
+                  predelay: a ? st.par[a.predelay] : null,
+                  damp: a ? st.par[a.damp] : null, mix: st.mix,
+                  tmin: a ? a.tmin : null, tmax: a ? a.tmax : null};
+    if (pars.dataset.algo !== (st.type || '')){
+      pars.dataset.algo = st.type || '';
+      pars.innerHTML = fxParsHTML(s, view);
+    }
+    [['time', n2, ' s'], ['predelay', n0, ' ms'], ['damp', n2, ''], ['mix', n2, '']].forEach(([f, fmt, unit]) => {
+      const sl = pars.querySelector('.fxsl[data-f="' + f + '"]'); if (!sl) return;
+      const v = view[f]; if (v === null || v === undefined) return;
+      if (document.activeElement !== sl && +sl.value !== +fmt(v)) sl.value = +fmt(v);
+      const ve = pars.querySelector('.fxval[data-v="' + f + '"]');
+      if (ve) ve.textContent = fmt(v) + unit;
+    });
+  }
+  const msel = document.getElementById('fxMode');
+  if (msel && document.activeElement !== msel && msel.value !== FXSYNC.mode) msel.value = FXSYNC.mode;
+  const fck = document.getElementById('fxFollow');
+  if (fck && fck.checked !== !!FXSYNC.followTap) fck.checked = !!FXSYNC.followTap;
+  const nsel = document.getElementById('fxNote');
+  if (nsel && document.activeElement !== nsel && nsel.value !== FXSYNC.note) nsel.value = FXSYNC.note;
+  const dck = document.getElementById('fxDotted');
+  if (dck && dck.checked !== !!FXSYNC.dotted) dck.checked = !!FXSYNC.dotted;
+  renderFxGroup();
+  updFxTap();
+}
+
+/* ---------------------------------------------------------------- 危险卡长按 */
+function isDanger(c){ return (c.actions || []).some(a => DANGER.indexOf(a.kind) >= 0); }
+let holdRAF = null, holdEl = null, holdFired = false;
+function holdStart(ev, id){
+  const c = CARDS.find(x => x.id === id);
+  if (!c) return;
+  if (!isDanger(c)){ runCard(id, 0, null); return; }
+  holdEl = ev.currentTarget; holdFired = false;
+  try { ev.preventDefault(); } catch(e){}
+  const bar = document.createElement('div'); bar.className = 'holdbar'; holdEl.appendChild(bar);
+  const t0 = Date.now();
+  const step = () => {
+    const p = Math.min(1, (Date.now() - t0) / 800);
+    bar.style.width = (p * 100) + '%';
+    if (p >= 1){ holdFired = true; holdCancel(); runCard(id, 0, null); return; }
+    holdRAF = requestAnimationFrame(step);
+  };
+  holdRAF = requestAnimationFrame(step);
+}
+function holdCancel(){
+  if (holdRAF){ cancelAnimationFrame(holdRAF); holdRAF = null; }
+  if (holdEl){
+    const b = holdEl.querySelector('.holdbar'); if (b) b.remove();
+    if (!holdFired) toast('⚠️ 危险卡片 — 需长按 0.8 秒确认执行');
+    holdEl = null;
+  }
+}
+
+/* ================================================================ 显示层 */
+function label(g, i){
+  const n = NAMES[g] && NAMES[g][i];
+  if (n) return n;
+  if (g === 'main') return '主输出';
+  if (g === 'bus') return 'B' + i;
+  if (g === 'dca') return 'D' + i;
+  if (g === 'auxin') return 'A' + i;
+  if (g === 'usb') return 'U' + i;
+  if (g === 'fxret') return 'FX' + i;
+  if (g === 'mtx') return 'M' + i;
+  return String(i).padStart(2, '0');
+}
+function actLabel(a){
+  const k = a.kind;
+  const t = x => Math.round(x * 100) + '%';
+  const lst = (g, arr) => (arr || []).map(i => label(g, +i)).join('、');
+  if (k === 'mute')       return '静音 ' + lst('ch', a.chs || [a.ch]);
+  if (k === 'mute_bus')   return '静音 ' + lst('bus', a.buses || [a.bus]);
+  if (k === 'scene')      return '切场景 ' + a.scene;
+  if (k === 'unmute_all') return '全部取消静音';
+  if (k === 'wait')       return '等待 ' + (a.duration || 1) + ' 秒';
+  if (k === 'fade_all')   return '全体推子 → ' + t(a.to || 0);
+  if (k === 'fade_odd_even') return '奇数→' + t(a.odd_to || 0) + ' 偶数→' + t(a.even_to || 0);
+  if (k === 'fade_ch')    return lst('ch', a.chs || [a.ch]) + ' → ' + t(a.to || 0);
+  if (k === 'fade_bus')   return lst('bus', a.buses || [a.bus]) + ' → ' + t(a.to || 0);
+  if (k === 'fade_from')  return label('ch', a.ch || 1) + ' ' + t(a.frm || 0) + ' → ' + t(a.to || 0);
+  if (k === 'fade_from_bus') return label('bus', a.bus || 1) + ' ' + t(a.frm || 0) + ' → ' + t(a.to || 0);
+  if (k === 'rel_db'){
+    const g = a.group || 'ch';
+    const ids = a[{ch:'chs', bus:'buses', dca:'dcas'}[g]] || [];
+    return lst(g, ids) + ' ' + (a.delta_db >= 0 ? '+' : '−') + Math.abs(a.delta_db || 0) + ' dB';
+  }
+  if (k === 'set'){
+    const tg = a.target || {}, g = tg.group, p = tg.param || 'fader', i = setTargetId(tg);
+    const gname = ((ST_GROUPS.find(x => x[0] === g) || ['', g])[1]);
+    if (g === 'scene') return '切到场景 ' + i;
+    if (g === 'fx'){
+      if (p === 'on')   return 'FX' + i + ' ' + (a.value ? '开启' : '旁通');
+      if (p === 'type') return 'FX' + i + ' 算法=' + (a.value || '(清空)');
+      if (p === 'name') return 'FX' + i + ' 名称=' + a.value;
+      if (p === 'mix')  return 'FX' + i + ' 混合比=' + (+a.value || 0).toFixed(2);
+      return 'FX' + i + ' ' + (ST_PLABEL[p] || p) + ' = ' + a.value;
+    }
+    const lbl = (g === 'main') ? '主输出' : (gname + ' ' + String(i).padStart(2, '0'));
+    if (p === 'on') return lbl + ' ' + (a.value ? '开启' : '静音');
+    const dd = (+a.duration > 0) ? (' 经' + a.duration + '秒') : '';
+    return lbl + ' →' + Math.round((+a.value || 0) * 100) + '%' + dd;
+  }
+  if (k === 'osc') return '⚠️ 原始 OSC ' + a.address + ((a.args && a.args.length) ? (' ' + a.args.join(' ')) : '');
+  return k;
+}
+function rowHTML(rowPrefix, i){
+  const numLbl = {
+    m:'<b>MAIN</b>', d:'<b>D' + i + '</b>', b:'<b>B' + i + '</b>', a:'<b>A' + i + '</b>',
+    u:'<b>U' + i + '</b>', x:'<b>FX' + i + '</b>', t:'<b>M' + i + '</b>',
+  }[rowPrefix] || ('<b>' + String(i).padStart(2, '0') + '</b>');
+  return '<div class="row" data-row="' + rowPrefix + '" data-idx="' + i + '">' +
+    '<div class="meter"><i></i></div>' +
+    '<div class="num">' + numLbl + '<small></small></div>' +
+    '<input type="range" min="0" max="1" step="0.01" value="0.75">' +
+    '<span class="db">0.0 dB</span>' +
+    '<button class="fadj" data-adj="-0.5">−</button>' +
+    '<button class="fadj" data-adj="0.5">＋</button>' +
+    '<button class="mute">M</button>' +
+  '</div>';
+}
+let ROWSET = [];      // 缓存行元素引用，避免每帧重复查询 DOM
+function buildConsole(){
+  const put = (id, row, n, from) => {
+    let h = '';
+    for (let i = from; i < from + n; i++) h += rowHTML(row, i);
+    document.getElementById(id).innerHTML = h;
+  };
+  put('chlist','c',32,1); put('auxlist','a',6,1); put('usblist','u',2,1);
+  put('fxretlist','x',8,1); put('buslist','b',16,1); put('mtxlist','t',6,1);
+  put('dcalist','d',8,1); put('mainrow','m',1,0);
+
+  ROWSET = [];
+  document.querySelectorAll('.row').forEach(r => {
+    const gp = ROW2GROUP[r.dataset.row], i = +r.dataset.idx;
+    const sl = r.querySelector('input');
+    sl.addEventListener('input', () => setValue(gp + '_fader', i, +sl.value, 'manual'));
+    sl.addEventListener('dblclick', () => { setValue(gp + '_fader', i, 0.75, 'manual'); });
+    const muteBtn = r.querySelector('.mute');
+    muteBtn.addEventListener('click', () => {
+      setValue(gp + '_on', i, M[gp][i].on ? 0 : 1, 'manual');
+    });
+    r.querySelectorAll('.fadj').forEach(b => b.addEventListener('click', () => {
+      const db = Math.min(Math.max(faderToDb(M[gp][i].fader) + (+b.dataset.adj), -90), 10);
+      setValue(gp + '_fader', i, dbToFader(db), 'manual');
+    }));
+    ROWSET.push({
+      g:gp, i:i, key:gp + ':' + i, sl:sl, mute:muteBtn,
+      dbEl:r.querySelector('.db'), nmEl:r.querySelector('.num small'),
+      meter:r.querySelector('.meter i'),
+    });
+  });
+}
+
+const disp = {};
+let frameCount = 0, lastTs = 0;
+function frame(ts){
+  frameCount++;
+  const dt = lastTs ? Math.min(64, ts - lastTs) : 16.7;
+  lastTs = ts;
+  const k = 1 - Math.exp(-dt / 70);      // 时间常数 70ms，与屏幕刷新率无关
+  const doMeter = (frameCount % 2 === 0);
+  const now = performance.now();
+  for (let n = 0; n < ROWSET.length; n++){
+    const R = ROWSET[n];
+    const st = M[R.g][R.i];
+    if (!st) continue;
+    let d = disp[R.key];
+    if (d === undefined) d = st.fader;
+    const t = st.fader;
+    if (Math.abs(t - d) > 0.0008) d += (t - d) * k; else d = t;   // 缓动 = 电动推子手感
+    disp[R.key] = d;
+
+    if (document.activeElement !== R.sl) R.sl.value = d.toFixed(4);
+    R.dbEl.textContent = dbTxt(d) + ' dB';
+    R.mute.classList.toggle('on', !st.on);
+    const nm = (NAMES[R.g] && NAMES[R.g][R.i]) || '';
+    if (R.nmEl.textContent !== nm) R.nmEl.textContent = nm;
+
+    if (doMeter){
+      const db = st.on ? faderToDb(d) : -90;
+      const wob = st.on ? (Math.sin(now / 320 + R.i * 0.9) * 3 - Math.random() * 4) : 0;
+      const lvl = Math.min(6, db + wob);
+      R.meter.style.height = (lvl <= -60 ? 0 : Math.min(100, (lvl + 60) / 60 * 100)) + '%';
+    }
+  }
+  requestAnimationFrame(frame);
+}
+
+/* ---------------------------------------------------------------- 渲染 */
+let doneSig = {}, runningId = null;
+function setHTML(id, html){
+  const el = document.getElementById(id);
+  if (el && el._sig !== html){ el._sig = html; el.innerHTML = html; }
+}
+function cardLive(c){
+  const parts = [];
+  for (const a of (c.actions || [])){
+    if (a.kind === 'mute'){
+      const ids = a.chs || [a.ch]; if (!ids.length) continue;
+      parts.push(ids.map(i => label('ch', +i)).join('、') + (ids.every(i => !M.ch[i].on) ? ' 已静音' : ' 出声中'));
+    } else if (a.kind === 'mute_bus'){
+      const ids = a.buses || [a.bus]; if (!ids.length) continue;
+      parts.push(ids.map(i => label('bus', +i)).join('、') + (ids.every(i => !M.bus[i].on) ? ' 已静音' : ' 出声中'));
+    } else if (a.kind === 'fade_all'){
+      parts.push('全体 → ' + Math.round((a.to || 0) * 100) + '%');
+    } else if (a.kind === 'fade_odd_even'){
+      parts.push('奇 ' + Math.round((a.odd_to || 0) * 100) + '% / 偶 ' + Math.round((a.even_to || 0) * 100) + '%');
+    } else if (a.kind === 'fade_ch' || a.kind === 'fade_from' || a.kind === 'fade_bus' || a.kind === 'fade_from_bus'){
+      const isBus = a.kind.indexOf('bus') >= 0;
+      const g = isBus ? 'bus' : 'ch';
+      const i = (a.chs || a.buses || [a.ch || a.bus])[0]; if (!i) continue;
+      parts.push(label(g, +i) + ' ' + Math.round(M[g][i].fader * 100) + '%' +
+        (a.to !== undefined ? '→' + Math.round(a.to * 100) + '%' : ''));
+    } else if (a.kind === 'rel_db'){
+      const g = a.group || 'ch';
+      const ids = a[{ch:'chs', bus:'buses', dca:'dcas'}[g]] || []; if (!ids.length) continue;
+      parts.push(ids.map(i => label(g, +i)).join('、') + ' ' + (a.delta_db >= 0 ? '+' : '−') + Math.abs(a.delta_db || 0) + 'dB');
+    } else if (a.kind === 'wait'){
+      parts.push('停 ' + (a.duration || 1) + 's');
+    } else if (a.kind === 'scene'){
+      parts.push('场景 ' + a.scene);
+    }
+    if (parts.length >= 2) break;
+  }
+  return parts.join(' · ');
+}
+function actSatisfied(a){
+  if (a.kind === 'mute'){
+    const ids = a.chs || [a.ch]; if (!ids.length) return null;
+    return ids.every(i => !M.ch[i].on);
+  }
+  if (a.kind === 'mute_bus'){
+    const ids = a.buses || [a.bus]; if (!ids.length) return null;
+    return ids.every(i => !M.bus[i].on);
+  }
+  if (a.kind === 'scene') return scene === a.scene;
+  if (a.kind === 'fade_ch' || a.kind === 'fade_from' || a.kind === 'fade_bus' || a.kind === 'fade_from_bus'){
+    const g = a.kind.indexOf('bus') >= 0 ? 'bus' : 'ch';
+    const ids = a.chs || a.buses || (a.ch || a.bus ? [a.ch || a.bus] : []);
+    if (!ids.length) return null;
+    return ids.every(i => Math.abs(M[g][i].fader - (a.to || 0)) < 0.02);
+  }
+  return null;
+}
+function readyBadge(c){
+  let ok = 0, tot = 0;
+  for (const a of (c.actions || [])){ const s = actSatisfied(a); if (s !== null){ tot++; if (s) ok++; } }
+  if (!tot) return '';
+  return ok === tot ? ' <span class="readyok">✔ ' + ok + '/' + tot + ' 已就绪</span>'
+                    : ' <span class="readyn">✔ ' + ok + '/' + tot + '</span>';
+}
+function render(){
+  const running = ENG.running;
+
+  // 卡片页
+  const cards = CARDS.slice().sort((a,b) => (b.pin ? 1 : 0) - (a.pin ? 1 : 0));
+  setHTML('undoRow', canUndo
+    ? '<div class="tile undo" data-act="undo">↩<small>撤销上一次卡片执行 · 台面自动滑回</small></div>' : '');
+  setHTML('tileCards', cards.map(c => {
+    const run = running === c.id;
+    return '<div class="tile' + (run ? ' run' : '') + (c.pin ? ' pin' : '') + '" data-card="' + c.id + '">' +
+      c.name + (isDanger(c) ? ' ⚠️' : '') +
+      (run
+        ? '<div class="bar"><i style="width:' + Math.round(ENG.progress * 100) + '%"></i></div><small>' + (ENG.step || '点按停止') + '</small>'
+        : '<small class="live">' + ((cardLive(c) || '点按运行') + readyBadge(c)) + '</small>') +
+      '</div>';
+  }).join('') + '<div class="tile add" data-act="newcard">➕<small>新建演出卡片</small></div>');
+
+  // 预设
+  setHTML('snaplist', SNAPS.map(sp =>
+    '<div class="card"><div class="nm">📌 ' + sp.name +
+      ' <small style="color:var(--sub);font-weight:400">· ' + sp.time + '</small></div>' +
+    '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
+      '<button data-recall="' + sp.id + '">⏪ 回归</button>' +
+      '<button class="ghost" data-delsnap="' + sp.id + '">删除</button>' +
+    '</div></div>').join('')
+    || '<div class="ds" style="font-size:12px;padding:4px;color:var(--sub)">还没有预设。调好台面后点「保存预设」，再把推子拖乱，点「回归」看它们自动滑回去。</div>');
+
+  // 控制键页
+  setHTML('keylist', KEYS.map(k =>
+    '<div class="row" style="justify-content:space-between">' +
+      '<div style="font-size:15px;font-weight:600">' + (k.icon || '⚡') + ' ' + k.name + '</div>' +
+      '<button class="keybtn" data-key="' + k.id + '">' + (k.sign > 0 ? '＋' : '－') + ' ' + KEYCFG.step_db + ' dB</button>' +
+    '</div>').join(''));
+
+  // 管理列表（设置页）
+  setHTML('cardlist', CARDS.map(c =>
+    '<div class="card" style="padding:11px 14px"><div class="nm">' + (c.pin ? '📌 ' : '') + c.name + '</div>' +
+    '<div class="ds" style="margin:4px 0 9px">' + (c.desc || '') + '</div>' +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+      '<button class="ghost" data-pin="' + c.id + '">📌 ' + (c.pin ? '取消置顶' : '置顶') + '</button>' +
+      '<button class="ghost" data-edit="' + c.id + '">✏️ 编辑</button>' +
+      '<button class="ghost" data-del="' + c.id + '">🗑 删除</button>' +
+    '</div></div>').join(''));
+  setHTML('managelist', KEYS.map(k =>
+    '<div class="card" style="padding:11px 14px"><div class="nm">' + (k.icon || '⚡') + ' ' + k.name +
+      ' <small style="color:var(--sub);font-weight:400">· ' + label(k.kind, k.idx) + ' ' + (k.sign > 0 ? '+' : '−') + '</small></div>' +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:9px">' +
+      '<button class="ghost" data-delkey="' + k.id + '">🗑 删除</button>' +
+    '</div></div>').join(''));
+
+  renderFx();
+  document.getElementById('scene').textContent = '场景 ' + scene;
+  document.getElementById('hdinfo').textContent = '虚拟台 · 场景 ' + scene +
+    (running ? ' · 执行中 ' + Math.round(ENG.progress * 100) + '%' : '');
+  const lg = document.getElementById('logbox');
+  const txt = LOG.join('\n');
+  if (lg.dataset.t !== txt){ lg.textContent = txt; lg.scrollTop = lg.scrollHeight; lg.dataset.t = txt; }
+}
+
+/* ---------------------------------------------------------------- 日志 / Toast */
+let LOG = [];
+function log(t){
+  LOG.push('[' + nowStr() + '] ' + t);
+  if (LOG.length > 250) LOG = LOG.slice(-250);
+}
+function nowStr(){
+  const d = new Date();
+  const p = n => String(n).padStart(2, '0');
+  return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+}
+function toast(t){
+  const d = document.createElement('div');
+  d.className = 'toast'; d.textContent = t;
+  document.body.appendChild(d);
+  requestAnimationFrame(() => d.classList.add('in'));
+  setTimeout(() => { d.classList.remove('in'); setTimeout(() => d.remove(), 400); }, 5200);
+}
+
+/* ---------------------------------------------------------------- 导航 */
+function switchPage(p){
+  document.querySelectorAll('nav button').forEach(b => b.classList.toggle('on', b.dataset.p === p));
+  document.querySelectorAll('.page').forEach(x => x.classList.toggle('on', x.id === 'pg-' + p));
+  window.scrollTo(0, 0);
+}
+
+/* ---------------------------------------------------------------- 卡片编辑器 */
+let caActs = [], caMulti = [], editCardId = null;
+const pct = v => Math.min(Math.max(+(v || 0), 0), 100) / 100;
+function numIn(id, label_, def){ return '<input id="' + id + '" type="number" value="' + def + '" placeholder="' + label_ + '" class="nkin" style="width:88px">'; }
+function curveSel(){ return '<select id="caCurve" class="nkin">' + Object.keys(CURVES).map(c => '<option value="' + c + '">' + CURVES[c] + '</option>').join('') + '</select>'; }
+function chipGrid(g, n){
+  let h = '<div class="chipgrid" id="caChips">';
+  for (let i = 1; i <= n; i++){
+    const nm = (NAMES[g] && NAMES[g][i]) || '';
+    h += '<span class="chip" data-i="' + i + '">' + (g === 'ch' ? String(i).padStart(2, '0') : (g === 'bus' ? 'B' + i : 'D' + i)) + (nm ? '<em>' + nm + '</em>' : '') + '</span>';
+  }
+  return h + '</div>';
+}
+function updCaParams(){
+  const k = document.getElementById('caKind').value;
+  caMulti = [];
+  let h = '';
+  if (MULTI_GROUP[k]) h += chipGrid(MULTI_GROUP[k], MULTI_GROUP[k] === 'ch' ? 32 : 16);
+  if (k === 'mute' || k === 'mute_bus'){ document.getElementById('caParams').innerHTML = h; bindChips(); return; }
+  if (k === 'scene') h += numIn('caScene', '场景号', 1);
+  else if (k === 'wait') h += numIn('caSec', '等待秒数', 3);
+  else if (k === 'fade_all') h += numIn('caP1', '目标 %', 0) + numIn('caSec', '秒数', 3) + curveSel();
+  else if (k === 'fade_odd_even') h += numIn('caP1', '奇数 %', 80) + numIn('caP2', '偶数 %', 0) + numIn('caSec', '秒数', 4) + curveSel();
+  else if (k === 'fade_ch' || k === 'fade_bus') h += numIn('caP1', '到 %', 80) + numIn('caSec', '秒数', 3) + curveSel();
+  else if (k === 'fade_from') h += numIn('caCh', '通道号', 15) + numIn('caP0', '从 %', 0) + numIn('caP1', '到 %', 90) + numIn('caSec', '秒数', 5) + curveSel();
+  else if (k === 'fade_from_bus') h += numIn('caBus', 'Bus 号', 1) + numIn('caP0', '从 %', 0) + numIn('caP1', '到 %', 90) + numIn('caSec', '秒数', 5) + curveSel();
+  else if (k === 'rel_db'){
+    h += '<select id="caGrp" class="nkin"><option value="ch">输入通道</option><option value="bus">Bus 输出</option><option value="dca">DCA 编组</option></select>'
+       + '<span id="caRelChips"></span>' + numIn('caDb', '±dB', 3) + numIn('caSec', '秒数', 2) + curveSel();
+  }
+  else if (k === 'set') h += setFormHTML();
+  else if (k === 'osc') h += oscFormHTML();
+  document.getElementById('caParams').innerHTML = h;
+  const grp = document.getElementById('caGrp');
+  if (grp){ grp.addEventListener('change', updRelChips); }
+  if (k === 'rel_db') updRelChips();
+  if (k === 'set'){
+    document.getElementById('stGroup').addEventListener('change', stGroupChg);
+    document.getElementById('stParam').addEventListener('change', stParamChg);
+    stGroupChg();
+  }
+  bindChips();
+}
+/* ---- 通用设置表单 ---- */
+function setFormHTML(){
+  return '<select id="stGroup" class="nkin">'
+    + ST_GROUPS.map(x => '<option value="' + x[0] + '">' + x[1] + '</option>').join('') + '</select>'
+    + '<input id="stId" type="number" value="1" min="1" class="nkin" style="width:78px" title="目标编号">'
+    + '<select id="stParam" class="nkin"></select>'
+    + '<span id="stValWrap"></span>'
+    + '<input id="stDur" type="number" value="0" min="0" step="0.5" class="nkin" style="width:104px"'
+    + ' title="仅推子类支持渐变;0 = 瞬间到位">';
+}
+function stGroupChg(){
+  const g = document.getElementById('stGroup').value;
+  const ps = ST_PARAMS[g] || ['fader'];
+  document.getElementById('stParam').innerHTML =
+    ps.map(p => '<option value="' + p + '">' + (ST_PLABEL[p] || p) + '</option>').join('');
+  const idEl = document.getElementById('stId');
+  const cap = ((ST_GROUPS.find(x => x[0] === g) || ['', '', 32])[2]) || 32;
+  if (g === 'main'){ idEl.value = 0; idEl.disabled = true; }
+  else { idEl.disabled = false; idEl.max = cap; if (!+idEl.value || +idEl.value > cap) idEl.value = 1; }
+  stParamChg();
+}
+function stParamChg(){
+  const p = document.getElementById('stParam').value, w = document.getElementById('stValWrap');
+  if (!w) return;
+  if (p === 'on') w.innerHTML = '<select id="stValSel" class="nkin"><option value="1">开启</option><option value="0">静音 / 旁通</option></select>';
+  else if (p === 'type') w.innerHTML = '<select id="stValSel" class="nkin">'
+    + ['HALL','PLATE','ROOM','CHAMBER','VINTAGE',''].map(x => '<option value="' + x + '">' + (x || '(清空)') + '</option>').join('') + '</select>';
+  else if (p === 'name') w.innerHTML = '<input id="stValTxt" class="nkin" style="width:120px" maxlength="12" placeholder="名称">';
+  else if (p === 'load') w.innerHTML = '<span class="ds" style="margin:0">按上面的编号切换场景</span>';
+  else w.innerHTML = '<input id="stValNum" type="number" class="nkin" style="width:100px" step="0.01" value="'
+    + (p === 'fader' ? 80 : (p === 'time' ? 2.4 : (p === 'predelay' ? 20 : 0.45))) + '">';
+}
+/* ---- 原始 OSC 表单 ---- */
+function oscFormHTML(){
+  return '<input id="oscAddr" class="nkin" style="flex:1;min-width:190px" placeholder="/ch/05/mix/fader" maxlength="128">'
+    + '<input id="oscArgs" class="nkin" style="flex:1;min-width:140px" placeholder="参数,逗号分隔(可留空) 如 0.8">'
+    + '<div class="ds" style="width:100%;color:#d9a13c">⚠️ 原始 OSC 是<b>控台专有</b>的：地址写死，换到别的控台可能指向别的参数、甚至完全无效。通用需求请优先用「通用设置」。</div>';
+}
+function updRelChips(){
+  const g = document.getElementById('caGrp').value;
+  document.getElementById('caRelChips').innerHTML = chipGrid(g, g === 'ch' ? 32 : (g === 'bus' ? 16 : 8));
+  caMulti = [];
+  bindChips();
+}
+function bindChips(){
+  document.querySelectorAll('#caParams .chip, #caRelChips .chip').forEach(el => {
+    el.onclick = () => {
+      el.classList.toggle('on');
+      const i = +el.dataset.i, p = caMulti.indexOf(i);
+      if (p >= 0) caMulti.splice(p, 1); else caMulti.push(i);
+      hideCardErr();
+    };
+  });
+}
+function addAct(){
+  const k = document.getElementById('caKind').value;
+  const g = id => { const e = document.getElementById(id); return e ? e.value : null; };
+  const a = {kind:k};
+  if (k === 'set'){
+    const grp = document.getElementById('stGroup').value;
+    const p = document.getElementById('stParam').value;
+    let i = +(document.getElementById('stId').value) || 0;
+    if (grp === 'main') i = 0;
+    if ((grp !== 'main') && i < 1){ cardErr('请填写目标编号'); return; }
+    a.target = {group:grp, param:p, id:i};
+    if (p === 'on') a.value = (+(document.getElementById('stValSel').value)) ? 1 : 0;
+    else if (p === 'type') a.value = document.getElementById('stValSel').value;
+    else if (p === 'name') a.value = document.getElementById('stValTxt').value.trim();
+    else if (p === 'load') a.value = 1;
+    else {
+      let v = +(document.getElementById('stValNum').value) || 0;
+      if (p === 'fader') v = pct(v);        // 表单填百分比, 传 0..1
+      a.value = v;
+    }
+    const d = +(document.getElementById('stDur').value) || 0;
+    if (d > 0 && p === 'fader') a.duration = Math.max(d, 0.5);   // 只有推子类能渐变
+    else if (d > 0) cardErr('提示：非推子参数不支持渐变，已按瞬间执行');
+    caActs.push(a); renderActs(); hideCardErr(); return;
+  }
+  if (k === 'osc'){
+    const addr = document.getElementById('oscAddr').value.trim();
+    if (!addr){ cardErr('请填写 OSC 地址'); return; }
+    if (addr[0] !== '/'){ cardErr('OSC 地址必须以 / 开头，例如 /ch/05/mix/fader'); return; }
+    if (addr.indexOf(' ') >= 0){ cardErr('OSC 地址不能含空格'); return; }
+    a.address = addr;
+    const raw = document.getElementById('oscArgs').value.trim();
+    if (raw){
+      a.args = raw.split(',').map(s => s.trim()).filter(s => s !== '')
+        .map(s => (/^-?\d+(\.\d+)?$/.test(s)) ? +s : s);   // 纯数字转数值, 其余当字符串
+    }
+    caActs.push(a); renderActs(); hideCardErr(); return;
+  }
+  if (k === 'rel_db'){
+    if (!caMulti.length){ cardErr('请先勾选要增减的目标'); return; }
+    const grp = g('caGrp') || 'ch';
+    a.group = grp;
+    a[{ch:'chs', bus:'buses', dca:'dcas'}[grp]] = caMulti.slice().sort((x,y) => x - y);
+    a.delta_db = Math.min(Math.max(+g('caDb') || 3, -30), 30);
+    a.duration = Math.max(+g('caSec') || 2, 0.5);
+    a.curve = g('caCurve');
+  } else if (MULTI_GROUP[k]){
+    if (!caMulti.length){ cardErr('请先勾选目标'); return; }
+    const sel = caMulti.slice().sort((x,y) => x - y);
+    if (k === 'mute') a.chs = sel;
+    else if (k === 'mute_bus') a.buses = sel;
+    else if (k === 'fade_ch'){ a.chs = sel; a.to = pct(g('caP1')); a.duration = Math.max(+g('caSec') || 3, 0.5); a.curve = g('caCurve'); }
+    else { a.buses = sel; a.to = pct(g('caP1')); a.duration = Math.max(+g('caSec') || 3, 0.5); a.curve = g('caCurve'); }
+  }
+  else if (k === 'scene') a.scene = +(g('caScene') || 1);
+  else if (k === 'wait') a.duration = Math.max(+g('caSec') || 3, 0.5);
+  else if (k === 'unmute_all'){ /* 无参数 */ }
+  else if (k === 'fade_all'){ a.to = pct(g('caP1')); a.duration = Math.max(+g('caSec') || 3, 0.5); a.curve = g('caCurve'); }
+  else if (k === 'fade_odd_even'){ a.odd_to = pct(g('caP1')); a.even_to = pct(g('caP2')); a.duration = Math.max(+g('caSec') || 4, 0.5); a.curve = g('caCurve'); }
+  else if (k === 'fade_from'){ a.ch = +(g('caCh') || 15); a.frm = pct(g('caP0')); a.to = pct(g('caP1')); a.duration = Math.max(+g('caSec') || 5, 0.5); a.curve = g('caCurve'); }
+  else if (k === 'fade_from_bus'){ a.bus = +(g('caBus') || 1); a.frm = pct(g('caP0')); a.to = pct(g('caP1')); a.duration = Math.max(+g('caSec') || 5, 0.5); a.curve = g('caCurve'); }
+  caActs.push(a); renderActs(); hideCardErr();
+}
+function renderActs(){
+  const el = document.getElementById('actChips');
+  el.innerHTML = caActs.map((a, i) =>
+    '<span style="display:inline-flex;align-items:center;gap:6px;background:var(--card2);color:var(--txt);border:1px solid var(--line);border-radius:14px;padding:4px 10px;font-size:12px;margin:2px">' +
+    (i + 1) + '. ' + actLabel(a) + ' <b style="cursor:pointer;color:var(--red)" data-rmact="' + i + '">×</b></span>').join('')
+    || '<div class="ds" style="font-size:12px">还没有动作，选类型后点「＋加入动作」。</div>';
+  el.querySelectorAll('[data-rmact]').forEach(b => b.onclick = () => { caActs.splice(+b.dataset.rmact, 1); renderActs(); });
+}
+function openCardModal(card){
+  editCardId = card ? card.id : null;
+  document.getElementById('cardModalTitle').textContent = card ? '✏️ 编辑演出卡片' : '➕ 新建演出卡片';
+  document.getElementById('cardSaveBtn').textContent = card ? '💾 保存修改' : '💾 保存卡片';
+  document.getElementById('ncName').value = card ? (card.name || '') : '';
+  document.getElementById('ncDesc').value = card ? (card.desc || '') : '';
+  caActs = card ? JSON.parse(JSON.stringify(card.actions || [])) : [];
+  document.getElementById('ncNext').innerHTML = '<option value="">(无 · 执行完就停)</option>' +
+    CARDS.filter(x => x.id !== editCardId).map(x => '<option value="' + x.id + '">' + x.name + '</option>').join('');
+  document.getElementById('ncNext').value = (card && card.next) || '';
+  document.getElementById('cardModal').classList.add('on');
+  document.body.style.overflow = 'hidden';
+  updCaParams(); renderActs(); hideCardErr();
+  setTimeout(() => document.getElementById('ncName').focus(), 120);
+}
+function closeCardModal(){
+  document.getElementById('cardModal').classList.remove('on');
+  document.body.style.overflow = '';
+  hideCardErr();
+  if (editCardId){ editCardId = null; caActs = []; }
+}
+function saveCard(){
+  const name = document.getElementById('ncName').value.trim();
+  if (!name){ cardErr('请填写卡片名称'); return; }
+  if (!caActs.length){ cardErr('请至少加入一个动作'); return; }
+  const data = {name:name, desc:document.getElementById('ncDesc').value.trim(),
+                actions:caActs, next:document.getElementById('ncNext').value};
+  if (editCardId){
+    const c = CARDS.find(x => x.id === editCardId);
+    Object.assign(c, data);
+  } else {
+    CARDS.push(Object.assign({id:'c' + Date.now()}, data));
+  }
+  save(); closeCardModal(); render();
+  toast('✅ 卡片已保存');
+}
+function cardErr(m){ const e = document.getElementById('cardErr'); e.textContent = m; e.classList.add('on'); }
+function hideCardErr(){ document.getElementById('cardErr').classList.remove('on'); }
+
+/* ---------------------------------------------------------------- 设置页辅助 */
+function saveName(){
+  const g = document.getElementById('nmGroup').value;
+  const i = +document.getElementById('nmIdx').value;
+  NAMES[g][i] = document.getElementById('nmVal').value.trim().slice(0, 12);
+  document.getElementById('nmVal').value = '';
+  save(); updNmIdx(); render();
+  toast('🏷 已命名 ' + label(g, i));
+}
+function updNmIdx(){
+  const g = document.getElementById('nmGroup').value;
+  document.getElementById('nmIdx').innerHTML = idxRange(g).map(i => {
+    const nm = (NAMES[g] && NAMES[g][i]) || '';
+    return '<option value="' + i + '">' + (GROUPS[g].zeroBased ? 'main' : String(i).padStart(2, '0')) + (nm ? ' · ' + nm : '') + '</option>';
+  }).join('');
+}
+function doExport(){
+  const cfg = {CARDS, KEYS, KEYCFG, NAMES};
+  const blob = new Blob([JSON.stringify(cfg, null, 2)], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'x32-remote-demo-config.json';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+function doImport(text){
+  let cfg;
+  try { cfg = JSON.parse(text); } catch(e){ toast('JSON 解析失败'); return; }
+  if (!cfg || !cfg.CARDS){ toast('不是有效的配置文件（缺 CARDS 字段）'); return; }
+  CARDS = cfg.CARDS;
+  if (Array.isArray(cfg.KEYS)) KEYS = cfg.KEYS;
+  if (cfg.KEYCFG) KEYCFG = Object.assign({step_db:3, ramp:0.4}, cfg.KEYCFG);
+  if (cfg.NAMES) NAMES = Object.assign(NAMES, cfg.NAMES);
+  save(); refreshSettings(); render();
+  toast('📥 配置已导入');
+}
+function resetAll(){
+  if (!confirm('恢复出厂设置？将清空你的卡片、控制键与命名。')) return;
+  localStorage.removeItem(LS_KEY);
+  load(); buildConsole(); refreshSettings(); render();
+  toast('♻️ 已恢复出厂');
+}
+/* ---- 控台驱动切换 ---- */
+function renderCtrlProfile(){
+  const sel = document.getElementById('ctrlSel');
+  if (!sel) return;
+  const ids = Object.keys(CTRL_PROFILES);
+  if (sel.options.length !== ids.length){
+    sel.innerHTML = ids.map(id => {
+      const p = CTRL_PROFILES[id];
+      return '<option value="' + id + '">' + p.label + (p.ready ? '' : '（待标定）') + '</option>';
+    }).join('');
+  }
+  sel.value = PROFILE_ID;
+  const p = profile();
+  const st = document.getElementById('ctrlStat');
+  st.textContent = p.ready ? (p.verified ? '✓ 已标定' : '⚠ 未核对') : '⚠ 待标定';
+  st.style.color = p.ready ? (p.verified ? '#22c55e' : '#d9a13c') : '#ef4444';
+  const nt = document.getElementById('ctrlNote');
+  if (p.ready && p.verified){
+    nt.innerHTML = '地址表已与真机核对 · 通道 <b>' + p.counts.ch + '</b> · Bus <b>' + p.counts.bus
+      + '</b> · DCA <b>' + p.counts.dca + '</b> · FX <b>' + p.counts.fx + '</b>';
+  } else if (p.ready){
+    nt.innerHTML = '⚠️ ' + (p.note || '地址表未经真机核对');
+  } else {
+    nt.innerHTML = '⚠️ <b>' + p.label + '</b> 的驱动尚未标定：' + (p.note || '')
+      + '<br>此状态下所有写入会被<b>拒绝并记日志</b>，卡片不会真正控制到台子 —— 这是刻意的，'
+      + '免得蒙错地址写到别的参数上。';
+  }
+}
+function refreshSettings(){
+  document.getElementById('stepSel').value = String(KEYCFG.step_db);
+  document.getElementById('rampSel').value = String(KEYCFG.ramp);
+  document.getElementById('nmGroup').innerHTML = GROUP_ORDER.map(g => '<option value="' + g + '">' + GROUPS[g].label + '</option>').join('');
+  updNmIdx();
+}
+
+/* ---------------------------------------------------------------- 事件委托 */
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => switchPage(b.dataset.p));
+
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-card],[data-act],[data-recall],[data-delsnap],[data-key],[data-pin],[data-edit],[data-del],[data-delkey]');
+  if (!t) return;
+  if (t.dataset.card !== undefined && t.dataset.card !== ''){
+    const id = t.dataset.card;
+    if (ENG.running === id){ stopAll(); log('SHOW 手动停止: ' + id); render(); return; }
+    const c = CARDS.find(x => x.id === id);
+    if (c && isDanger(c)) return;   // 危险卡只走长按路径（pointerdown 里已触发）
+    runCard(id, 0, null);
+    return;
+  }
+  if (t.dataset.act === 'undo'){ undoLast(); render(); return; }
+  if (t.dataset.act === 'newcard'){ openCardModal(null); return; }
+  if (t.dataset.recall){ recallSnap(+t.dataset.recall); return; }
+  if (t.dataset.delsnap){ delSnap(+t.dataset.delsnap); return; }
+  if (t.dataset.pin){ const c = CARDS.find(x => x.id === t.dataset.pin); c.pin = !c.pin; save(); render(); return; }
+  if (t.dataset.edit){ openCardModal(CARDS.find(x => x.id === t.dataset.edit)); return; }
+  if (t.dataset.del){
+    if (!confirm('删除这张卡片？')) return;
+    CARDS = CARDS.filter(x => x.id !== t.dataset.del);
+    save(); render(); toast('🗑 卡片已删除'); return;
+  }
+  if (t.dataset.delkey){
+    KEYS = KEYS.filter(x => x.id !== t.dataset.delkey);
+    save(); render(); toast('🗑 控制键已删除'); return;
+  }
+});
+
+// 卡片页/控制键页的按住交互（危险卡长按 + 控制键连发）
+document.addEventListener('pointerdown', e => {
+  const tile = e.target.closest('.tile[data-card]');
+  if (tile){
+    const id = tile.dataset.card;
+    const c = CARDS.find(x => x.id === id);
+    if (c && ENG.running !== id && isDanger(c)){ holdStart(e, id); return; }
+  }
+  const kb = e.target.closest('.keybtn[data-key]');
+  if (kb){ kpStart(kb.dataset.key); }
+});
+document.addEventListener('pointerup', () => holdCancel());
+document.addEventListener('pointercancel', () => holdCancel());
+
+document.getElementById('stepSel').addEventListener('change', function(){
+  KEYCFG.step_db = +this.value; save(); render();
+});
+document.getElementById('rampSel').addEventListener('change', function(){
+  KEYCFG.ramp = +this.value; save();
+});
+document.getElementById('nmGroup').addEventListener('change', updNmIdx);
+document.getElementById('caKind').addEventListener('change', updCaParams);
+document.getElementById('impFile').addEventListener('change', function(){
+  const f = this.files && this.files[0]; if (!f) return;
+  const r = new FileReader();
+  r.onload = () => { doImport(r.result); this.value = ''; };
+  r.readAsText(f);
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeCardModal(); });
+// 点弹窗遮罩关闭
+document.getElementById('cardModal').addEventListener('click', function(e){ if (e.target === this) closeCardModal(); });
+
+/* ---------------------------------------------------------------- 启动 */
+load();
+buildConsole();
+buildFx();
+refreshSettings();
+renderCtrlProfile();
+document.getElementById('ctrlSel').addEventListener('change', function(){
+  PROFILE_ID = this.value;
+  renderCtrlProfile();
+  const p = profile();
+  toast('控台 → ' + p.label + (p.ready ? '' : '（未标定：写入会被拒绝）'));
+  log('CONSOLE 切换到 ' + p.label + (p.ready ? '' : '（待标定：写入将被拒绝）'));
+  save();
+});
+document.getElementById('caKind').innerHTML = ACTION_MENU.map(([v, t]) => '<option value="' + v + '">' + t + '</option>').join('');
+updCaParams();
+log('X32 Remote 网页试用版已启动 · 内置虚拟台（32 输入 / 16 Bus / 8 DCA / 主输出）');
+log('引擎：tick 50ms · cursor = 动作结束时刻 · wait 为纯 no-op · unmute_all 覆盖 79 路');
+log('混响：8 个效果槽 · Tap 定拍取间隔均值 · 同步模式 软件主导/台面主导/双向互同步');
+render();
+requestAnimationFrame(frame);
+setInterval(render, 120);        // 引擎进度 / 卡片高亮 / 日志刷新
+setInterval(save, 5000);         // 自动落盘
+</script>
+</body>
+</html>

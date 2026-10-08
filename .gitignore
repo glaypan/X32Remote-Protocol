@@ -34,6 +34,10 @@ outputs/*.zip
 outputs/*.apk
 outputs/*.ipa
 
+# ---- 目视验证截图（本地截图存档，非交付物）----
+outputs/verify/
+outputs/*页-*.png
+
 # ---- 本地 Swift 工具链安装目录（体积大，且可通过 tools/local_verify.sh 重建）----
 .swift-setup/
 
