@@ -8,6 +8,13 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="X32 遥控试用">
+<!-- ⚠️ CSP: 离线版没有服务端可加响应头，只能用 meta。本页是单文件内联 script+style，
+     所以 script-src/style-src 必须开 'unsafe-inline'（拆成外部文件就能收紧）。
+     frame-ancestors/base-uri/object-src 堵的是"被 iframe 套"和"改 base 标签劫持"这两类。 -->
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';
+               img-src 'self' data:; connect-src 'self'; frame-ancestors 'self';
+               object-src 'none'; base-uri 'self'">
 <title>X32 Remote · 网页试用版</title>
 <style>
   :root{--bg:#121419;--card:#1c2029;--card2:#232833;--txt:#e9ebf0;--sub:#8d93a0;
@@ -278,7 +285,14 @@
 <!-- ==================== 混响 ==================== -->
 <div class="page" id="pg-fx">
   <h3>🎛 混响控制 · Tap 定拍</h3>
-  <div class="ds" style="margin-bottom:10px">虚拟台内置 8 个效果槽。给槽选一个混响算法后就能调<b>混响时间</b>、预延迟、阻尼与混合比；
+  <div class="card">
+    <div class="nm">🎛 效果库来源：<span id="fxConsoleName">—</span>
+      <span class="ds" id="fxConsoleTag" style="margin:0"></span></div>
+    <div class="ds" id="fxConsoleNote">效果槽、算法清单与参数索引都来自<b>当前控台驱动</b> —— 在「设置」里换控台，这里会自动换库。</div>
+    <div class="ds" style="margin:6px 0 0">本页是<b>单文件离线试用版</b>：浏览器发不了 UDP，
+      所以这里没有「从真台同步效果」—— 那需要实际控制台外加桥接真台。</div>
+  </div>
+  <div class="ds" style="margin-bottom:10px"><b id="fxConsoleName2">当前控台</b> 的 8 个效果槽。给槽选一个混响算法后就能调<b>混响时间</b>、预延迟、阻尼与混合比；
     <b>Tap</b> 定拍可把混响时间算到节拍上，再按「同步设置」铺给联动的其他槽。语义与真实实现（服务端 / App）完全一致。</div>
 
   <div class="card">
@@ -461,6 +475,17 @@ const ROW2GROUP = {};  GROUP_ORDER.forEach(g => ROW2GROUP[GROUPS[g].row] = g);
 // main 在服务端用 idx 0
 const idxRange = g => GROUPS[g].zeroBased ? [0] : Array.from({length:GROUPS[g].n}, (_,i)=>i+1);
 
+/* ---------------------------------------------------------------- HTML 转义 */
+// ⚠️ 卡片名/描述/控制键名/图标/通道名/快照名 全部由用户输入，并且存在
+//    localStorage 里（可以被任意脚本或导入的配置改写）。凡是拼进 innerHTML 的
+//    用户可控串都必须过 esc() —— 少一个转义就是"本地数据 → 任意 JS 执行"。
+//    新增 innerHTML 拼接地时先问自己：这里面哪个字段是用户填的？
+function esc(s){
+  return String(s == null ? '' : s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
 const FADE_KINDS = ['fade_all','fade_odd_even','fade_ch','fade_bus','fade_from','fade_from_bus','rel_db'];
 const DANGER     = ['unmute_all','fade_all','fade_odd_even'];
 const CURVES     = {linear:'直线', ease_out:'先快后慢', ease_in:'先慢后快', smooth:'S 形'};
@@ -508,14 +533,14 @@ const CTRL_PROFILES = {
          note:'', addr:X32_ADDR,
          counts:{ch:32, bus:16, dca:8, auxin:6, usb:2, fxret:8, mtx:6, fx:8} },
   wing: { label:'Wing', vendor:'Behringer', transport:'osc', ready:false, verified:false,
-          addr:null, note:'Wing 是全新平台，OSC 地址空间与 X32 不通用，地址表待填',
+          addr:null, fxAlgos:null, note:'Wing 是全新平台，OSC 地址空间与 X32 不通用，地址表待填',
           counts:{ch:48, bus:16, dca:8, auxin:8, usb:4, fxret:8, mtx:8, fx:16} },
   yamaha: { label:'Yamaha DM3 / TF / QL', vendor:'Yamaha', transport:'osc',
-            ready:false, verified:false, addr:null,
+            ready:false, verified:false, addr:null, fxAlgos:null,
             note:'Yamaha 各型号的 OSC/MIDI 接口不一致，需按型号分别标定',
             counts:{ch:48, bus:24, dca:12, auxin:8, usb:2, fxret:8, mtx:12, fx:8} },
   ah: { label:'Allen & Heath dLive / SQ', vendor:'Allen & Heath', transport:'midi',
-        ready:false, verified:false, addr:null,
+        ready:false, verified:false, addr:null, fxAlgos:null,
         note:'A&H 走 TCP MIDI 而非 OSC，除地址表外还需一层 MIDI 消息编码',
         counts:{ch:64, bus:32, dca:16, auxin:8, usb:2, fxret:8, mtx:16, fx:8} },
 };
@@ -579,7 +604,7 @@ function resolveSetTarget(g, p, idx){
   if (g === 'fx'){
     if (['type','name','on','mix'].indexOf(p) >= 0) return 'fx_' + p;
     const slot = (FX && FX[+idx]) ? FX[+idx] : null;
-    const algo = (slot && slot.type) ? FX_ALGOS[slot.type] : null;
+    const algo = (slot && slot.type) ? fxAlgos()[slot.type] : null;
     if (!algo) return null;                   // 空槽没有时间/预延迟/阻尼
     return 'fx_par_' + String(algo[p]).padStart(2,'0');
   }
@@ -714,7 +739,7 @@ function load(){
           const src = d.FX[s] || d.FX[String(s)];
           if (!src) continue;
           const t = String(src.type || '').toUpperCase();
-          FX[s].type = (t && FX_ALGOS[t]) ? t : '';
+          FX[s].type = (t && fxAlgos()[t]) ? t : '';
           FX[s].name = String(src.name || '').slice(0, 12);
           FX[s].on   = src.on ? 1 : 0;
           FX[s].mix  = Math.min(Math.max(+(src.mix != null ? src.mix : 0.25), 0), 1);
@@ -799,6 +824,17 @@ function actDuration(a){
     return Math.max(0.05, +(a.duration !== undefined ? a.duration : 3) || 3);
   return 0;
 }
+// 本地台面（试用版固定 32/16/8/6/2/8/6）是否存在这个目标。
+// 卡片可以按更大的编号保存（与服务端一致，见 SAVE_MAX），执行期在这里过滤 ——
+// 超范围的**明确跳过**，而不是让 undefined 解引用把 rAF 循环炸掉。
+function localExists(kind, idx){
+  const g = K2G[kind] || kind.replace('_fader','').replace('_on','');
+  return !!(M[g] && M[g][idx]);
+}
+function filterTargets(kind, list){
+  return list.filter(i => localExists(kind, i));
+}
+
 function fadeTargetsFor(a){
   const k = a.kind, out = [];
   if (k === 'fade_all'){
@@ -819,18 +855,27 @@ function fadeTargetsFor(a){
     for (let i=1;i<=32;i++) out.push(['ch_fader', i, i % 2 === 1 ? o : e]);
     return out;
   }
-  if (k === 'fade_ch')  return (a.chs || [a.ch || 1]).map(i => ['ch_fader', +i, +(a.to !== undefined ? a.to : 0.8)]);
-  if (k === 'fade_bus') return (a.buses || [a.bus || 1]).map(i => ['bus_fader', +i, +(a.to !== undefined ? a.to : 0.8)]);
-  if (k === 'fade_from')     return [['ch_fader',  +(a.ch  || 1), +(a.to !== undefined ? a.to : 0.9)]];
-  if (k === 'fade_from_bus') return [['bus_fader', +(a.bus || 1), +(a.to !== undefined ? a.to : 0.9)]];
+  if (k === 'fade_ch')  return filterTargets('ch_fader', (a.chs || [a.ch || 1]).map(Number))
+      .map(i => ['ch_fader', i, +(a.to !== undefined ? a.to : 0.8)]);
+  if (k === 'fade_bus') return filterTargets('bus_fader', (a.buses || [a.bus || 1]).map(Number))
+      .map(i => ['bus_fader', i, +(a.to !== undefined ? a.to : 0.8)]);
+  if (k === 'fade_from'){
+    const c = filterTargets('ch_fader', [+(a.ch || 1)]);
+    return c.length ? [['ch_fader', c[0], +(a.to !== undefined ? a.to : 0.9)]] : [];
+  }
+  if (k === 'fade_from_bus'){
+    const b = filterTargets('bus_fader', [+(a.bus || 1)]);
+    return b.length ? [['bus_fader', b[0], +(a.to !== undefined ? a.to : 0.9)]] : [];
+  }
   if (k === 'rel_db'){
     const grp = a.group || 'ch';
     const map = {ch:'ch_fader', bus:'bus_fader', dca:'dca_fader'};
     const key = {ch:'chs', bus:'buses', dca:'dcas'}[grp];
+    if (!map[grp] || !key) return null;      // 白名单外的组 → 退化瞬时，不炸
     const delta = +(a.delta_db !== undefined ? a.delta_db : 3);
-    return (a[key] || [1]).map(i => {
-      const cur = faderToDb(getValue(map[grp], +i));
-      return [map[grp], +i, dbToFader(Math.min(Math.max(cur + delta, -90), 10))];
+    return filterTargets(map[grp], (a[key] || [1]).map(Number)).map(i => {
+      const cur = faderToDb(getValue(map[grp], i));
+      return [map[grp], i, dbToFader(Math.min(Math.max(cur + delta, -90), 10))];
     });
   }
   if (k === 'set'){
@@ -846,11 +891,13 @@ function fadeTargetsFor(a){
 function execInstant(a){
   const k = a.kind;
   if (k === 'mute'){
-    (a.chs || [a.ch || 1]).forEach(c => setValue('ch_on', +c, 0, 'action'));
-    log('SHOW 静音: ' + (a.chs || [a.ch]).map(c => label('ch', +c)).join('、'));
+    const chs = filterTargets('ch_on', (a.chs || [a.ch || 1]).map(Number));
+    chs.forEach(c => setValue('ch_on', c, 0, 'action'));
+    log('SHOW 静音: ' + chs.map(c => label('ch', c)).join('、'));
   } else if (k === 'mute_bus'){
-    (a.buses || [a.bus || 1]).forEach(b => setValue('bus_on', +b, 0, 'action'));
-    log('SHOW 静音: ' + (a.buses || [a.bus]).map(b => label('bus', +b)).join('、'));
+    const buses = filterTargets('bus_on', (a.buses || [a.bus || 1]).map(Number));
+    buses.forEach(b => setValue('bus_on', b, 0, 'action'));
+    log('SHOW 静音: ' + buses.map(b => label('bus', b)).join('、'));
   } else if (k === 'scene'){
     scene = +(a.scene || 1);
     log('SHOW 切换到场景 ' + scene);
@@ -1156,8 +1203,22 @@ const FX_ALGOS = {
   CHAMBER: {label:'密室混响', time:1, predelay:2, damp:4, tmin:0.3, tmax: 6.0, def:{1:1.60, 2:20, 4:0.40}},
   VINTAGE: {label:'复古混响', time:1, predelay:2, damp:4, tmin:0.3, tmax: 6.0, def:{1:1.50, 2:18, 4:0.35}},
 };
-const FX_ALGO_OPTS = [['','— 空槽 —'], ['HALL','大厅混响'], ['PLATE','板式混响'],
-                      ['ROOM','房间混响'], ['CHAMBER','密室混响'], ['VINTAGE','复古混响']];
+// ⚠️ 效果库**属于控台驱动**，不是全局表（与服务端同一语义）：
+//    同一个算法名在不同控台上参数索引可能不同，所以任何"按算法查参数索引"的地方
+//    都必须走 fxAlgos()（= 当前控台的库）。X32 与 M32 是同一套 Klark Teknik
+//    效果引擎，库内容一致；但**分别持有一份**，将来某版固件有出入时只改对应的那张。
+const M32_FX_ALGOS = Object.keys(FX_ALGOS).reduce((o, k) => {
+  o[k] = Object.assign({}, FX_ALGOS[k]); return o;
+}, {});
+CTRL_PROFILES.x32.fxAlgos = FX_ALGOS;
+CTRL_PROFILES.m32.fxAlgos = M32_FX_ALGOS;
+function fxAlgos(){ const p = profile(); return (p.ready && p.fxAlgos) ? p.fxAlgos : {}; }
+function fxAlgoOpts(emptyLabel){
+  const lib = fxAlgos(), keys = Object.keys(lib);
+  if (!keys.length) return '<option value="">— 效果库未就绪 —</option>';
+  return '<option value="">' + (emptyLabel === undefined ? '— 空槽 —' : emptyLabel) + '</option>'
+       + keys.map(k => '<option value="' + k + '">' + lib[k].label + '</option>').join('');
+}
 const FX_BEATS = {'1/16':0.25, '1/8':0.5, '1/4':1, '1/2':2, '1':4, '2':8};
 const FX_NOTE_OPTS = [['1/16','1/16 音符'], ['1/8','1/8 音符'], ['1/4','1/4 音符'],
                       ['1/2','1/2 音符'], ['1','全音符'], ['2','2 小节']];
@@ -1171,14 +1232,14 @@ function defaultFx(){
   [['HALL','主厅堂'], ['PLATE','人声板'], ['ROOM','鼓房'], ['CHAMBER','人声密室']]
     .forEach(([t, n], i) => {
       const s = i + 1; f[s].type = t; f[s].name = n;
-      f[s].par = Object.assign({}, FX_ALGOS[t].def);
+      f[s].par = Object.assign({}, fxAlgos()[t].def);
     });
   return f;
 }
 function defaultFxSync(){
   return {mode:'software', group:[1,2], followTap:true, note:'1/4', dotted:false, bpm:0};
 }
-const fxAlgo = s => (FX[s] && FX_ALGOS[FX[s].type]) || null;
+const fxAlgo = s => (FX[s] && fxAlgos()[FX[s].type]) || null;
 const fxTimePar = s => { const a = fxAlgo(s); return a ? a.time : null; };
 const fxNow = () => performance.now() / 1000;
 
@@ -1227,9 +1288,10 @@ function fxSetField(s, field, value, source){
   source = source || 'manual';
   if (field === 'type'){
     const t = String(value || '').toUpperCase();
-    if (t && !FX_ALGOS[t]) return null;
+    const lib = fxAlgos();
+    if (t && !lib[t]) return null;                 // 算法必须在**当前控台**的库里
     FX[s].type = t;
-    FX[s].par = t ? Object.assign({}, FX_ALGOS[t].def) : {};   // 换算法重新铺默认参数
+    FX[s].par = t ? Object.assign({}, lib[t].def) : {};   // 换算法重新铺默认参数
     save(); return t;
   }
   if (field === 'name'){ FX[s].name = String(value || '').slice(0, 12); save(); return FX[s].name; }
@@ -1322,8 +1384,16 @@ function tapApply(){
 
 /* ---- 混响 UI ---- */
 function fxParsHTML(s, st){
-  if (st.time === null)
-    return '<div class="ds" style="margin:0">这个槽没装混响算法 — 把上面的类型选成 大厅/板式/房间/密室/复古 就能调混响。</div>';
+  if (st.time === null){
+    const p = profile(), lib = fxAlgos();
+    // 未标定控台：库里本来就是空的，没有"选个算法就能调"可言
+    if (!(p.ready && p.fxAlgos))
+      return '<div class="ds" style="margin:0">控台「' + p.label
+           + '」的效果库还没标定，这个槽暂时不可用（写入会被拒绝并记日志）。</div>';
+    const names = Object.keys(lib).map(k => lib[k].label).join(' / ');
+    return '<div class="ds" style="margin:0">这个槽没装混响算法 — 把左边的类型选成 '
+         + names + ' 就能调混响。</div>';
+  }
   const n2 = v => v.toFixed(2), n0 = v => String(Math.round(v));
   const row = (f, lab, unit, lo, hi, step, val, fmt) =>
     '<div class="fxrow"><span class="fxlab">' + lab + '</span>' +
@@ -1336,7 +1406,7 @@ function fxParsHTML(s, st){
        + row('mix', '混合比', '', 0, 1, 0.01, st.mix, n2);
 }
 function fxCardHTML(s){
-  const opts = FX_ALGO_OPTS.map(([v, t]) => '<option value="' + v + '">' + t + '</option>').join('');
+  const opts = fxAlgoOpts();
   return '<div class="card" id="fxc-' + s + '">' +
     '<div class="nm">FX' + s +
       ' <select class="nkin fx-type" data-slot="' + s + '">' + opts + '</select>' +
@@ -1427,19 +1497,83 @@ function updFxTap(){
   document.getElementById('fxTapSecs').textContent = bpm
     ? ('当前时值换算 = ' + fxNoteSecs(bpm, FXSYNC.note, FXSYNC.dotted).toFixed(3) + ' 秒') : '';
 }
+/* ---- 混响页：效果库随控台自动切换（与服务端同一语义）---- */
+// 换控台后，把不在新控台效果库里的算法槽明确置空 —— 留着它就成了"僵尸槽"：
+// 界面看着装着混响，实际参数索引是旧控台的（写出去就是参数串味）。
+function fxSyncToConsole(){
+  const lib = fxAlgos(), cleared = [];
+  for (let s = 1; s <= 8; s++){
+    const t = (FX[s] && FX[s].type) || '';
+    if (t && !lib[t]){ FX[s].type = ''; FX[s].par = {}; cleared.push(s); }
+  }
+  if (cleared.length)
+    log('CONSOLE 效果槽同步: FX' + cleared.join('/') + ' 的算法不在「'
+      + profile().label + '」效果库中，已置空');
+  return cleared;
+}
+// 重建 8 个算法下拉（只在效果库真的换了时调用，免得反复重画打断用户选择）
+function renderFxDropdowns(){
+  for (let s = 1; s <= 8; s++){
+    const card = document.getElementById('fxc-' + s); if (!card) continue;
+    const sel = card.querySelector('.fx-type'); if (!sel) continue;
+    const cur = (FX[s] && FX[s].type) || '';
+    sel.innerHTML = fxAlgoOpts();
+    if (cur && !Array.from(sel.options).some(o => o.value === cur)){
+      const o = document.createElement('option');
+      o.value = cur; o.textContent = cur + '（不在本控台效果库）';
+      sel.appendChild(o);
+    }
+    sel.value = cur;
+  }
+}
+function renderFxConsole(){
+  const p = profile(), lib = fxAlgos();
+  const locked = !(p.ready && p.fxAlgos);
+  const el = id => document.getElementById(id);
+  const nm = el('fxConsoleName'), nm2 = el('fxConsoleName2'), tag = el('fxConsoleTag'),
+        note = el('fxConsoleNote'), list = el('fxlist');
+  if (nm)  nm.textContent  = p.label;
+  if (nm2) nm2.textContent = p.label;
+  if (tag)
+    tag.textContent = p.verified ? '✅ 效果库已标定'
+                    : (p.ready ? '⚠ 结构已填 · 未上真机核对' : '⚠ 待标定');
+  const k = p.label + '|' + Object.keys(lib).length + '|' + locked;
+  if (note && note.dataset.k !== k){
+    note.dataset.k = k;
+    note.innerHTML = locked
+      ? ('控台「' + p.label + '」的效果库还没标定 —— 混响页暂时<b>只能看不能写</b>。'
+         + '写入会被拒绝：地址蒙错会写到别的参数上，比干脆不动作难查得多。')
+      : ('本控台效果库共 <b>' + Object.keys(lib).length + '</b> 种算法，占用 <b>'
+         + (p.counts.fx || 0) + '</b> 个效果槽。下面的算法下拉就是这台台子上真正有的效果。');
+  }
+  if (list){    // 用 pointer-events 而不是 disabled：参数区是重建的，disabled 会随重建丢失
+    list.style.pointerEvents = locked ? 'none' : '';
+    list.style.opacity = locked ? '0.42' : '';
+  }
+}
 function renderFx(){
   const n2 = v => v.toFixed(2), n0 = v => String(Math.round(v));
   for (let s = 1; s <= 8; s++){
     const st = FX[s], a = fxAlgo(s);
     const card = document.getElementById('fxc-' + s); if (!card) continue;
     const ts = card.querySelector('.fx-type');
-    if (document.activeElement !== ts && ts.value !== st.type) ts.value = st.type;
+    if (ts){
+      // 真台上可能装着本控台效果库里没有的算法 —— 补一个条目，否则 select 会落成空白，
+      // 用户就看不到"真台上到底装了什么"了。
+      if (st.type && !Array.from(ts.options).some(o => o.value === st.type)){
+        const o = document.createElement('option');
+        o.value = st.type; o.textContent = st.type + '（不在本控台效果库）';
+        ts.appendChild(o);
+      }
+      if (document.activeElement !== ts && ts.value !== st.type) ts.value = st.type;
+    }
     const nm = card.querySelector('.fx-name');
     if (document.activeElement !== nm && nm.value !== st.name) nm.value = st.name;
     card.querySelector('.fx-on').classList.toggle('on', !st.on);
     const tag = card.querySelector('.fx-tag');
     // 下拉里已经有算法名了，这里改显示该算法的时间范围（Tap 换算会被钳制到这个区间）
-    const txt = a ? (a.tmin + '–' + a.tmax + ' s') : '空槽';
+    const txt = a ? (a.tmin + '–' + a.tmax + ' s')
+                  : (st.type ? '⚠ 未知算法（不在本控台效果库）' : '空槽');
     if (tag.textContent !== txt) tag.textContent = txt;
 
     const pars = card.querySelector('.fxpars');
@@ -1447,8 +1581,10 @@ function renderFx(){
                   predelay: a ? st.par[a.predelay] : null,
                   damp: a ? st.par[a.damp] : null, mix: st.mix,
                   tmin: a ? a.tmin : null, tmax: a ? a.tmax : null};
-    if (pars.dataset.algo !== (st.type || '')){
-      pars.dataset.algo = st.type || '';
+    // 算法变了、或控台锁定状态变了 → 重建参数区（空槽提示文案会随"控台是否标定"变）
+    const _p = profile(), sig = (st.type || '') + '|' + ((_p.ready && _p.fxAlgos) ? '' : 'L');
+    if (pars.dataset.algo !== sig){
+      pars.dataset.algo = sig;
       pars.innerHTML = fxParsHTML(s, view);
     }
     [['time', n2, ' s'], ['predelay', n0, ' ms'], ['damp', n2, ''], ['mix', n2, '']].forEach(([f, fmt, unit]) => {
@@ -1644,11 +1780,13 @@ function cardLive(c){
   const parts = [];
   for (const a of (c.actions || [])){
     if (a.kind === 'mute'){
-      const ids = a.chs || [a.ch]; if (!ids.length) continue;
-      parts.push(ids.map(i => label('ch', +i)).join('、') + (ids.every(i => !M.ch[i].on) ? ' 已静音' : ' 出声中'));
+      const ids = filterTargets('ch_on', (a.chs || [a.ch || 1]).map(Number));
+      if (!ids.length) continue;
+      parts.push(ids.map(i => label('ch', i)).join('、') + (ids.every(i => !M.ch[i].on) ? ' 已静音' : ' 出声中'));
     } else if (a.kind === 'mute_bus'){
-      const ids = a.buses || [a.bus]; if (!ids.length) continue;
-      parts.push(ids.map(i => label('bus', +i)).join('、') + (ids.every(i => !M.bus[i].on) ? ' 已静音' : ' 出声中'));
+      const ids = filterTargets('bus_on', (a.buses || [a.bus || 1]).map(Number));
+      if (!ids.length) continue;
+      parts.push(ids.map(i => label('bus', i)).join('、') + (ids.every(i => !M.bus[i].on) ? ' 已静音' : ' 出声中'));
     } else if (a.kind === 'fade_all'){
       parts.push('全体 → ' + Math.round((a.to || 0) * 100) + '%');
     } else if (a.kind === 'fade_odd_even'){
@@ -1656,12 +1794,14 @@ function cardLive(c){
     } else if (a.kind === 'fade_ch' || a.kind === 'fade_from' || a.kind === 'fade_bus' || a.kind === 'fade_from_bus'){
       const isBus = a.kind.indexOf('bus') >= 0;
       const g = isBus ? 'bus' : 'ch';
-      const i = (a.chs || a.buses || [a.ch || a.bus])[0]; if (!i) continue;
+      const i = (a.chs || a.buses || [a.ch || a.bus])[0]; if (!i || !M[g][i]) continue;
       parts.push(label(g, +i) + ' ' + Math.round(M[g][i].fader * 100) + '%' +
         (a.to !== undefined ? '→' + Math.round(a.to * 100) + '%' : ''));
     } else if (a.kind === 'rel_db'){
       const g = a.group || 'ch';
-      const ids = a[{ch:'chs', bus:'buses', dca:'dcas'}[g]] || []; if (!ids.length) continue;
+      const key = {ch:'chs', bus:'buses', dca:'dcas'}[g]; if (!key) continue;
+      const ids = filterTargets(g + '_fader', (a[key] || []).map(Number));
+      if (!ids.length) continue;
       parts.push(ids.map(i => label(g, +i)).join('、') + ' ' + (a.delta_db >= 0 ? '+' : '−') + Math.abs(a.delta_db || 0) + 'dB');
     } else if (a.kind === 'wait'){
       parts.push('停 ' + (a.duration || 1) + 's');
@@ -1674,7 +1814,8 @@ function cardLive(c){
 }
 function actSatisfied(a){
   if (a.kind === 'mute'){
-    const ids = a.chs || [a.ch]; if (!ids.length) return null;
+    const ids = filterTargets('ch_on', (a.chs || [a.ch || 1]).map(Number));
+    if (!ids.length) return null;
     return ids.every(i => !M.ch[i].on);
   }
   if (a.kind === 'mute_bus'){
@@ -1707,7 +1848,7 @@ function render(){
   setHTML('tileCards', cards.map(c => {
     const run = running === c.id;
     return '<div class="tile' + (run ? ' run' : '') + (c.pin ? ' pin' : '') + '" data-card="' + c.id + '">' +
-      c.name + (isDanger(c) ? ' ⚠️' : '') +
+      esc(c.name) + (isDanger(c) ? ' ⚠️' : '') +
       (run
         ? '<div class="bar"><i style="width:' + Math.round(ENG.progress * 100) + '%"></i></div><small>' + (ENG.step || '点按停止') + '</small>'
         : '<small class="live">' + ((cardLive(c) || '点按运行') + readyBadge(c)) + '</small>') +
@@ -1716,7 +1857,7 @@ function render(){
 
   // 预设
   setHTML('snaplist', SNAPS.map(sp =>
-    '<div class="card"><div class="nm">📌 ' + sp.name +
+    '<div class="card"><div class="nm">📌 ' + esc(sp.name) +
       ' <small style="color:var(--sub);font-weight:400">· ' + sp.time + '</small></div>' +
     '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
       '<button data-recall="' + sp.id + '">⏪ 回归</button>' +
@@ -1727,21 +1868,21 @@ function render(){
   // 控制键页
   setHTML('keylist', KEYS.map(k =>
     '<div class="row" style="justify-content:space-between">' +
-      '<div style="font-size:15px;font-weight:600">' + (k.icon || '⚡') + ' ' + k.name + '</div>' +
+      '<div style="font-size:15px;font-weight:600">' + esc(k.icon || '⚡') + ' ' + esc(k.name) + '</div>' +
       '<button class="keybtn" data-key="' + k.id + '">' + (k.sign > 0 ? '＋' : '－') + ' ' + KEYCFG.step_db + ' dB</button>' +
     '</div>').join(''));
 
   // 管理列表（设置页）
   setHTML('cardlist', CARDS.map(c =>
-    '<div class="card" style="padding:11px 14px"><div class="nm">' + (c.pin ? '📌 ' : '') + c.name + '</div>' +
-    '<div class="ds" style="margin:4px 0 9px">' + (c.desc || '') + '</div>' +
+    '<div class="card" style="padding:11px 14px"><div class="nm">' + (c.pin ? '📌 ' : '') + esc(c.name) + '</div>' +
+    '<div class="ds" style="margin:4px 0 9px">' + esc(c.desc || '') + '</div>' +
     '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
       '<button class="ghost" data-pin="' + c.id + '">📌 ' + (c.pin ? '取消置顶' : '置顶') + '</button>' +
       '<button class="ghost" data-edit="' + c.id + '">✏️ 编辑</button>' +
       '<button class="ghost" data-del="' + c.id + '">🗑 删除</button>' +
     '</div></div>').join(''));
   setHTML('managelist', KEYS.map(k =>
-    '<div class="card" style="padding:11px 14px"><div class="nm">' + (k.icon || '⚡') + ' ' + k.name +
+    '<div class="card" style="padding:11px 14px"><div class="nm">' + esc(k.icon || '⚡') + ' ' + esc(k.name) +
       ' <small style="color:var(--sub);font-weight:400">· ' + label(k.kind, k.idx) + ' ' + (k.sign > 0 ? '+' : '−') + '</small></div>' +
     '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:9px">' +
       '<button class="ghost" data-delkey="' + k.id + '">🗑 删除</button>' +
@@ -1854,8 +1995,15 @@ function stParamChg(){
     + ['HALL','PLATE','ROOM','CHAMBER','VINTAGE',''].map(x => '<option value="' + x + '">' + (x || '(清空)') + '</option>').join('') + '</select>';
   else if (p === 'name') w.innerHTML = '<input id="stValTxt" class="nkin" style="width:120px" maxlength="12" placeholder="名称">';
   else if (p === 'load') w.innerHTML = '<span class="ds" style="margin:0">按上面的编号切换场景</span>';
-  else w.innerHTML = '<input id="stValNum" type="number" class="nkin" style="width:100px" step="0.01" value="'
-    + (p === 'fader' ? 80 : (p === 'time' ? 2.4 : (p === 'predelay' ? 20 : 0.45))) + '">';
+  // ⚠️ 单位必须**贴着输入框**显示：混响参数吃的是原生单位（秒 / 毫秒），
+  //    而 fader/mix 又是 0–1。少了单位标签，用户极易把"混响时间 80"填成 0.8 秒，
+  //    跑起来"没什么效果"还以为是台子坏了。
+  else {
+    const u = {fader:'%', time:'秒', predelay:'毫秒', damp:''}[p] || '';
+    const dv = p === 'fader' ? 80 : (p === 'time' ? 2.4 : (p === 'predelay' ? 20 : 0.45));
+    w.innerHTML = '<input id="stValNum" type="number" class="nkin" style="width:100px" step="0.01" value="' + dv + '">'
+      + '<span class="ds" style="margin:0 0 0 6px;min-width:34px">' + u + '</span>';
+  }
 }
 /* ---- 原始 OSC 表单 ---- */
 function oscFormHTML(){
@@ -1946,7 +2094,7 @@ function renderActs(){
   const el = document.getElementById('actChips');
   el.innerHTML = caActs.map((a, i) =>
     '<span style="display:inline-flex;align-items:center;gap:6px;background:var(--card2);color:var(--txt);border:1px solid var(--line);border-radius:14px;padding:4px 10px;font-size:12px;margin:2px">' +
-    (i + 1) + '. ' + actLabel(a) + ' <b style="cursor:pointer;color:var(--red)" data-rmact="' + i + '">×</b></span>').join('')
+    (i + 1) + '. ' + esc(actLabel(a)) + ' <b style="cursor:pointer;color:var(--red)" data-rmact="' + i + '">×</b></span>').join('')
     || '<div class="ds" style="font-size:12px">还没有动作，选类型后点「＋加入动作」。</div>';
   el.querySelectorAll('[data-rmact]').forEach(b => b.onclick = () => { caActs.splice(+b.dataset.rmact, 1); renderActs(); });
 }
@@ -1954,11 +2102,14 @@ function openCardModal(card){
   editCardId = card ? card.id : null;
   document.getElementById('cardModalTitle').textContent = card ? '✏️ 编辑演出卡片' : '➕ 新建演出卡片';
   document.getElementById('cardSaveBtn').textContent = card ? '💾 保存修改' : '💾 保存卡片';
+  // ⚠️ 三个字段都必须**无条件**重置。曾经的写法把 name/desc/caActs 全放在
+  //    `if(card)` 里 —— 新建卡片加几个动作 → 不保存直接关 → 再点"新建"，
+  //    上次的动作和名字都还在，用户会以为"自动保存了"。
   document.getElementById('ncName').value = card ? (card.name || '') : '';
   document.getElementById('ncDesc').value = card ? (card.desc || '') : '';
   caActs = card ? JSON.parse(JSON.stringify(card.actions || [])) : [];
   document.getElementById('ncNext').innerHTML = '<option value="">(无 · 执行完就停)</option>' +
-    CARDS.filter(x => x.id !== editCardId).map(x => '<option value="' + x.id + '">' + x.name + '</option>').join('');
+    CARDS.filter(x => x.id !== editCardId).map(x => '<option value="' + x.id + '">' + esc(x.name) + '</option>').join('');
   document.getElementById('ncNext').value = (card && card.next) || '';
   document.getElementById('cardModal').classList.add('on');
   document.body.style.overflow = 'hidden';
@@ -2002,7 +2153,7 @@ function updNmIdx(){
   const g = document.getElementById('nmGroup').value;
   document.getElementById('nmIdx').innerHTML = idxRange(g).map(i => {
     const nm = (NAMES[g] && NAMES[g][i]) || '';
-    return '<option value="' + i + '">' + (GROUPS[g].zeroBased ? 'main' : String(i).padStart(2, '0')) + (nm ? ' · ' + nm : '') + '</option>';
+    return '<option value="' + i + '">' + (GROUPS[g].zeroBased ? 'main' : String(i).padStart(2, '0')) + (nm ? ' · ' + esc(nm) : '') + '</option>';
   }).join('');
 }
 function doExport(){
@@ -2017,13 +2168,17 @@ function doExport(){
 function doImport(text){
   let cfg;
   try { cfg = JSON.parse(text); } catch(e){ toast('JSON 解析失败'); return; }
-  if (!cfg || !cfg.CARDS){ toast('不是有效的配置文件（缺 CARDS 字段）'); return; }
-  CARDS = cfg.CARDS;
-  if (Array.isArray(cfg.KEYS)) KEYS = cfg.KEYS;
-  if (cfg.KEYCFG) KEYCFG = Object.assign({step_db:3, ramp:0.4}, cfg.KEYCFG);
-  if (cfg.NAMES) NAMES = Object.assign(NAMES, cfg.NAMES);
+  if (!cfg || typeof cfg !== 'object'){ toast('不是有效的配置文件'); return; }
+  if (!Array.isArray(cfg.CARDS)){ toast('不是有效的配置文件（CARDS 应为数组）'); return; }
+  // ⚠️ 逐条校验而不是整体赋值：一个 actions 不是数组的卡片就能让 render()
+  //    抛 TypeError，然后整个界面停在新旧态之间不再刷新（异常被吞的老套路）。
+  CARDS = cfg.CARDS.filter(c => c && typeof c === 'object' && Array.isArray(c.actions));
+  if (Array.isArray(cfg.KEYS)) KEYS = cfg.KEYS.filter(k => k && typeof k === 'object');
+  if (cfg.KEYCFG && typeof cfg.KEYCFG === 'object')
+    KEYCFG = Object.assign({step_db:3, ramp:0.4}, cfg.KEYCFG);
+  if (cfg.NAMES && typeof cfg.NAMES === 'object') NAMES = Object.assign(NAMES, cfg.NAMES);
   save(); refreshSettings(); render();
-  toast('📥 配置已导入');
+  toast('📥 配置已导入（' + CARDS.length + ' 张卡片）');
 }
 function resetAll(){
   if (!confirm('恢复出厂设置？将清空你的卡片、控制键与命名。')) return;
@@ -2052,9 +2207,9 @@ function renderCtrlProfile(){
     nt.innerHTML = '地址表已与真机核对 · 通道 <b>' + p.counts.ch + '</b> · Bus <b>' + p.counts.bus
       + '</b> · DCA <b>' + p.counts.dca + '</b> · FX <b>' + p.counts.fx + '</b>';
   } else if (p.ready){
-    nt.innerHTML = '⚠️ ' + (p.note || '地址表未经真机核对');
+    nt.innerHTML = '⚠️ ' + esc(p.note || '地址表未经真机核对');
   } else {
-    nt.innerHTML = '⚠️ <b>' + p.label + '</b> 的驱动尚未标定：' + (p.note || '')
+    nt.innerHTML = '⚠️ <b>' + esc(p.label) + '</b> 的驱动尚未标定：' + esc(p.note || '')
       + '<br>此状态下所有写入会被<b>拒绝并记日志</b>，卡片不会真正控制到台子 —— 这是刻意的，'
       + '免得蒙错地址写到别的参数上。';
   }
@@ -2135,12 +2290,21 @@ buildConsole();
 buildFx();
 refreshSettings();
 renderCtrlProfile();
+renderFxConsole();
 document.getElementById('ctrlSel').addEventListener('change', function(){
   PROFILE_ID = this.value;
   renderCtrlProfile();
+  // 切完控台：效果库换了 → 清掉不在新库里的算法槽、重建下拉、刷新信息条与槽卡
+  const cleared = fxSyncToConsole();
+  renderFxDropdowns();
+  renderFxConsole();
+  renderFx();
   const p = profile();
-  toast('控台 → ' + p.label + (p.ready ? '' : '（未标定：写入会被拒绝）'));
-  log('CONSOLE 切换到 ' + p.label + (p.ready ? '' : '（待标定：写入将被拒绝）'));
+  const libN = Object.keys(fxAlgos()).length;
+  toast('控台 → ' + p.label + (p.ready ? '' : '（未标定：写入会被拒绝）')
+    + ' · 效果库 ' + libN + ' 种' + (cleared.length ? '，FX' + cleared.join('/') + ' 已清空' : ''));
+  log('CONSOLE 切换到 ' + p.label + (p.ready ? '' : '（待标定：写入将被拒绝）')
+    + '（效果库 ' + libN + ' 种）');
   save();
 });
 document.getElementById('caKind').innerHTML = ACTION_MENU.map(([v, t]) => '<option value="' + v + '">' + t + '</option>').join('');
