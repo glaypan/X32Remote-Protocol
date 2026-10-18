@@ -41,10 +41,23 @@ def wait_web(port, timeout=45):
     return False
 
 
+# ⚠️ 本地子进程一律不走代理：本机装了系统/ZeroTier 代理时，urllib 会把
+#    127.0.0.1 的请求也送去代理，于是拿到 502 Bad Gateway —— 测试脚本本身
+#    完全正常，却会随机失败（bridge 组就这么偶发挂过一次）。
+#    这里显式关掉代理并补 no_proxy，让"测试失败"只可能是真问题。
+_NO_PROXY_ENV = dict(os.environ)
+for _k in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY",
+           "all_proxy", "ALL_PROXY"):
+    _NO_PROXY_ENV.pop(_k, None)
+_NO_PROXY_ENV["no_proxy"] = "127.0.0.1,localhost"
+_NO_PROXY_ENV["NO_PROXY"] = "127.0.0.1,localhost"
+
+
 def start(args):
     """后台拉起一个模拟器实例"""
     return subprocess.Popen([PY, "x32_simulator.py"] + args, cwd=BASE,
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            env=_NO_PROXY_ENV)
 
 
 def stop(*procs):
@@ -66,7 +79,8 @@ def stop(*procs):
 def run(script):
     """跑一个测试脚本，返回 (是否通过, 摘要行)"""
     r = subprocess.run([PY, script], cwd=BASE, capture_output=True, text=True,
-                       encoding="utf-8", errors="replace", timeout=300)
+                       encoding="utf-8", errors="replace", timeout=300,
+                       env=_NO_PROXY_ENV)
     out = (r.stdout or "") + (r.stderr or "")
     tail = [ln.strip() for ln in out.strip().splitlines() if ln.strip()]
     headline = " | ".join(tail[-3:]) if tail else "(无输出)"
