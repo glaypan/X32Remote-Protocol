@@ -1,20 +1,25 @@
-9a607e7e421e2ea98ede31fce972a1d851af4040795a82deb15f2adfbd0bfe67 *X32Remote-v1.1.1-full.zip
-dab7f0121027e141615fc2ceb24ed46d4b67694bf290a3444731ae4d3628f38a *X32Remote-v1.1.1-assets.zip
-4916ae96508a8cbc7e4e225f222ad1b0052c56af472420eddcfcc08563dc6ef5 *X32Remote-1.1.0.apk
-7551d96ba852e130e34ebe1a7c71e609f35edfdb94c9259cad4a2fb654408617 *X32Remote-unsigned.ipa
+8715f60f6dd255c4294fdbe1f8fe09b9147c40e80ca29dd59e2b3df45dff4fc0 *X32Remote-v1.2.0-full.zip
+b3da4b53e260f2a18ab6673ccd92b7d504447bd52d78199d33edd0b35475773e *X32Remote-v1.2.0-assets.zip
+e6c2c459d31750ae4104e6d9b56ca438e05966916fa1bb763849e7fa5e6fd31b *X32Remote-1.1.0.apk
+548f4f6b1a8a2ee4849e62fe3b202ec0ee8705b34efff49b3d00dc5e516f7e08 *X32Remote-unsigned.ipa
+21095074d2764dce6cff290ff1ff04eb3efe1b46c984fcdd69b46e101e97771e *X32Remote-WebDemo.html
 
-# X32 Remote v1.1.1 发布包校验和 (SHA256)
-# 生成时间: 2026-09-27
+# X32 Remote v1.2.0 发布包校验和 (SHA256)
+# 生成时间: 2026-10-19
 # 校验方式: sha256sum -c SHA256SUMS.txt
 #
 # 说明:
-#   X32Remote-v1.1.1-full.zip    完整发布包（全部源码 + 产物 + 文档）
-#   X32Remote-v1.1.1-assets.zip  仅产物（Android APK + iOS IPA + 发布说明）
-#   X32Remote-1.1.0.apk          Android 安装包（versionName 1.1.0 / versionCode 2）
-#   X32Remote-unsigned.ipa       iOS 未签名包（需 Sideloadly 签名，要求 iOS 17+）
+#   X32Remote-v1.2.0-full.zip     完整发布包（全部源码 + 产物 + 文档）
+#   X32Remote-v1.2.0-assets.zip   仅产物（Android APK + iOS IPA + 网页试用版 + 发布说明）
+#   X32Remote-1.1.0.apk           Android 安装包（versionName 1.1.0 / versionCode 2）
+#   X32Remote-unsigned.ipa        iOS 未签名包（需 Sideloadly 签名，要求 iOS 17+）
+#   X32Remote-WebDemo.html        网页试用版（单文件，浏览器直接打开）
 #
 # Android APK: 版本 1.1.0 (versionCode 2) / minSdk 26 / targetSdk 35
+#   源码自 v1.1.1 起零变动，本包为同源码重新构建（版本号不涨，避免无变化涨版本）
 #   签名 DN: CN=X32 Remote（与上一版同密钥，可覆盖安装升级）
 # iOS IPA:     版本 1.1.0 (build 2) / MinimumOSVersion 17.0
+#   出自 CI run 39161146267（提交 c53cde4，单测 108 项全绿后构建）
 #
-# 测试: Android 单元测试 73 项全过；iOS 云端构建 + 核心库单测通过
+# 测试: Android 单元测试全过；iOS 核心库单测 108/108；服务端回归 5 组 70 项；
+#       WebDemo 冒烟 9/9（esc()/CSP/14 动作/390px 无溢出）
