@@ -2029,45 +2029,204 @@ def fx_state():
 # ---------------------------------------------------------------- 推子快照
 # 灵感来自"电动推子自动化":保存当前所有推子位置,一键让全部推子自动滑回
 
-SNAPSHOTS = []                       # [{id, name, time, ch, dca, main}]
+SNAPSHOTS = []                       # [{id, name, time, scope, data, count}]
 SNAP_ID = [0]
 AUTO_SNAPS = collections.deque(maxlen=5)   # 自动撤销点: 每次卡片执行前自动保存, 最多留 5 个
 RECALL_STATE = {"running": None, "name": "", "progress": 0.0}
 RECALL_STOP = threading.Event()
 
+# ---- 预设范围：组 → 该组能存的参数 -------------------------------------
+# 为什么要有"范围"：以前一条预设永远是"79 路 × 推子+静音"的全量回归，用户想只还原
+# 人声那几路做不到，一动就是整台。范围把"存什么"和"还原什么"绑在一起，
+# 回归只写范围内的键 —— 没勾的通道一个字节都不碰。
+#   fader/on/name 是 79 路通用三项；dca 只对输入通道有意义（位掩码归属）；
+#   FX 整槽存（算法/名称/开关/混合比/参数）—— 参数号随算法变化，拆开存没有意义；
+#   scene 只记录当前场景号（回归时不发 OSC，发不发由卡片的场景动作决定）。
+PRESET_GROUP_PARAMS = {
+    "ch": ("fader", "on", "name", "dca"),
+    "bus": ("fader", "on", "name"),
+    "dca": ("fader", "on", "name"),
+    "auxin": ("fader", "on", "name"),
+    "usb": ("fader", "on", "name"),
+    "fxret": ("fader", "on", "name"),
+    "mtx": ("fader", "on", "name"),
+    "main": ("fader", "on", "name"),
+    "fx": ("slot",),
+    "scene": ("scene",),
+}
+PRESET_GROUP_LABEL = {"ch": "输入通道", "bus": "Mix Bus", "dca": "DCA",
+                      "auxin": "Aux In", "usb": "USB", "fxret": "FX 返回",
+                      "mtx": "Matrix", "main": "主输出", "fx": "FX 机架",
+                      "scene": "场景号"}
+PRESET_PARAM_LABEL = {"fader": "推子", "on": "静音", "name": "名称",
+                      "dca": "DCA 归属", "slot": "整槽", "scene": "当前场景"}
+PRESET_DEFAULT_SCOPE = {
+    "groups": ["ch", "bus", "dca", "auxin", "usb", "fxret", "mtx", "main"],
+    "params": ["fader", "on"],
+    "indices": {},
+}
+
+
+def preset_group_cap(g):
+    """该组有多少路（main 只有一路且编号固定 0）。"""
+    if g in ("main", "scene"):
+        return 1
+    if g == "fx":
+        return FX_COUNT
+    return NAME_COUNTS.get(g, 0)
+
+
+def clean_preset_scope(scope):
+    """规范化预设范围。只认白名单 —— 配置文件可手改，脏范围不能让回归变成"乱写"。"""
+    if not isinstance(scope, dict):
+        return {"groups": list(PRESET_DEFAULT_SCOPE["groups"]),
+                "params": list(PRESET_DEFAULT_SCOPE["params"]), "indices": {}}
+    groups = []
+    for g in (scope.get("groups") or []):
+        if g in PRESET_GROUP_PARAMS and g not in groups:
+            groups.append(g)
+    if not groups:
+        groups = list(PRESET_DEFAULT_SCOPE["groups"])
+    params = []
+    for p in (scope.get("params") or []):
+        if p not in PRESET_PARAM_LABEL:
+            continue
+        if any(p in PRESET_GROUP_PARAMS[g] for g in groups) and p not in params:
+            params.append(p)
+    if not params:
+        params = ["fader", "on"]
+    indices = {}
+    raw = scope.get("indices")
+    if isinstance(raw, dict):
+        for g, arr in raw.items():
+            if g not in groups or g not in NAME_COUNTS:
+                continue
+            cap = preset_group_cap(g)
+            picked = []
+            for v in (arr if isinstance(arr, list) else []):
+                try:
+                    n = int(float(v))
+                except (TypeError, ValueError):
+                    continue
+                n = min(max(n, 1), max(1, cap))
+                if n not in picked:
+                    picked.append(n)
+            if picked:
+                indices[g] = sorted(picked)
+    return {"groups": groups, "params": params, "indices": indices}
+
+
+def preset_scope_text(scope):
+    """人话摘要（列表与日志共用）。"""
+    gs = [PRESET_GROUP_LABEL.get(g, g) for g in scope.get("groups", [])]
+    ps = [PRESET_PARAM_LABEL.get(p, p) for p in scope.get("params", [])
+          if p not in ("slot", "scene")]
+    txt = "、".join(gs)
+    if ps:
+        txt += " · " + "+".join(ps)
+    idx = scope.get("indices") or {}
+    if idx:
+        parts = []
+        for g, arr in idx.items():
+            shown = ",".join(str(x) for x in arr[:6]) + ("…" if len(arr) > 6 else "")
+            parts.append("%s %s" % (PRESET_GROUP_LABEL.get(g, g), shown))
+        txt += " · 仅 " + ";".join(parts)
+    return txt
+
+
+def _snap_group_items_locked(g, params, idxs):
+    """持锁调用：抓一个组的参数。返回 {str(idx): {...}}，main 用 "0"。"""
+    bag = {}
+    if g == "main":
+        item = {}
+        if "fader" in params:
+            item["fader"] = STATE.main.get("fader", 0.75)
+        if "on" in params:
+            item["on"] = STATE.main.get("on", 1)
+        if "name" in params:
+            item["name"] = STATE.names.get(("main", 0), "")
+        if item:
+            bag["0"] = item
+        return bag
+    store = getattr(STATE, g, {}) or {}
+    for i in idxs:
+        row = store.get(i)
+        if row is None:
+            continue
+        item = {}
+        if "fader" in params:
+            item["fader"] = row.get("fader", 0.75)
+        if "on" in params:
+            item["on"] = row.get("on", 1)
+        if "name" in params:
+            item["name"] = STATE.names.get((g, i), "")
+        if "dca" in params and g == "ch":
+            item["dca"] = sum(1 << (d - 1) for d in range(1, 9)
+                              if i in STATE.dca_members.get(d, []))
+        bag[str(i)] = item
+    return bag
+
+
+def _grab_state_scoped_locked(scope):
+    """持锁调用：按范围抓取。返回 (data, 值数量)。"""
+    data, count = {}, 0
+    for g in scope["groups"]:
+        params = [p for p in scope["params"] if p in PRESET_GROUP_PARAMS.get(g, ())]
+        if not params:
+            continue
+        if g == "scene":
+            data["scene"] = int(STATE.scene)
+            count += 1
+            continue
+        if g == "fx":
+            slots = {}
+            for i in range(1, FX_COUNT + 1):
+                fx = STATE.fx[i]
+                par = fx.get("par") or {}
+                slots[str(i)] = {"type": fx.get("type", ""), "name": fx.get("name", ""),
+                                 "on": fx.get("on", 1), "mix": fx.get("mix", 0.25),
+                                 "par": {str(pp): v for pp, v in par.items()}}
+                count += 4 + len(par)
+            data["fx"] = slots
+            continue
+        if g == "main":
+            idxs = [0]
+        else:
+            idxs = scope["indices"].get(g) or list(range(1, preset_group_cap(g) + 1))
+        bag = _snap_group_items_locked(g, params, idxs)
+        data[g] = bag
+        count += sum(len(v) for v in bag.values())
+    return data, count
+
 
 def _grab_state_locked():
-    """在持有 STATE.lock 时调用:深拷贝推子/静音状态。"""
-    return {
-        "ch": {i: dict(STATE.ch[i]) for i in range(1, 33)},
-        "bus": {i: dict(STATE.bus[i]) for i in range(1, 17)},
-        "dca": {i: dict(STATE.dca[i]) for i in range(1, 9)},
-        "auxin": {i: dict(STATE.auxin[i]) for i in range(1, 7)},
-        "usb": {i: dict(STATE.usb[i]) for i in range(1, 3)},
-        "fxret": {i: dict(STATE.fxret[i]) for i in range(1, 9)},
-        "mtx": {i: dict(STATE.mtx[i]) for i in range(1, 7)},
-        "main": dict(STATE.main),
-    }
+    """兼容旧调用：全量「推子+静音」抓取。"""
+    data, _ = _grab_state_scoped_locked({"groups": list(PRESET_DEFAULT_SCOPE["groups"]),
+                                         "params": ["fader", "on"], "indices": {}})
+    return data
 
 
-def save_snapshot(name=None, auto=False):
+def save_snapshot(name=None, auto=False, scope=None):
+    sc = clean_preset_scope(scope) if scope is not None else {
+        "groups": list(PRESET_DEFAULT_SCOPE["groups"]),
+        "params": list(PRESET_DEFAULT_SCOPE["params"]), "indices": {}}
     with STATE.lock:
-        snap_state = _grab_state_locked()
+        data, count = _grab_state_scoped_locked(sc)
+        scene_now = int(STATE.scene)
     SNAP_ID[0] += 1
     snap = {"id": SNAP_ID[0],
-            "name": name or "快照 %d" % SNAP_ID[0],
+            "name": (str(name).strip()[:20] if name else "") or "预设 %d" % SNAP_ID[0],
             "time": time.strftime("%H:%M:%S"),
-            "scene": STATE.scene if hasattr(STATE, "scene") else 1}
-    snap.update(snap_state)
+            "scene": scene_now, "scope": sc, "data": data, "count": count}
     if auto:
-        # 撤销点不进用户的预设列表, 单独存放
         AUTO_SNAPS.append(snap)
-        log("SNAPSHOT 自动撤销点: %s" % snap["name"])
+        log("SNAPSHOT 自动撤销点: %s (%d 值)" % (snap["name"], count))
         return snap
     SNAPSHOTS.insert(0, snap)
     if len(SNAPSHOTS) > 8:
         SNAPSHOTS.pop()
-    log("SNAPSHOT 保存: %s" % snap["name"])
+    save_user_config()          # 预设必须跨重启（以前只存在内存里，重启即丢）
+    log("SNAPSHOT 保存: %s (%d 值 · %s)" % (snap["name"], count, preset_scope_text(sc)))
     return snap
 
 
@@ -2078,58 +2237,173 @@ def recall_snapshot(snap_id, seconds=3.0):
     return start_recall(snap, seconds)
 
 
+def _snap_items(snap):
+    """统一新旧两种预设格式 → [(group, idx, item)]。
+
+    旧格式（本次升级前）：顶层就是 ch/bus/... 的 {i: {fader, on}}；
+    新格式：snap["data"][group][i] = {...}，可能只含部分参数。
+    兼容旧数据是有意的：用户配置里可能还躺着升级前保存的快照。
+    """
+    out = []
+    src = snap.get("data")
+    if isinstance(src, dict):
+        for g, bag in src.items():
+            if g == "scene" or not isinstance(bag, dict):
+                continue
+            for k, item in bag.items():
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    i = int(k)
+                except (TypeError, ValueError):
+                    continue
+                out.append((g, i, item))
+        return out
+    for g in ("ch", "bus", "dca", "auxin", "usb", "fxret", "mtx", "main"):
+        for k, item in (snap.get(g) or {}).items():
+            if isinstance(item, dict):
+                try:
+                    out.append((g, int(k), item))
+                except (TypeError, ValueError):
+                    continue
+    return out
+
+
+def _recall_instant(snap):
+    """立即应用：开关 / 名称 / DCA 归属 / FX 整槽 / 场景号。"""
+    names_changed = False
+    if isinstance(snap.get("data"), dict) and "scene" in snap["data"]:
+        with STATE.lock:
+            try:
+                STATE.scene = min(max(int(snap["data"]["scene"]), 0), 99)
+            except (TypeError, ValueError):
+                pass
+    for g, i, item in _snap_items(snap):
+        if g == "fx":
+            if 1 <= i <= FX_COUNT:
+                if "type" in item:
+                    set_value("fx_type", i, item.get("type", ""), source="action")
+                if "name" in item:
+                    set_value("fx_name", i, item.get("name", ""), source="action")
+                if "on" in item:
+                    set_value("fx_on", i, item.get("on", 1), source="action")
+                if "mix" in item:
+                    set_value("fx_mix", i, item.get("mix", 0.25), source="action")
+                for p, v in (item.get("par") or {}).items():
+                    set_value("fx_par_%s" % p, i, v, source="action")
+            continue
+        if "on" in item:
+            set_value("main_on" if g == "main" else g + "_on", i,
+                      item.get("on", 1), source="action")
+        if "dca" in item and g == "ch":
+            set_value("ch_dca", i, item.get("dca", 0), source="action")
+        if "name" in item:
+            nm = str(item.get("name") or "").strip()[:12]
+            with STATE.lock:
+                if nm:
+                    STATE.names[(g, i)] = nm
+                else:
+                    STATE.names.pop((g, i), None)
+            names_changed = True
+    if names_changed:
+        save_user_config()
+
+
+def _recall_fader_starts(snap):
+    """[(kind, idx, 当前值, 目标值)] —— 只有范围里带 fader 的项才动。"""
+    out = []
+    for g, i, item in _snap_items(snap):
+        if "fader" not in item:
+            continue
+        kind = "main_fader" if g == "main" else g + "_fader"
+        try:
+            target = _clamp01(item["fader"])
+        except (TypeError, ValueError):
+            continue
+        out.append((kind, i, get_value(kind, i), target))
+    return out
+
+
+def _recall_body(snap, seconds):
+    """回归主体（阻塞）。调用方负责 RECALL_STATE 与线程。"""
+    RECALL_STATE["running"] = snap.get("id")
+    RECALL_STATE["name"] = snap.get("name", "")
+    RECALL_STATE["progress"] = 0.0
+    try:
+        starts = _recall_fader_starts(snap)
+        _recall_instant(snap)
+        log("SNAPSHOT 回归开始: %s (%d 项 · %d 路推子 %.1f 秒归位)"
+            % (snap.get("name", ""), snap.get("count", 0), len(starts), seconds))
+        steps = max(1, int(seconds / 0.1))
+        for s in range(1, steps + 1):
+            if RECALL_STOP.is_set():
+                log("SNAPSHOT 回归被打断")
+                return
+            time.sleep(0.1)
+            ratio = s / steps
+            for kind, i, a, b in starts:
+                set_value(kind, i, a + (b - a) * ratio, source="action")
+            RECALL_STATE["progress"] = ratio
+        log("SNAPSHOT 回归完成: %s" % snap.get("name", ""))
+    except Exception as e:
+        log("SNAPSHOT 回归出错: %r" % e)
+    finally:
+        if RECALL_STATE["running"] == snap.get("id"):
+            RECALL_STATE["running"] = None
+            RECALL_STATE["progress"] = 1.0
+
+
 def start_recall(snap, seconds=3.0):
-    """按快照对象回归 (预设回归与一键撤销共用): 静音立即恢复, 推子平滑滑回。"""
+    """异步回归（网页按钮用）。"""
     RECALL_STOP.set()                # 打断进行中的回归
     seconds = min(max(_finite(seconds, 1.0), 0.5), 15.0)
 
     def worker():
         RECALL_STOP.clear()
-        RECALL_STATE["running"] = snap["id"]
-        RECALL_STATE["name"] = snap["name"]
-        RECALL_STATE["progress"] = 0.0
-        try:
-            # 静音状态立即恢复,推子平滑滑动
-            for i in range(1, 33):
-                set_value("ch_on", i, snap["ch"][i]["on"])
-            for i in range(1, 17):
-                set_value("bus_on", i, snap["bus"][i]["on"])
-            for i in range(1, 9):
-                set_value("dca_on", i, snap["dca"][i]["on"])
-            for g, n in (("auxin", 6), ("usb", 2), ("fxret", 8), ("mtx", 6)):
-                for i in range(1, n + 1):
-                    set_value(g + "_on", i, snap[g][i]["on"])
-            set_value("main_on", 0, snap["main"]["on"])
-            log("SNAPSHOT 回归开始: %s (静音已恢复,推子 %.1f 秒归位)" % (snap["name"], seconds))
+        _recall_body(snap, seconds)
 
-            # 收集推子起点/终点
-            starts = [(k, i, a, b) for k, i, a, b in
-                      [("ch_fader", i, get_value("ch_fader", i), snap["ch"][i]["fader"]) for i in range(1, 33)] +
-                      [("bus_fader", i, get_value("bus_fader", i), snap["bus"][i]["fader"]) for i in range(1, 17)] +
-                      [("dca_fader", i, get_value("dca_fader", i), snap["dca"][i]["fader"]) for i in range(1, 9)] +
-                      [(g + "_fader", i, get_value(g + "_fader", i), snap[g][i]["fader"])
-                       for g, n in (("auxin", 6), ("usb", 2), ("fxret", 8), ("mtx", 6)) for i in range(1, n + 1)] +
-                      [("main_fader", 0, get_value("main_fader", 0), snap["main"]["fader"])]]
-
-            steps = max(1, int(seconds / 0.1))
-            for s in range(1, steps + 1):
-                if RECALL_STOP.is_set():
-                    log("SNAPSHOT 回归被打断")
-                    return
-                time.sleep(0.1)
-                ratio = s / steps
-                for k, i, a, b in starts:
-                    set_value(k, i, a + (b - a) * ratio, source="action")
-                RECALL_STATE["progress"] = ratio
-            log("SNAPSHOT 回归完成: %s" % snap["name"])
-        except Exception as e:
-            log("SNAPSHOT 回归出错: %r" % e)
-        finally:
-            if RECALL_STATE["running"] == snap["id"]:
-                RECALL_STATE["running"] = None
-                RECALL_STATE["progress"] = 1.0
     threading.Thread(target=worker, daemon=True).start()
     return snap
+
+
+def recall_now(snap, seconds=1.0):
+    """同步回归（测试/脚本用）：阻塞到推子滑完。
+
+    ⚠️ 卡片动作**不要**用它 —— 时间轴是单线程非阻塞的，这里一阻塞，
+    整张卡片的进度条与并行渐变都会被冻住。卡片里用「瞬时项 + 渐变分支」组合。
+    """
+    RECALL_STOP.set()
+    RECALL_STOP.clear()
+    seconds = min(max(_finite(seconds, 1.0), 0.0), 15.0)
+    if seconds <= 0:
+        _recall_instant(snap)
+        return snap
+    _recall_body(snap, seconds)
+    return snap
+
+
+def find_snapshot(pid):
+    try:
+        pid = int(pid or 0)
+    except (TypeError, ValueError):
+        return None
+    return next((s for s in SNAPSHOTS if s["id"] == pid), None)
+
+
+def snap_fade_targets(snap):
+    """预设里带 fader 的项 → [(kind, idx, 目标值)]，交给时间轴渐变分支插值。"""
+    out = []
+    if not snap:
+        return out
+    for g, i, item in _snap_items(snap):
+        if "fader" not in item:
+            continue
+        kind = "main_fader" if g == "main" else g + "_fader"
+        try:
+            out.append((kind, i, _clamp01(item["fader"])))
+        except (TypeError, ValueError):
+            continue
+    return out
 
 
 # ------------------------------------------------------------ 自定义控制键
@@ -2214,6 +2488,7 @@ def save_user_config():
                                             "mix": STATE.fx[s]["mix"],
                                             "par": {str(p): v for p, v in STATE.fx[s]["par"].items()}}
                                    for s in range(1, FX_COUNT + 1)},
+                       "presets": SNAPSHOTS,
                        "names": {"%s|%d" % k: v for k, v in STATE.names.items()}},
                       f, ensure_ascii=False, indent=1, allow_nan=False)
     except Exception as e:
@@ -2258,6 +2533,35 @@ def load_user_config():
                     % (len(d["quickKeys"]) - len(clean_keys)))
         if isinstance(d.get("cards"), list):
             SHOW_CARDS[:] = d["cards"]
+        # 预设（台面快照）: 以前只存在内存里重启即丢，现在跟配置一起落盘。
+        # 配置文件可手改 → 必须逐条消毒，脏数据最多被丢弃，不能把回归变成乱写。
+        if isinstance(d.get("presets"), list):
+            loaded = []
+            for s in d["presets"][:8]:
+                if not isinstance(s, dict) or not isinstance(s.get("data"), dict):
+                    continue
+                try:
+                    sid = int(s.get("id") or 0)
+                except (TypeError, ValueError):
+                    sid = 0
+                try:
+                    scene_no = int(s.get("scene") or 1)
+                except (TypeError, ValueError):
+                    scene_no = 1
+                try:
+                    cnt = int(s.get("count") or 0)
+                except (TypeError, ValueError):
+                    cnt = 0
+                loaded.append({"id": sid or (len(loaded) + 1),
+                               "name": str(s.get("name") or "预设")[:20],
+                               "time": str(s.get("time") or ""),
+                               "scene": min(max(scene_no, 0), 99),
+                               "scope": clean_preset_scope(s.get("scope")),
+                               "data": s["data"], "count": max(0, cnt)})
+            SNAPSHOTS[:] = loaded
+            if SNAPSHOTS:
+                SNAP_ID[0] = max([x["id"] for x in SNAPSHOTS] + [SNAP_ID[0]])
+                log("已载入 %d 条预设" % len(SNAPSHOTS))
         # 迁移旧结构: 内置/历史卡片用独立 fades 字段, 统一转成 fade_from 动作, 保证简介与动作一致
         migrated = False
         for c in SHOW_CARDS:
@@ -2551,6 +2855,20 @@ def _act_duration(act):
         except (TypeError, ValueError):
             d = 0.0
         return max(0.05, d) if d > 0 else 0.0
+    if k == "preset":
+        try:
+            return max(0.5, float(act.get("duration", 2.0)))
+        except (TypeError, ValueError):
+            return 2.0
+    if k == "scene":
+        # 全局 recall 是瞬时的（模拟器/真台都一样，真台生效有延迟但那是台子的事）;
+        # 局部调用要占时间轴，推子按 duration 滑回去
+        if (act.get("mode") or "global") == "partial":
+            try:
+                return max(0.05, float(act.get("duration", 1.0)))
+            except (TypeError, ValueError):
+                return 1.0
+        return 0.0
     if k == "wait" or k in FADE_ACT_KINDS:
         try:
             return max(0.05, float(act.get("duration", 3.0)))
@@ -2570,7 +2888,16 @@ def _act_label(act):
             return "静音 " + "、".join(target_label("bus", int(b)) for b in
                                        (act.get("buses") or [act.get("bus", 1)]))
         if k == "scene":
+            if (act.get("mode") or "global") == "partial":
+                snap = next((s for s in SNAPSHOTS
+                             if s["id"] == act.get("presetId")), None)
+                return "场景 %d · 局部（%s）" % (
+                    int(act.get("scene", 1)),
+                    ("预设「%s」" % snap.get("name")) if snap else "预设已删除")
             return "切场景 %d" % int(act.get("scene", 1))
+        if k == "preset":
+            snap = next((s for s in SNAPSHOTS if s["id"] == act.get("presetId")), None)
+            return "调用预设「%s」" % (snap.get("name") if snap else "已删除")
         if k == "unmute_all":
             return "全部取消静音"
         if k == "wait":
@@ -2628,8 +2955,13 @@ def _act_label(act):
 
 
 def _fade_targets_for(act):
-    """渐变动作 → [(kind, idx, to_v)]; 非渐变返回 None。起点在触发瞬间取当前值。"""
+    """渐变动作 → [(kind, idx, to_v)]; 非渐变返回 None。起点在触发瞬间取当前值。
+    预设/局部场景也走这里：推子交给时间轴插值，避免阻塞主循环。"""
     k = act.get("kind")
+    if k == "preset":
+        return snap_fade_targets(find_snapshot(act.get("presetId"))) or []
+    if k == "scene" and (act.get("mode") or "global") == "partial":
+        return snap_fade_targets(find_snapshot(act.get("presetId"))) or []
     if k == "fade_all":
         to = float(act.get("to", 0.0))
         return ([("ch_fader", i, to) for i in range(1, 33)] +
@@ -2747,9 +3079,33 @@ def _exec_instant(act):
         log("SHOW 静音: %s%s" % ("、".join(target_label("bus", b) for b in ok) or "(无可写目标)",
                                 _skip_note(bad, "bus")))
     elif k == "scene":
+        # 全局 = 整场 recall（模拟器里就是切场景号，真台发 /scene/N/load）;
+        # 局部 = **不发场景号**，只把预设范围内的参数应用上去 —— 真台 OSC
+        # 没有"只 recall 一部分"的地址，选择性只能由客户端做。
+        mode = act.get("mode") or "global"
+        if mode == "partial":
+            snap = find_snapshot(act.get("presetId"))
+            if not snap:
+                # 绝不能退化成全量 recall：那会让"局部"变成"整台被换掉"
+                log("SHOW 场景 %d 局部调用失败: 找不到预设 #%s（已跳过，不做全量）"
+                    % (int(act.get("scene", 1)), act.get("presetId")))
+                return
+            _recall_instant(snap)      # 推子由时间轴渐变分支负责
+            log("SHOW 场景 %d 局部: 预设「%s」立即项已应用，推子 %.1f 秒归位（其余通道不动）"
+                % (int(act.get("scene", 1)), snap.get("name", ""),
+                   float(act.get("duration", 1.0) or 0.0)))
+            return
         with STATE.lock:
             STATE.scene = int(act.get("scene", 1))
-        log("SHOW 切换到场景 %d" % int(act.get("scene", 1)))
+        log("SHOW 切换到场景 %d（全局 recall）" % int(act.get("scene", 1)))
+    elif k == "preset":
+        snap = find_snapshot(act.get("presetId"))
+        if not snap:
+            log("SHOW 调用预设失败: 找不到 #%s（已跳过）" % act.get("presetId"))
+            return
+        _recall_instant(snap)
+        log("SHOW 调用预设「%s」立即项已应用，推子 %.1f 秒归位"
+            % (snap.get("name", ""), float(act.get("duration", 2.0) or 0.0)))
     elif k == "unmute_all":
         for i in range(1, 33):
             set_value("ch_on", i, 1, source="action")
@@ -3044,7 +3400,8 @@ def _clean_action(a, why=None):
     k = a.get("kind")
     if k not in ("mute", "mute_bus", "scene", "unmute_all", "wait",
                  "fade_all", "fade_odd_even", "fade_ch", "fade_bus",
-                 "fade_from", "fade_from_bus", "rel_db", "set", "osc"):
+                 "fade_from", "fade_from_bus", "rel_db", "set", "osc",
+                 "preset"):
         return _reject("不支持的动作类型「%s」" % (k if isinstance(k, str) else k))
 
     def num(key, default, lo, hi):
@@ -3081,6 +3438,24 @@ def _clean_action(a, why=None):
         out["buses"] = ids("bus", "buses", 1, SAVE_MAX["bus"])
     elif k == "scene":
         out["scene"] = int(num("scene", 1, 1, 99))
+        mode = a.get("mode") if a.get("mode") in ("global", "partial") else "global"
+        out["mode"] = mode
+        if mode == "partial":
+            # 局部调用必须挂一条预设：范围从预设来，找不到就明确拒绝，
+            # 不能"当作全局"静默执行（那种假成功最难查）
+            pid = int(num("presetId", 0, 0, 9999))
+            if pid <= 0:
+                return _reject("「局部调用场景」需要先选一个预设")
+            out["presetId"] = pid
+            out["duration"] = num("duration", 1.0, 0.05, 30.0)
+            out["curve"] = curve
+    elif k == "preset":
+        pid = int(num("presetId", 0, 0, 9999))
+        if pid <= 0:
+            return _reject("「调用预设」缺少预设编号")
+        out["presetId"] = pid
+        out["duration"] = num("duration", 2.0, 0.5, 15.0)
+        out["curve"] = curve
     elif k == "wait":
         out["duration"] = num("duration", 1.0, 0.5, 60.0)
     elif k == "fade_all":
@@ -3193,7 +3568,10 @@ def snapshot_state(since_log=None):
         "cards": SHOW_CARDS,
         "show": dict(SHOW_STATE),
         "events": list(EVENTS)[-6:],
-        "snapshots": [{"id": s["id"], "name": s["name"], "time": s["time"]} for s in SNAPSHOTS],
+        "snapshots": [{"id": s["id"], "name": s["name"], "time": s["time"],
+                       "count": s.get("count", 0),
+                       "scopeText": preset_scope_text(s.get("scope") or {})}
+                      for s in SNAPSHOTS],
         "recall": dict(RECALL_STATE),
         "quickKeys": QUICK_KEYS,
         "keyCfg": dict(KEY_CFG),
@@ -3984,9 +4362,18 @@ class WebHandler(BaseHTTPRequestHandler):
         elif path == "/api/snapshot":
             act = data.get("action")
             if act == "save":
-                snap = save_snapshot(data.get("name"))
+                snap = save_snapshot(data.get("name"), scope=data.get("scope"))
+                if snap["count"] <= 0:
+                    # 空范围 = 一条永远不会生效的预设，属于"假成功"，直接拒
+                    SNAPSHOTS[:] = [s for s in SNAPSHOTS if s["id"] != snap["id"]]
+                    self._send(400, "application/json",
+                               json.dumps({"ok": False, "error": "范围里没有可保存的参数"},
+                                          ensure_ascii=False).encode("utf-8"))
+                    return
                 self._send(200, "application/json",
-                           json.dumps({"ok": True, "id": snap["id"]}).encode())
+                           json.dumps({"ok": True, "id": snap["id"],
+                                       "count": snap["count"],
+                                       "scopeText": preset_scope_text(snap["scope"])}).encode())
             elif act == "recall":
                 try:
                     sid = int(data.get("id", 0))
@@ -4264,10 +4651,10 @@ WEB_PAGE = """<!DOCTYPE html>
   <div id="schedRow"></div>
   <div class="tilegrid" id="undoRow" style="grid-template-columns:repeat(auto-fill,minmax(220px,1fr))"></div>
   <div class="tilegrid" id="tileCards"></div>
-  <h3>📌 场景预设 (推子快照 · 点按回归)</h3>
+  <h3>📌 台面预设 (可选范围 · 点按回归)</h3>
   <div class="card"><div class="nm">保存当前台面为预设</div>
-    <div class="ds">记录全部输入(32 通道 + Aux/USB/FX 返回) + 输出(Bus/Matrix) + DCA + 主输出的推子与静音;回归时静音立即恢复,所有推子像电动推子一样平滑滑回。</div>
-    <button onclick="saveSnap()">💾 保存预设</button></div>
+    <div class="ds">可以只记推子/静音/名称/DCA 归属/FX 整槽，也能只挑几路。回归时<b>只写范围内的参数</b>——没勾的通道一个字节都不动，静音立即恢复、推子平滑滑回。</div>
+    <button onclick="openSnapModal()">💾 保存预设（可选范围）</button></div>
   <div id="snaplist"></div>
 </div>
 
@@ -4467,7 +4854,9 @@ WEB_PAGE = """<!DOCTYPE html>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
       <select id="caKind" onchange="updCaParams()" class="nkin">
         <option value="mute">静音通道 (可多选)</option><option value="mute_bus">静音 Bus (可多选)</option>
-        <option value="scene">切换场景</option><option value="unmute_all">全部取消静音</option>
+        <option value="scene">切换场景（全局 / 局部）</option>
+        <option value="preset">📌 调用预设（带范围与渐变）</option>
+        <option value="unmute_all">全部取消静音</option>
         <option value="wait">等待 / 停顿</option>
         <option value="fade_all">全体推子渐变</option><option value="fade_odd_even">奇偶过渡</option>
         <option value="fade_ch">通道渐变 (可多选)</option><option value="fade_bus">Bus 渐变 (可多选)</option>
@@ -4488,6 +4877,32 @@ WEB_PAGE = """<!DOCTYPE html>
     <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px">
       <button style="background:var(--card2);color:var(--txt)" onclick="closeCardModal()">取消</button>
       <button id="cardSaveBtn" style="background:var(--green)" onclick="saveCard()">💾 保存卡片</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="snapModal" onclick="if(event.target===this)closeSnapModal()">
+  <div class="mdlg" role="dialog" aria-label="保存台面预设">
+    <div class="mhd"><b>📌 保存台面预设</b>
+      <button class="mclose" onclick="closeSnapModal()" aria-label="关闭">✕</button></div>
+    <div class="ds">先选「存哪些组」，再选「存哪些参数」；编号留空=该组全部，也可以只挑几路（如 1-8,13-16）。保存按当前台面取值。</div>
+    <input id="snapName" class="nkin" style="width:100%;margin:8px 0" maxlength="20"
+           placeholder="预设名称（可选），如：开场-人声突出">
+    <div style="display:flex;gap:10px;align-items:flex-start;margin:8px 0">
+      <b style="font-size:12px;color:var(--sub);min-width:34px;padding-top:6px">组</b>
+      <div id="snapGroups" class="chipgrid" style="flex:1"></div></div>
+    <div style="display:flex;gap:10px;align-items:flex-start;margin:8px 0">
+      <b style="font-size:12px;color:var(--sub);min-width:34px;padding-top:6px">参数</b>
+      <div id="snapParams" class="chipgrid" style="flex:1"></div></div>
+    <div style="display:flex;gap:10px;align-items:center;margin:8px 0">
+      <b style="font-size:12px;color:var(--sub);min-width:34px">编号</b>
+      <input id="snapIdx" class="nkin" style="flex:1;min-width:150px"
+             placeholder="留空=全部，如 1-8,13-16">
+    </div>
+    <div class="ds" id="snapCount" style="margin:4px 0;color:var(--accent)"></div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:12px">
+      <button style="background:var(--card2);color:var(--txt)" onclick="closeSnapModal()">取消</button>
+      <button style="background:var(--green)" onclick="doSaveSnap()">💾 保存</button>
     </div>
   </div>
 </div>
@@ -4646,7 +5061,96 @@ function stopShow(){ fetch('/api/show',{method:'POST',headers:{'Content-Type':'a
     body:JSON.stringify({id:null})}); }
 function api(path,obj){ fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify(obj)}); }
-function saveSnap(){ api('/api/snapshot',{action:'save'}); }
+// ---- 台面预设：可选范围的保存 ----
+const PS_GROUPS=[['ch','输入通道'],['bus','Mix Bus'],['dca','DCA'],['auxin','Aux In'],
+  ['usb','USB'],['fxret','FX 返回'],['mtx','Matrix'],['main','主输出'],
+  ['fx','FX 机架'],['scene','场景号']];
+const PS_PARAMS=[['fader','推子'],['on','静音'],['name','名称'],['dca','DCA 归属']];
+const PS_CAP={ch:32,bus:16,dca:8,auxin:6,usb:2,fxret:8,mtx:6,main:1,fx:8,scene:1};
+const PS_PATH_GROUPS=['ch','bus','dca','auxin','usb','fxret','mtx','main'];
+let psGroups=['ch','bus','dca','auxin','usb','fxret','mtx','main'], psParams=['fader','on'];
+function openSnapModal(){
+  psGroups=['ch','bus','dca','auxin','usb','fxret','mtx','main']; psParams=['fader','on'];
+  $('#snapName').value=''; $('#snapIdx').value='';
+  renderPsChips(); $('#snapModal').classList.add('on'); document.body.style.overflow='hidden';
+}
+function closeSnapModal(){ $('#snapModal').classList.remove('on'); document.body.style.overflow=''; }
+function psUsable(g,p){
+  if(p==='dca') return g==='ch';
+  if(p==='fader'||p==='on'||p==='name') return g!=='fx'&&g!=='scene';
+  return false;
+}
+function renderPsChips(){
+  const gEl=$('#snapGroups'), pEl=$('#snapParams');
+  if(!gEl||!pEl) return;
+  gEl.innerHTML=PS_GROUPS.map(([g,l])=>{
+    const on=psGroups.indexOf(g)>=0;
+    return `<span class="chip${on?' on':''}" onclick="psTog('g','${g}',this)">${l}</span>`;
+  }).join('');
+  pEl.innerHTML=PS_PARAMS.map(([p,l])=>{
+    const usable=psGroups.some(g=>psUsable(g,p));
+    const on=psParams.indexOf(p)>=0;
+    return `<span class="chip${on?' on':''}${usable?'':' dis'}" ${usable?'':'title="当前所选组不支持该参数"'}
+      onclick="psTog('p','${p}',this)">${l}</span>`;
+  }).join('');
+  psCount();
+}
+function psTog(what,v,el){
+  if(el.classList.contains('dis')) return;
+  const arr=what==='g'?psGroups:psParams;
+  const i=arr.indexOf(v);
+  if(i>=0){ if(arr.length<=1) return; arr.splice(i,1); } else arr.push(v);
+  renderPsChips();
+}
+function psIdxList(g){
+  const raw=($('#snapIdx')?$('#snapIdx').value:'').trim();
+  if(!raw) return null;
+  const cap=PS_CAP[g]||0, out=[];
+  raw.split(',').forEach(part=>{
+    part=part.trim();
+    const m=part.match(/^(\\d+)\\s*-\\s*(\\d+)$/);
+    if(m){
+      let a=+m[1], b=+m[2]; if(a>b){const t=a;a=b;b=t;}
+      for(let i=a;i<=b;i++){ if(i>=1&&i<=cap&&out.indexOf(i)<0) out.push(i); }
+    } else {
+      const n=+part;
+      if(n>=1&&n<=cap&&out.indexOf(n)<0) out.push(n);
+    }
+  });
+  return out.length?out.sort((x,y)=>x-y):null;
+}
+function psScope(){
+  const idx={};
+  PS_PATH_GROUPS.forEach(g=>{
+    if(psGroups.indexOf(g)<0) return;
+    const list=psIdxList(g);
+    if(list&&g!=='main') idx[g]=list;
+  });
+  // FX 机架/场景号没有"推子/静音"这类参数：只勾它们时自动带上整槽/场景，
+  // 否则会存出一条"范围里什么都没有"的空预设
+  const params=psParams.slice();
+  if(psGroups.indexOf('fx')>=0 && params.indexOf('slot')<0) params.push('slot');
+  if(psGroups.indexOf('scene')>=0 && params.indexOf('scene')<0) params.push('scene');
+  return {groups:psGroups.slice(),params:params,indices:idx};
+}
+function psCount(){
+  const sc=psScope(); let n=0;
+  PS_PATH_GROUPS.forEach(g=>{
+    if(psGroups.indexOf(g)<0) return;
+    const rows=(g==='main')?1:(sc.indices[g]?sc.indices[g].length:(PS_CAP[g]||0));
+    psParams.forEach(p=>{ if(psUsable(g,p)) n+=rows; });
+  });
+  if(psGroups.indexOf('fx')>=0) n+=8*4+8*3;
+  if(psGroups.indexOf('scene')>=0) n+=1;
+  const el=$('#snapCount');
+  if(el) el.textContent='将保存约 '+n+' 个值（FX 整槽按 8 槽 × 4 属性 + 算法参数计）';
+}
+function doSaveSnap(){
+  const sc=psScope();
+  if(!sc.groups.length) return;
+  api('/api/snapshot',{action:'save',name:($('#snapName').value||'').trim(),scope:sc});
+  closeSnapModal();
+}
 function recallSnap(id,sel){ api('/api/snapshot',{action:'recall',id:id,seconds:+sel.value}); }
 function delSnap(id){ api('/api/snapshot',{action:'delete',id:id}); }
 function stopRecall(){ api('/api/snapshot',{action:'stop'}); }
@@ -4896,7 +5400,8 @@ const ST_PLABEL={fader:'推子 %',on:'开关 (1开启/0静音)',mix:'混合比 (
   time:'混响时间 (秒)',predelay:'预延迟 (毫秒)',damp:'阻尼 (0-1)',
   type:'算法 (HALL/PLATE/ROOM/…)',name:'名称 (文本)',load:'切场景'};
 function numIn(id,label,def){
-  return `<input id="${id}" type="number" value="${def}" placeholder="${label}" class="nkin" style="width:84px">`;
+  return `<input id="${id}" type="number" value="${def}" placeholder="${label}"
+    title="${label}" aria-label="${label}" class="nkin" style="width:84px">`;
 }
 function curveSel(){
   return `<select id="caCurve" class="nkin"><option value="linear">直线</option><option value="ease_out">先快后慢</option><option value="ease_in">先慢后快</option><option value="smooth">S 形</option></select>`;
@@ -4922,7 +5427,16 @@ function updCaParams(){
   let h='';
   if(CA_MULTI[k]) h+=chipGrid(CA_MULTI[k],CA_MULTI[k]==='ch'?32:16);
   if(k==='mute'||k==='mute_bus'){ $('#caParams').innerHTML=h; return; }
-  if(k==='scene') h+=numIn('caScene','场景号',1);
+  if(k==='scene'){
+    h+=`<span class="ds" style="margin:0">场景</span>`+numIn('caScene','场景号',1);
+    h+=`<select id="caSceneMode" class="nkin" onchange="caSceneModeChg()">`
+      +`<option value="global">全局调用（整场还原）</option>`
+      +`<option value="partial">局部调用（只动预设范围）</option></select>`;
+    h+=`<span id="caSceneExtra" style="display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap"></span>`;
+    h+=`<div class="ds" id="caSceneNote" style="width:100%;margin:2px 0 0;color:#d9a13c"></div>`;
+  }
+  else if(k==='preset') h+=`<select id="caPreset" class="nkin">${presetOpts()}</select>`
+    +numIn('caSec','渐变秒数',2)+`<span class="ds" style="margin:0">秒</span>`+curveSel();
   else if(k==='wait') h+=numIn('caSec','等待秒数',3);
   else if(k==='unmute_all'){ /* 无参数 */ }
   else if(k==='fade_all') h+=numIn('caP1','目标 %',0)+numIn('caSec','秒数',3)+curveSel();
@@ -4940,6 +5454,7 @@ function updCaParams(){
   $('#caParams').innerHTML=h;
   if(k==='rel_db') updRelChips();
   if(k==='set') stGroupChg();
+  if(k==='scene') caSceneModeChg();
 }
 // ---- 通用设置表单 ----
 function setFormHTML(){
@@ -4949,7 +5464,8 @@ function setFormHTML(){
     + `<select id="stParam" class="nkin" onchange="stParamChg()"></select>`
     + `<span id="stValWrap"></span>`
     + `<input id="stDur" type="number" value="0" min="0" step="0.5" class="nkin" style="width:104px"
-             title="仅推子类支持渐变;0 = 瞬间到位">`;
+             title="仅推子类支持渐变;0 = 瞬间到位">`
+    + `<button type="button" class="learnbtn" onclick="learnSet()">⤓ 抓取台面值</button>`;
 }
 function stGroupChg(){
   const g=$('#stGroup').value;
@@ -5000,6 +5516,73 @@ function learnTo(){
   const el=document.getElementById('caP1');
   if(el) el.value=Math.round(src.fader*100);
   hideCardErr();
+}
+function presetOpts(){
+  const list=(S.snapshots||[]);
+  if(!list.length) return '<option value="0">（还没有预设：先到卡片页「保存预设」）</option>';
+  return list.map(sp=>`<option value="${sp.id}">${esc(sp.name)} · ${sp.count||0} 值</option>`).join('');
+}
+function caSceneModeChg(){
+  const modeEl=$('#caSceneMode'), box=$('#caSceneExtra'), note=$('#caSceneNote');
+  if(!modeEl||!box) return;
+  if(modeEl.value==='partial'){
+    box.innerHTML=`<select id="caScenePreset" class="nkin">${presetOpts()}</select>`
+      +numIn('caSec','推子秒数',1)+`<span class="ds" style="margin:0">秒</span>`+curveSel();
+    if(note) note.textContent='局部调用不发场景号：只把预设范围内的参数应用过来，其余通道一个字节都不动。';
+  } else {
+    box.innerHTML='';
+    if(note) note.textContent='全局调用会按场景整场还原（包括卡片里没写过的通道）；真台上还受 Scene Safes 影响。';
+  }
+}
+// 通用设置：从当前台面抓一个值填进来（省得手抄 dB / 混响秒数）
+function curValue(g,p,i){
+  try{
+    if(g==='fx'){
+      const fx=(S.fx||[]).find(x=>x.slot===i);
+      if(!fx) return null;
+      if(p==='type') return fx.type||'';
+      if(p==='name') return fx.name||'';
+      if(p==='on') return fx.on?1:0;
+      if(p==='mix') return fx.mix;
+      if(p==='time'||p==='predelay'||p==='damp'){
+        const v=fx[p];
+        return (v===undefined||v===null)?null:v;
+      }
+      return null;
+    }
+    if(g==='scene') return +S.scene||1;
+    const row=(g==='main')?S.main:(S[g]||{})[String(i)];
+    if(!row) return null;
+    if(p==='on') return row.on?1:0;
+    if(p==='name'){ const nm=(S.names||{})[g]||{}; return nm[String(i)]||''; }
+    if(p==='fader') return row.fader;
+  }catch(e){}
+  return null;
+}
+function learnSet(){
+  const g=$('#stGroup').value, p=$('#stParam').value;
+  const i=(g==='main')?0:(+($('#stId').value)||1);
+  const v=curValue(g,p,i);
+  if(v===null){ cardErr('读不到「'+g+' '+i+'」的当前值（编号越界，或该参数尚未建模）'); return; }
+  if(p==='on'||p==='load'){
+    const sel=$('#stValSel'); if(sel) sel.value=String(v?1:0);
+    cardInfo('已抓取：'+(v?'开启':'静音'));
+  } else if(p==='type'){
+    const sel=$('#stValSel'); if(sel) sel.value=v||'';
+    cardInfo('已抓取算法：'+(v||'(空)'));
+  } else if(p==='name'){
+    const el=$('#stValTxt'); if(el) el.value=v||'';
+    cardInfo('已抓取名称：'+(v||'(空)'));
+  } else {
+    const el=$('#stValNum');
+    if(el) el.value=(p==='fader')?Math.round(v*100):v;
+    cardInfo('已抓取：'+((p==='fader')?Math.round(v*100)+'%':v));
+  }
+}
+function cardInfo(msg){
+  const e=$('#cardErr'); if(!e) return;
+  e.textContent=msg; e.classList.add('on'); e.style.color='var(--green)';
+  setTimeout(()=>{ e.style.color=''; },2200);
 }
 function pct(v){ return Math.min(Math.max(+(v||0),0),100)/100; }
 function addAct(){
@@ -5067,7 +5650,25 @@ function addAct(){
     else if(k==='fade_ch'){ a.chs=sel; a.to=pct(g('caP1')); a.duration=Math.max(+g('caSec')||3,0.5); a.curve=g('caCurve'); }
     else { a.buses=sel; a.to=pct(g('caP1')); a.duration=Math.max(+g('caSec')||3,0.5); a.curve=g('caCurve'); }
   }
-  else if(k==='scene') a.scene=+(g('caScene')||1);
+  else if(k==='scene'){
+    a.scene=+(g('caScene')||1);
+    const mode=g('caSceneMode')||'global';
+    a.mode=mode;
+    if(mode==='partial'){
+      const pid=+(g('caScenePreset')||0);
+      if(!pid){ cardErr('局部调用需要先选一条预设（没有就先到卡片页保存一条）'); return; }
+      a.presetId=pid;
+      a.duration=Math.max(+g('caSec')||1,0.05);
+      a.curve=g('caCurve');
+    }
+  }
+  else if(k==='preset'){
+    const pid=+(g('caPreset')||0);
+    if(!pid){ cardErr('请先选要调用的预设'); return; }
+    a.presetId=pid;
+    a.duration=Math.max(+g('caSec')||2,0.5);
+    a.curve=g('caCurve');
+  }
   else if(k==='wait') a.duration=Math.max(+g('caSec')||3,0.5);
   else if(k==='unmute_all'){ /* 无参数 */ }
   else if(k==='fade_all'){ a.to=pct(g('caP1')); a.duration=Math.max(+g('caSec')||3,0.5); a.curve=g('caCurve'); }
@@ -5082,7 +5683,17 @@ function actTxt(a){
   const lst=(g,arr)=>(arr||[]).map(i=>dispName(g,i)).join('、');
   if(a.kind==='mute') return '静音 '+lst('ch',a.chs||(a.ch?[a.ch]:[]));
   if(a.kind==='mute_bus') return '静音 '+lst('bus',a.buses||(a.bus?[a.bus]:[]));
-  if(a.kind==='scene') return '切到场景 '+a.scene;
+  if(a.kind==='scene'){
+    if((a.mode||'global')==='partial'){
+      const sp=(S.snapshots||[]).find(x=>x.id===a.presetId);
+      return `场景 ${a.scene} 局部（${sp?'预设「'+sp.name+'」':'预设已删除'}）`;
+    }
+    return '切到场景 '+a.scene;
+  }
+  if(a.kind==='preset'){
+    const sp=(S.snapshots||[]).find(x=>x.id===a.presetId);
+    return `调用预设「${sp?sp.name:'已删除'}」`;
+  }
   if(a.kind==='unmute_all') return '全部取消静音';
   if(a.kind==='wait') return '等待 '+(+a.duration||1)+' 秒';
   if(a.kind==='fade_all') return `全体推子→${t(a.to)} ${a.duration}秒 ${cv[a.curve]}`;
@@ -5821,6 +6432,7 @@ function render(){
   setHTML('snaplist',S.snapshots.map(sp=>{
     const run=rc===sp.id;
     return `<div class="card"><div class="nm">📌 ${esc(sp.name)} <small style="color:var(--sub);font-weight:400">· ${sp.time}</small></div>
+      <div class="ds" style="margin:2px 0 6px">${esc(sp.scopeText||'全部通道 · 推子+静音')} · ${sp.count||0} 个值</div>
       ${run
         ?`<button class="stop" onclick="stopRecall()">■ 停止回归</button>
           <div class="bar"><i style="width:${Math.round(S.recall.progress*100)}%"></i></div>
