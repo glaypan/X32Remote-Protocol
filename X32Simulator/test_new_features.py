@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """新功能综合回归: DCA级联/rel_db/并行at/卡片链/step显示/置顶/批量写入/日志增量/订阅计数"""
+import os
 import json, math, socket, struct, time, urllib.request
 
 WEB = "http://127.0.0.1:28080"
@@ -77,7 +78,7 @@ check("DCA1 推满 → 成员 ch1 升到顶", db1 > 0.99, "ch1=%.3f" % db1)
 check("非成员 ch9 不受影响 (仍 0.4)", abs(db9 - 0.4) < 0.01, "ch9=%.3f" % db9)
 # OSC 位掩码: 把 ch9 归入 DCA1 (bit0=1)
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock.sendto(osc_msg("/ch/09/mix/dca", 1), ("127.0.0.1", 10023))
+sock.sendto(osc_msg("/ch/09/mix/dca", 1), ("127.0.0.1", int(os.environ.get("X32_TEST_PORT", "10023"))))
 time.sleep(0.3)
 post("/api/set", {"kind": "dca", "param": "fader", "idx": 1, "value": 0.75})
 time.sleep(0.3)

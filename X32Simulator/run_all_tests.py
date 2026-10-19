@@ -25,6 +25,8 @@ PY = sys.executable
 # 本地请求不经过任何代理（否则 ZeroTier/系统代理会让 127.0.0.1 也走代理）
 OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
+OSC_PORT = int(os.environ.get("X32_TEST_PORT", "10023"))   # 端口被别的工具占用时可覆盖
+
 FAKE_CFG = os.path.join(BASE, "_regr_fake.json")
 BR_CFG = os.path.join(BASE, "_regr_bridge.json")
 
@@ -49,6 +51,7 @@ _NO_PROXY_ENV = dict(os.environ)
 for _k in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY",
            "all_proxy", "ALL_PROXY"):
     _NO_PROXY_ENV.pop(_k, None)
+_NO_PROXY_ENV["X32_TEST_PORT"] = str(OSC_PORT)
 _NO_PROXY_ENV["no_proxy"] = "127.0.0.1,localhost"
 _NO_PROXY_ENV["NO_PROXY"] = "127.0.0.1,localhost"
 
@@ -115,7 +118,7 @@ def group_single(name, script, args, web_port):
 def group_bridge():
     """桥接双实例"""
     fake = start(["--port", "20023", "--web-port", "28081", "--config", FAKE_CFG])
-    br = start(["--port", "10023", "--web-port", "28080",
+    br = start(["--port", str(OSC_PORT), "--web-port", "28080",
                 "--bridge", "127.0.0.1:20023", "--config", BR_CFG])
     try:
         if not wait_web(28081, 45):
@@ -137,11 +140,13 @@ def group_b3():
 # 组名 -> (显示名, 执行函数)
 GROUPS = [
     ("selftest", ("自检 (OSC 全流程)", lambda: group_single(
-        "selftest", "selftest.py", ["--port", "10023", "--web-port", "28080"], 28080))),
+        "selftest", "selftest.py", ["--port", str(OSC_PORT), "--web-port", "28080"], 28080))),
     ("conflict", ("冲突策略", lambda: group_single(
-        "conflict", "test_conflict.py", ["--port", "10023", "--web-port", "28080"], 28080))),
+        "conflict", "test_conflict.py", ["--port", str(OSC_PORT), "--web-port", "28080"], 28080))),
     ("new_features", ("新特性 (时间轴/曲线/增量)", lambda: group_single(
-        "new_features", "test_new_features.py", ["--port", "10023", "--web-port", "28080"], 28080))),
+        "new_features", "test_new_features.py", ["--port", str(OSC_PORT), "--web-port", "28080"], 28080))),
+    ("presets", ("预设范围 / 局部场景", lambda: group_single(
+        "presets", "test_presets.py", ["--port", str(OSC_PORT), "--web-port", "28080"], 28080))),
     ("bridge", ("桥接双实例", group_bridge)),
     ("b3_scan", ("B3 自动发现", group_b3)),
 ]

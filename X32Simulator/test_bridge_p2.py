@@ -3,10 +3,12 @@
 假真台: 127.0.0.1:20023 (Web 28081)
 桥接实例: 127.0.0.1:10023 (Web 28080, --bridge 指向假真台)
 """
+import os
 import json, socket, struct, time, urllib.request
 
 BR_WEB, FC_WEB = "http://127.0.0.1:28080", "http://127.0.0.1:28081"
-BR_OSC, FC_OSC = ("127.0.0.1", 10023), ("127.0.0.1", 20023)
+BR_OSC = ("127.0.0.1", int(os.environ.get("X32_TEST_PORT", "10023")))
+FC_OSC = ("127.0.0.1", 20023)
 PASS, FAIL = 0, []
 
 

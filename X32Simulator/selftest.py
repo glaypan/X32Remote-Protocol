@@ -5,6 +5,7 @@
 用法: python3 selftest.py [模拟器IP] (默认 127.0.0.1)
 """
 
+import os
 import math
 import socket
 import struct
@@ -15,7 +16,7 @@ sys.path.insert(0, __file__.rsplit("\\", 1)[0] if "\\" in __file__ else ".")
 from x32_simulator import decode_packet, encode_message, encode_bundle, OscMsg
 
 HOST = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
-PORT = 10023
+PORT = int(os.environ.get("X32_TEST_PORT", "10023"))
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 sock.settimeout(2.0)
 sock.bind(("127.0.0.1", 0))

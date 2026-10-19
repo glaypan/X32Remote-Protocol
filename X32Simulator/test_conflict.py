@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """冲突策略端到端测试: 手动干预 → 只停该通道, 其余通道/后续动作继续, 有通知。"""
+import os
 import json, socket, struct, time, urllib.request
 
 WEB = "http://127.0.0.1:28080"
@@ -78,7 +79,7 @@ check("渐变进行中 (ch6 已在上升)", ch6_a > 0.12, "ch6=%.3f" % ch6_a)
 
 # 4. 模拟手动干预: 外部 OSC 把通道05推子打到 0.15
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock.sendto(osc_msg("/ch/05/mix/fader", 0.15), ("127.0.0.1", 10023))
+sock.sendto(osc_msg("/ch/05/mix/fader", 0.15), ("127.0.0.1", int(os.environ.get("X32_TEST_PORT", "10023"))))
 time.sleep(1.6)
 
 ch5_b, ch6_b = fader("ch", 5), fader("ch", 6)
