@@ -95,183 +95,6 @@ SHOW_CARDS = [
 
 
 # ==================================================================
-# ==== x32sim/consts.py
-# ==================================================================
-# -*- coding: utf-8 -*-
-"""x32sim/consts — 数据表: 容量/默认名/地址模板/动作与预设白名单/FX 元数据"""
-
-
-# ---------------------------------------------------------------- 混响 / FX 机架
-# X32 有 8 个 FX 槽. 混响类算法的参数**索引随算法变化**(官方文档里 Hall/Plate/Room/
-# Chamber/Vintage 各有自己的参数页), 因此这里把"时间/预延迟/阻尼"抽象出来, 索引集中
-# 在这一张表里 —— 真机联调时只需改这张表, 不用动逻辑。
-#   time     混响时间 (RT) 的参数索引, 值单位 = 秒
-#   predelay 预延迟的参数索引,       值单位 = 毫秒
-#   damp     阻尼/高频衰减的参数索引, 值单位 = 0..1
-#   tmin/tmax 该算法混响时间的合法范围 (秒), Tap 换算结果按此钳制
-FX_COUNT = 8
-# ⚠️ 效果库**属于控台驱动**，不是全局表（见「控台驱动层」一节）。
-#    同一个算法名在不同控台上参数索引可能不同，所以任何"按算法查参数索引"的
-#    地方都必须走 fx_algos()（= 当前控台的库），不能直接读某一张表 —— 否则
-#    换控台后就会出现"参数串味"（把 A 台的时间参数写到了 B 台的别的位置）。
-#
-#    X32 与 M32 使用**同一套效果引擎**（M32 是 Midas 贴牌的同代产品，固件效果器
-#    为同一 Klark Teknik 引擎），因此两张表当前内容一致；但**分别持有**，将来
-#    某一版固件效果库出现出入时，只需改对应的那一张，公共代码与卡片动作都不动。
-X32_FX_ALGOS = {
-    "HALL":    {"label": "大厅混响", "time": 1, "predelay": 2, "damp": 4, "tmin": 0.4, "tmax": 10.0},
-    "PLATE":   {"label": "板式混响", "time": 1, "predelay": 2, "damp": 4, "tmin": 0.3, "tmax": 8.0},
-    "ROOM":    {"label": "房间混响", "time": 1, "predelay": 2, "damp": 4, "tmin": 0.2, "tmax": 5.0},
-    "CHAMBER": {"label": "密室混响", "time": 1, "predelay": 2, "damp": 4, "tmin": 0.3, "tmax": 6.0},
-    "VINTAGE": {"label": "复古混响", "time": 1, "predelay": 2, "damp": 4, "tmin": 0.3, "tmax": 6.0},
-}
-M32_FX_ALGOS = {k: dict(v) for k, v in X32_FX_ALGOS.items()}   # 独立副本，便于日后分化
-# 出厂默认混响参数 (秒 / 毫秒 / 0..1), 索引与上面的表对应
-REVERB_DEFAULTS = {
-    "HALL":    {1: 2.40, 2: 25.0, 4: 0.45},
-    "PLATE":   {1: 1.80, 2: 15.0, 4: 0.30},
-    "ROOM":    {1: 1.10, 2: 12.0, 4: 0.55},
-    "CHAMBER": {1: 1.60, 2: 20.0, 4: 0.40},
-    "VINTAGE": {1: 1.50, 2: 18.0, 4: 0.35},
-}
-
-
-# Tap 定拍 / 时值换算
-TAP_INTERVAL_MIN = 0.15      # 两次点击靠得比这还近 → 抖动, 忽略
-TAP_RESET_GAP = 2.0          # 超过这么久没点 → 视为新的一组, 重头开始
-TAP_MAX_INTERVALS = 8        # 最多用最近 8 个间隔求均值
-TAP_BPM_MIN, TAP_BPM_MAX = 30.0, 300.0
-NOTE_BEATS = {"1/16": 0.25, "1/8": 0.5, "1/4": 1.0, "1/2": 2.0, "1": 4.0, "2": 8.0}
-
-
-# 各组通道数量 (名称读写与编辑器共用); main 单独处理 idx=0
-NAME_COUNTS = {"ch": 32, "bus": 16, "dca": 8, "auxin": 6, "usb": 2, "fxret": 8, "mtx": 6}
-# 出厂默认名称: 与内置卡片/控制键呼应 (15=音乐, Bus15=耳返), 均可在网页或 OSC 里改
-DEFAULT_NAMES = {
-    ("ch", 1): "底鼓", ("ch", 2): "军鼓", ("ch", 3): "踩镲", ("ch", 4): "嗵鼓",
-    ("ch", 5): "吊镲", ("ch", 6): "贝斯", ("ch", 7): "电吉1", ("ch", 8): "电吉2",
-    ("ch", 9): "木吉", ("ch", 10): "键盘1", ("ch", 11): "键盘2", ("ch", 12): "采样",
-    ("ch", 13): "无线麦1", ("ch", 14): "主持麦", ("ch", 15): "音乐", ("ch", 16): "视频声",
-    ("bus", 1): "鼓监听", ("bus", 2): "乐队监听", ("bus", 3): "主唱监听", ("bus", 15): "耳返",
-    ("dca", 1): "乐队", ("dca", 2): "人声", ("dca", 3): "鼓组",
-    ("main", 0): "主输出",
-}
-
-
-# 网页分组前缀 → 推子/静音 kind 映射 (/api/set 与 /api/setbatch 共用)
-SET_KINDMAP = {"ch": {"fader": "ch_fader", "on": "ch_on"},
-               "bus": {"fader": "bus_fader", "on": "bus_on"},
-               "dca": {"fader": "dca_fader", "on": "dca_on"},
-               "main": {"fader": "main_fader", "on": "main_on"},
-               "auxin": {"fader": "auxin_fader", "on": "auxin_on"},
-               "usb": {"fader": "usb_fader", "on": "usb_on"},
-               "fxret": {"fader": "fxret_fader", "on": "fxret_on"},
-               "mtx": {"fader": "mtx_fader", "on": "mtx_on"}}
-
-
-FADER_ADDR = {"ch_fader": "/ch/%02d/mix/fader",
-              "bus_fader": "/bus/%02d/mix/fader",
-              "dca_fader": "/dca/%02d/fader",
-              "auxin_fader": "/auxin/%02d/mix/fader",
-              "usb_fader": "/usb/%02d/mix/fader",
-              "fxret_fader": "/fxret/%02d/mix/fader",
-              "mtx_fader": "/mtx/%02d/mix/fader",
-              "main_fader": "/main/st/mix/fader"}
-ON_ADDR = {"ch_on": "/ch/%02d/mix/on",
-           "bus_on": "/bus/%02d/mix/on",
-           "dca_on": "/dca/%02d/on",
-           "auxin_on": "/auxin/%02d/mix/on",
-           "usb_on": "/usb/%02d/mix/on",
-           "fxret_on": "/fxret/%02d/mix/on",
-           "mtx_on": "/mtx/%02d/mix/on",
-           "main_on": "/main/st/mix/on"}
-KIND_LABEL = {"ch": "通道", "bus": "输出Bus", "dca": "DCA", "main": "Main",
-              "auxin": "AuxIn", "usb": "USB", "fxret": "FX返回", "mtx": "Matrix",
-              "fx_par": "FX参数", "fx_type": "FX算法", "fx_name": "FX名称",
-              "fx_on": "FX开关", "fx_mix": "FX混合比"}
-
-# ---- 预设范围：组 → 该组能存的参数 -------------------------------------
-# 为什么要有"范围"：以前一条预设永远是"79 路 × 推子+静音"的全量回归，用户想只还原
-# 人声那几路做不到，一动就是整台。范围把"存什么"和"还原什么"绑在一起，
-# 回归只写范围内的键 —— 没勾的通道一个字节都不碰。
-#   fader/on/name 是 79 路通用三项；dca 只对输入通道有意义（位掩码归属）；
-#   FX 整槽存（算法/名称/开关/混合比/参数）—— 参数号随算法变化，拆开存没有意义；
-#   scene 只记录当前场景号（回归时不发 OSC，发不发由卡片的场景动作决定）。
-PRESET_GROUP_PARAMS = {
-    "ch": ("fader", "on", "name", "dca"),
-    "bus": ("fader", "on", "name"),
-    "dca": ("fader", "on", "name"),
-    "auxin": ("fader", "on", "name"),
-    "usb": ("fader", "on", "name"),
-    "fxret": ("fader", "on", "name"),
-    "mtx": ("fader", "on", "name"),
-    "main": ("fader", "on", "name"),
-    "fx": ("slot",),
-    "scene": ("scene",),
-}
-PRESET_GROUP_LABEL = {"ch": "输入通道", "bus": "Mix Bus", "dca": "DCA",
-                      "auxin": "Aux In", "usb": "USB", "fxret": "FX 返回",
-                      "mtx": "Matrix", "main": "主输出", "fx": "FX 机架",
-                      "scene": "场景号"}
-PRESET_PARAM_LABEL = {"fader": "推子", "on": "静音", "name": "名称",
-                      "dca": "DCA 归属", "slot": "整槽", "scene": "当前场景"}
-PRESET_DEFAULT_SCOPE = {
-    "groups": ["ch", "bus", "dca", "auxin", "usb", "fxret", "mtx", "main"],
-    "params": ["fader", "on"],
-    "indices": {},
-}
-
-
-FADE_ACT_KINDS = ("fade_all", "fade_odd_even", "fade_ch", "fade_bus",
-                  "fade_from", "fade_from_bus", "rel_db")
-
-
-# ---------------------------------------------------------------- 通用动作 set
-#
-# 背景: 原有 12 个动作是"常见演出套装"（全体渐变 / 奇偶过渡 / 相对增减 dB …），
-# 覆盖面广但补不全 —— 例如"把 DCA 3 拉到 80%""把 FX1 混响时间改成 2.4 秒"就做不到。
-#
-# 通用动作把它收敛成一件事: 指定**目标**和**值**。
-#   {"kind":"set", "target":{"group":"dca","id":3,"param":"fader"}, "value":0.8}
-#   {"kind":"set", "target":{"group":"fx","id":1,"param":"time"}, "value":2.4}
-#   {"kind":"set", "target":{"group":"scene","id":5}}
-#   target 里带 duration>0 时走渐变 (仅 param="fader" 有意义)。
-#
-# ⚠️ target 描述的是**语义**（哪个分组的第几路、改哪个参数），不含任何协议信息；
-#    落到真实地址的活交给 ConsoleProfile（见"控台驱动层"）。所以同一个 set 动作
-#    天然跨控台 —— 这不是额外做的适配，而是它本来就走在语义管道上。
-
-SET_GROUPS = ("ch", "bus", "dca", "main", "auxin", "usb", "fxret", "mtx",
-              "fx", "scene")
-SET_PARAMS = {
-    "ch": ("fader", "on"), "bus": ("fader", "on"), "dca": ("fader", "on"),
-    "main": ("fader", "on"), "auxin": ("fader", "on"), "usb": ("fader", "on"),
-    "fxret": ("fader", "on"), "mtx": ("fader", "on"),
-    "fx": ("type", "name", "on", "mix", "time", "predelay", "damp"),
-    "scene": ("load",),
-}
-SET_GROUP_LABEL = {"ch": "通道", "bus": "Bus", "dca": "DCA", "main": "主输出",
-                   "auxin": "AuxIn", "usb": "USB", "fxret": "FX返回",
-                   "mtx": "Matrix", "fx": "FX", "scene": "场景"}
-SET_PARAM_LABEL = {"fader": "推子", "on": "开关", "type": "算法", "name": "名称",
-                   "mix": "混合比", "time": "混响时间", "predelay": "预延迟",
-                   "damp": "阻尼", "load": "调用"}
-
-
-CURVES = ("linear", "ease_out", "ease_in", "smooth")
-
-
-# 保存期只做**格式**清洗：防负数、防几百几千这种荒唐值。
-# 真正的范围校验在**执行期**做（target_exists / _fade_targets_for 的过滤），
-# 这样卡片天然跨控台 —— 在 32 路的台子上存下"写到第 40 路"的卡片，
-# 换到 48/64 路的台子就能直接生效，而不是保存时就被钳死成 32。
-# （曾经的写法在保存时就按当前控台规模钳 id，与"换到 64 通道后台子能写到 64 路"
-#   的注释自相矛盾。）
-SAVE_MAX = {"ch": 64, "bus": 32, "dca": 16, "auxin": 16, "usb": 8,
-            "fxret": 16, "mtx": 16, "main": 0}
-
-
-# ==================================================================
 # ==== x32sim/kinds.py
 # ==================================================================
 # -*- coding: utf-8 -*-
@@ -427,252 +250,6 @@ def decode_packet(data: bytes):
         elif t == "F":
             args.append(False)
     return [OscMsg(address, args)]
-
-
-# ==================================================================
-# ==== x32sim/profiles.py
-# ==================================================================
-# -*- coding: utf-8 -*-
-"""x32sim/profiles — 控台驱动层: ConsoleProfile 与各控台地址表"""
-
-
-# ================================================================ 控台驱动层
-#
-# 卡片动作、桥接转发、状态回包 全部走在 (kind, idx) 这个**语义管道**上 —— 它里面
-# 不含任何协议信息（ch_fader 就是"某个输入通道的推子"）。把 kind 翻译成真实 OSC
-# 地址的活，全部收敛到 ConsoleProfile。换控台 = 换一个 profile 实例，动作层不动。
-#
-# ⚠️ 约定（很重要）：对"本控台不支持"的 kind，addr() 必须返回 None，而不是抛异常
-#    或返回一个"看着像对"的地址。调用方见到 None 要记一条日志再跳过 —— 让"不支持"
-#    变成**看得见的降级**，而不是"静默写到了别的地方"。这正是本项目栽过的跟头
-#    （见共享协议规范 §3.5：地址格式化异常被 try/except 吞掉，桥接真台时主输出
-#    推子从来没被转发过，日志里只剩一行看不出问题的"转发失败"）。
-
-# ⚠️ 可变容器: set_profile() 与 load_user_config() 都会改写它, 跨模块读取
-#    必须看到最新值 (理由同 runtime 的 LAN_IP)。
-CTRL_PROFILE_ID = ["x32"]
-
-
-class ConsoleProfile:
-    """控台驱动基类。子类只需填元信息 + 实现 addr()。
-
-    接口刻意留了 transport 字段：X32/M32/Wing 与 Yamaha 大多走 OSC，但
-    Allen & Heath 是 TCP MIDI、部分 Yamaha 型号也吃 MIDI —— 那种情况下
-    "地址翻译"之外还需要一层消息编码。把传输类型摆在接口上，是为了将来接
-    A&H 时不用推翻这套抽象，只需在编码层加一条分支。
-    """
-
-    id = ""
-    label = ""
-    vendor = ""
-    transport = "osc"      # "osc" | "midi" | ...
-    ready = False          # 地址表是否可用；False 时所有写入被拒绝并记日志
-    verified = False       # True = 地址表经真机核对过（ready 但非 verified，
-                           # 表示"照公开资料填了结构，但没上过真台"）
-    note = ""
-    counts = {}            # 各分组规模：卡片目标上限与导入校验用
-    caps = ()              # 支持的语义能力：UI 灰显 / 导入校验用
-    fx_algos = {}          # 本控台的效果库（算法名 → {label,time,predelay,damp,tmin,tmax}）
-                           # 空表 = 该控台效果库未标定 → 混响页禁用、写入被拒绝
-
-    def addr(self, kind, idx):
-        """(kind, idx) → 真实地址；本控台不支持则返回 None。"""
-        return None
-
-    def supports(self, kind):
-        return self.addr(kind, 0) is not None
-
-    def pending(self):
-        """未标定时列出还需要提供地址映射的 kind（供 UI 与规范 §12 使用）。"""
-        return []
-
-
-class X32Profile(ConsoleProfile):
-    """X32 —— 权威实现，地址表与真机 OSC 表逐条对齐。
-
-    M32 是 Midas 贴牌的同代产品，OSC 地址表与 X32 **完全一致**，因此直接继承
-    本类（见 M32Profile），只换显示名 —— 所谓"支持 M32"不需要任何新协议代码。
-    """
-
-    id = "x32"
-    label = "X32"
-    vendor = "Behringer"
-    ready = True
-    verified = True
-    counts = {"ch": 32, "bus": 16, "dca": 8, "auxin": 6, "usb": 2,
-              "fxret": 8, "mtx": 6, "main": 1, "fx": FX_COUNT}
-    caps = ("fader", "mute", "dca", "dca_member", "scene", "fx", "fx_par",
-            "name", "meter", "raw_osc")
-    fx_algos = X32_FX_ALGOS
-
-    def addr(self, kind, idx):
-        if kind == "ch_dca":
-            return "/ch/%02d/mix/dca" % idx
-        if kind == "fx_type":
-            return "/fx/%d/type" % idx
-        if kind == "fx_name":
-            return "/fx/%d/config/name" % idx
-        if kind == "fx_on":
-            return "/fx/%d/on" % idx
-        if kind == "fx_mix":
-            return "/fx/%d/mix" % idx
-        p = fx_par_num(kind)
-        if p is not None:
-            return "/fx/%d/par/%02d" % (idx, p)
-        # ⚠️ Main 必须单独返回：`/main/st/mix/fader` 里**没有 %02d 占位符**，
-        #    走 `% idx` 会抛 TypeError（历史 bug，见共享协议规范 §3.5 第 4 条）。
-        if kind == "main_fader":
-            return "/main/st/mix/fader"
-        if kind == "main_on":
-            return "/main/st/mix/on"
-        if kind.endswith("_fader"):
-            pat = FADER_ADDR.get(kind)
-            return pat % idx if pat else None
-        pat = ON_ADDR.get(kind)
-        return pat % idx if pat else None
-
-
-class M32Profile(X32Profile):
-    """M32 —— 与 X32 同协议（Midas 贴牌），驱动完全复用，仅显示名不同。
-
-    效果库**单独持有一份**（当前与 X32 同内容，因为两者是同一 Klark Teknik
-    效果引擎）。分开持有的意义在于：万一某版固件效果库出现出入，改这里即可，
-    不必去动公共代码，也不会连带影响 X32。
-    """
-
-    id = "m32"
-    label = "M32"
-    vendor = "Midas"
-    fx_algos = M32_FX_ALGOS
-
-
-class _StubProfile(ConsoleProfile):
-    """未标定控台的骨架基类。
-
-    ⚠️ 这里**故意**让 addr() 保持返回 None，而不是编一套"看起来像"的地址。
-    因为地址蒙错的后果是"写到了别的参数上" —— 现场听起来就是莫名其妙的声音
-    变化，比"完全不动作"难排查得多。所以未标定的控台一律**拒绝写入并记日志**，
-    把问题摆在明面上。
-
-    接入一个新控台的做法：照 X32Profile 实现 addr()（清单见 pending()），
-    然后把 ready 置 True；经真机核对后再置 verified = True。
-    """
-
-    ready = False
-
-    def pending(self):
-        base = ["ch_fader", "ch_on", "bus_fader", "bus_on", "dca_fader",
-                "dca_on", "main_fader", "main_on"]
-        base += [g + "_fader" for g in ("auxin", "usb", "fxret", "mtx")]
-        base += [g + "_on" for g in ("auxin", "usb", "fxret", "mtx")]
-        base += ["ch_dca", "fx_type", "fx_on", "fx_mix", "fx_name", "fx_par_NN"]
-        return base
-
-
-class WingProfile(_StubProfile):
-    id = "wing"
-    label = "Wing"
-    vendor = "Behringer"
-    note = "Wing 是全新平台，OSC 地址空间与 X32 不通用，地址表待填"
-    counts = {"ch": 48, "bus": 16, "dca": 8, "auxin": 8, "usb": 4,
-              "fxret": 8, "mtx": 8, "main": 1, "fx": 16}
-    caps = ("fader", "mute", "dca", "scene", "fx", "raw_osc")
-
-
-class YamahaProfile(_StubProfile):
-    id = "yamaha"
-    label = "Yamaha DM3 / TF / QL"
-    vendor = "Yamaha"
-    note = "Yamaha 各型号的 OSC/MIDI 接口不一致，需按型号分别标定"
-    counts = {"ch": 48, "bus": 24, "dca": 12, "auxin": 8, "usb": 2,
-              "fxret": 8, "mtx": 12, "main": 1, "fx": 8}
-    caps = ("fader", "mute", "dca", "scene", "raw_osc")
-
-
-class AHProfile(_StubProfile):
-    id = "ah"
-    label = "Allen & Heath dLive / SQ"
-    vendor = "Allen & Heath"
-    transport = "midi"
-    note = "A&H 走 TCP MIDI 而非 OSC，除地址表外还需一层 MIDI 消息编码，接口已预留 transport 字段"
-    counts = {"ch": 64, "bus": 32, "dca": 16, "auxin": 8, "usb": 2,
-              "fxret": 8, "mtx": 16, "main": 1, "fx": 8}
-    caps = ("fader", "mute", "dca", "scene")
-
-
-CONSOLE_PROFILES = {p.id: p for p in (
-    X32Profile(), M32Profile(), WingProfile(), YamahaProfile(), AHProfile())}
-
-
-def profile():
-    """当前生效的控台驱动（未知 id 回落到 X32）。"""
-    return CONSOLE_PROFILES.get(CTRL_PROFILE_ID[0]) or CONSOLE_PROFILES["x32"]
-
-
-def _fx_sync_on_console_change():
-    """换控台后，把效果槽收敛到新控台的效果库里。
-
-    为什么要做：算法名在新控台的库里可能不存在。留着它就成了"僵尸槽" ——
-    界面上看起来装着混响，实际参数索引是旧控台的（写出去就是**参数串味**），
-    或者根本写不出去。这里把它们明确置空并记日志，与"未标定控台拒绝写入"
-    是同一条原则：**让降级看得见，而不是让它安静地错下去**。
-
-    返回被清空的槽号列表。
-    """
-    # 延迟导入: profiles→state/fx 与 state→profiles 会成环, 只在函数体内打破
-    # (合成单文件形态下该行被剥离, 同一命名空间直接解析)。
-    lib = fx_algos()
-    cleared = []
-    with STATE.lock:
-        for s in range(1, FX_COUNT + 1):
-            t = (STATE.fx[s].get("type") or "").upper()
-            if t and t not in lib:
-                STATE.fx[s]["type"] = ""
-                STATE.fx[s]["par"] = {}
-                cleared.append(s)
-    if cleared:
-        log("CONSOLE 效果槽同步: FX%s 的算法不在「%s」效果库中, 已置空" % (
-            "/".join(str(x) for x in cleared), profile().label))
-    return cleared
-
-
-def set_profile(pid):
-    """切换控台驱动。返回 (ok, 描述文本, 附加上下文 dict)。
-
-    切完会立刻做一次**效果槽同步** —— 这正是"选了控台，混响页跟着变"的服务端一侧：
-    效果库换了，槽位上不属于新库的算法要退场，否则页面显示与实际写入会对不上。
-    """
-    # 延迟导入: profiles→persist 与 persist→profiles 会成环 (见 _fx_sync_on_console_change)
-    p = CONSOLE_PROFILES.get(str(pid))
-    if p is None:
-        return False, "未知控台: %s" % pid, {}
-    CTRL_PROFILE_ID[0] = p.id
-    cleared = _fx_sync_on_console_change()
-    extra = {"fxCleared": cleared, "fxLib": len(p.fx_algos),
-             "fxSlots": int(p.counts.get("fx", 0))}
-    log("CONSOLE 切换到 %s%s（效果库 %d 种）" % (
-        p.label, "" if p.ready else "（待标定：写入将被拒绝）", len(p.fx_algos)))
-    save_user_config()
-    return True, p.label, extra
-
-
-def console_listing():
-    """给 UI 用的控台清单（含能力与就绪状态）。"""
-    return [{"id": p.id, "label": p.label, "vendor": p.vendor,
-             "transport": p.transport, "ready": p.ready, "verified": p.verified,
-             "note": p.note, "counts": dict(p.counts),
-             "caps": list(p.caps), "pending": p.pending(),
-             "fxLib": len(p.fx_algos),
-             "fxLocked": (not p.ready) or ("fx" not in p.caps)}
-            for p in CONSOLE_PROFILES.values()]
-
-
-def addr_for_write(kind, idx):
-    """(kind, idx) → 真台地址。桥接转发与状态回包共用同一入口，避免两处走样。
-
-    返回 None 表示**当前控台不支持该 kind**（调用方须跳过并记日志）。
-    """
-    return profile().addr(kind, idx)
 
 
 # ==================================================================
@@ -954,6 +531,654 @@ def curve_ratio(r: float, curve: str = "linear") -> float:
 
 
 # ==================================================================
+# ==== x32sim/params.py
+# ==================================================================
+# -*- coding: utf-8 -*-
+"""x32sim/params — 参数登记表 (ParamSpec): 语义 kind ↔ 台面字段 ↔ OSC 地址 ↔ 取值范围
+
+为什么要有这张表
+----------------
+在此之前，"某个参数"的五个事实散落在五处：
+  · 它在 STATE.ch[i] 里叫什么字段      → state.MixerState
+  · 它的 OSC 地址长什么样              → consts.FADER_ADDR / profiles.addr
+  · 超出范围该怎么办                  → state.set_value 里一个个 _clamp01/_truthy
+  · 界面/卡片/预设能不能用它           → consts.SET_PARAMS / PRESET_GROUP_PARAMS + 前端硬编码
+  · 它的量程与出厂值是多少             → 没人知道, 只在注释里
+于是每加一个参数就要改五个地方、漏一处就是"接口返回 ok 但台子没反应"。
+本表把上面五件事合成一行；新增参数 = 加一行（+ 三处白名单各加一个名字）。
+
+边界（很重要）
+--------------
+本表只收**按路存储的标量参数**（推子/静音/新增的 12 个通道参数）。
+以下三类**故意不入表**，继续走各自的显式分支：
+  · 名称  —— 存在 STATE.names（(group, idx) 键），不在行字典里，且带持久化/日志
+  · DCA 归属 —— 不是存储值，而是 dca_members 的位掩码投影（set 时要改成员表）
+  · FX 机架 —— 参数号随算法变化，整槽存/整槽回归才有意义（见 consts.REVERB_DEFAULTS）
+把它们塞进这张表只会得到一堆永远为真的 if，不会得到任何复用。
+
+地址与量程来源
+--------------
+新增 12 个通道参数的地址/类型/量程逐条对齐 **Behringer X32 Protocol Manual**
+（官方 OSC 表，M32 同协议）。两处手册之间有出入的地方按"取宽 + 注释"处理：
+  · preamp/trim：手册 [-12,12]（仅数字源），非官方表 [-18,18] → 取 [-18,18]
+  · delay/time：手册 linf [0.300, 500.000, 0.100] ms（下限不是 0！）
+  · preamp/hpf：手册 logf [20.000, 400.000, 101] Hz —— 真台是 101 个对数档位，
+    所以这里用 logsteps=101 量化，而不是连续浮点
+  · gate/thr [-80,0] / gate/range [3,60]（正值，表示衰减量）
+  · insert/pos enum {PRE,POST} → 线上传 0/1（同 config/color 的 enum 语义）
+  · preamp/hpslope enum {12,18,24} → 按字面值传（.scn 导出同款）；
+    万一真机回 0/1/2，nearest-snap 会落到 12/18/24，不会静默变 0
+凡"出厂默认值"在公开资料里找不到的，一律在 note 里标注「需真机确认」——
+模拟器可以给一个合理值，但不能假装自己核对过。
+"""
+
+import math
+
+
+
+class ParamSpec:
+    """一个可寻址参数的完整描述。新增参数 =  new 一个实例并登记。"""
+
+    def __init__(self, kind, group, field, osc, vtype="float",
+                 lo=0.0, hi=1.0, default=None, step=0.0, logsteps=0,
+                 enum=None, label="", unit="", dec=2, labels=None,
+                 push=False, preset=True, note=""):
+        self.kind = kind                  # 语义管道里的名字, 如 "ch_trim"
+        self.group = group                # 台面分组 (STATE 的属性名), 如 "ch"
+        self.field = field                # 行字典里的键, 如 "trim"
+        self.osc = osc                    # OSC 地址模板; main 系列没有 %02d
+        self.vtype = vtype                # "float" | "int" | "bool"
+        self.lo = float(lo)
+        self.hi = float(hi)
+        if default is None:
+            default = 0.0
+        # bool/int 必须存**整数**：旧代码 on 的默认值是 1 不是 1.0，
+        # /api/state 会因此从 1 变成 1.0（JSON 形状变化，前端虽不炸但不干净）
+        self.default = int(default) if vtype in ("bool", "int") else float(default)
+        self.step = float(step)           # 线性档位 (真台旋钮是"有级"的)
+        self.logsteps = int(logsteps)     # 对数档位数 (手册里的 logf [lo,hi,N])
+        self.enum = tuple(enum) if enum else None
+        self.label = label or kind        # 界面/日志用名
+        self.unit = unit                  # 显示单位
+        self.dec = int(dec)               # 显示小数位
+        self.labels = tuple(labels) if labels else None   # 开关型的两态文案
+        self.push = bool(push)            # 进 150ms 周期推送名单 (见下方说明)
+        self.preset = bool(preset)        # 允许被预设范围勾选
+        self.note = note                  # 标定备注 / 待确认项
+
+
+# ------------------------------------------------------------------ 登记表
+#
+# ⚠️ push 只对**推子/静音**开启：周期推送每 150ms 一轮，名单里每多一个参数就多
+#    32 条 OSC。新增的 12 个通道参数一律**不进周期推送** —— 它们只在手动写入时
+#    立即推一次（state._push_manual_now，真台面板行为），/api/state 也早就改了
+#    增量指纹（106 号任务：15-21KB×4/s → 命中不变只回 30 字节）。谁再把通道参数
+#    加进 PUSH_KINDS，就是把那笔流量治理的账全部还回去。
+
+_FADER_OSC = {"ch": "/ch/%02d/mix/fader", "bus": "/bus/%02d/mix/fader",
+              "dca": "/dca/%02d/fader",                     # DCA 没有 /mix/ 一级
+              "auxin": "/auxin/%02d/mix/fader", "usb": "/usb/%02d/mix/fader",
+              "fxret": "/fxret/%02d/mix/fader", "mtx": "/mtx/%02d/mix/fader",
+              "main": "/main/st/mix/fader"}                 # main 无 %02d！
+_ON_OSC = {"ch": "/ch/%02d/mix/on", "bus": "/bus/%02d/mix/on",
+           "dca": "/dca/%02d/on",
+           "auxin": "/auxin/%02d/mix/on", "usb": "/usb/%02d/mix/on",
+           "fxret": "/fxret/%02d/mix/on", "mtx": "/mtx/%02d/mix/on",
+           "main": "/main/st/mix/on"}
+# 顺序即 consts.FADER_ADDR/ON_ADDR 的推导顺序（与历史上的字面字典一致）
+_LEGACY_GROUPS = ("ch", "bus", "dca", "auxin", "usb", "fxret", "mtx", "main")
+
+_SPECS = []
+for _g in _LEGACY_GROUPS:
+    _SPECS.append(ParamSpec(_g + "_fader", _g, "fader", _FADER_OSC[_g],
+                            vtype="float", lo=0.0, hi=1.0, default=0.75,
+                            dec=3, push=True, label="推子", unit="%"))
+    _SPECS.append(ParamSpec(_g + "_on", _g, "on", _ON_OSC[_g],
+                            vtype="bool", default=1, push=True, label="静音"))
+
+# ---- 新增: 输入通道 1-32 的参数 (官方 X32 Protocol Manual) ----------------
+# 按信号流顺序排：增益 → 反相 → 延时 → 低切 → 插入 → 门
+_CH_EXTRA = (
+    ParamSpec("ch_trim", "ch", "trim", "/ch/%02d/preamp/trim",
+              vtype="float", lo=-18.0, hi=18.0, default=0.0, step=0.25,
+              label="增益", unit="dB", dec=1,
+              note="手册 [-12,12](仅数字源)/非官方 [-18,18], 取宽; 步长 0.25 dB"),
+    ParamSpec("ch_invert", "ch", "invert", "/ch/%02d/preamp/invert",
+              vtype="bool", default=0, label="反相",
+              note="极性反转; 真台 48V/反相同在 preamp 页"),
+    ParamSpec("ch_delay_on", "ch", "delay_on", "/ch/%02d/delay/on",
+              vtype="bool", default=0, label="延时"),
+    ParamSpec("ch_delay_ms", "ch", "delay_ms", "/ch/%02d/delay/time",
+              vtype="float", lo=0.3, hi=500.0, default=0.3, step=0.1,
+              label="延时时间", unit="ms", dec=1,
+              note="手册 linf [0.300,500.000,0.100] ms —— 下限 0.3 不是 0"),
+    ParamSpec("ch_hpf_on", "ch", "hpf_on", "/ch/%02d/preamp/hpon",
+              vtype="bool", default=0, label="低切"),
+    ParamSpec("ch_hpf_slope", "ch", "hpf_slope", "/ch/%02d/preamp/hpslope",
+              vtype="int", lo=12, hi=24, default=12, enum=(12, 18, 24),
+              label="低切斜率", unit="dB/oct", dec=0,
+              note="手册 enum{12,18,24} 按字面值; 出厂默认需真机确认"),
+    ParamSpec("ch_hpf_f", "ch", "hpf_f", "/ch/%02d/preamp/hpf",
+              vtype="float", lo=20.0, hi=400.0, default=80.0, logsteps=101,
+              label="低切频率", unit="Hz", dec=0,
+              note="手册 logf[20,400,101] Hz; 出厂默认频率需真机确认, "
+                   "暂取人声常用 80 Hz"),
+    ParamSpec("ch_ins_on", "ch", "ins_on", "/ch/%02d/insert/on",
+              vtype="bool", default=0, label="插入"),
+    ParamSpec("ch_ins_pos", "ch", "ins_pos", "/ch/%02d/insert/pos",
+              vtype="bool", default=0, label="插入位置", labels=("PRE", "POST"),
+              note="enum{PRE,POST} → 0/1; 出厂位置需真机确认, 暂取 PRE"),
+    ParamSpec("ch_gate_on", "ch", "gate_on", "/ch/%02d/gate/on",
+              vtype="bool", default=0, label="噪声门"),
+    ParamSpec("ch_gate_thr", "ch", "gate_thr", "/ch/%02d/gate/thr",
+              vtype="float", lo=-80.0, hi=0.0, default=-40.0, step=0.5,
+              label="门限", unit="dB", dec=1,
+              note="手册 linf[-80,0,0.5] dB; 出厂阈值需真机确认, 暂取 -40 dB"),
+    ParamSpec("ch_gate_range", "ch", "gate_range", "/ch/%02d/gate/range",
+              vtype="float", lo=3.0, hi=60.0, default=15.0, step=1.0,
+              label="门范围", unit="dB", dec=0,
+              note="手册 linf[3,60,1] dB(正值=衰减量); 出厂值需真机确认"),
+)
+_SPECS.extend(_CH_EXTRA)
+
+PARAM_SPECS = {sp.kind: sp for sp in _SPECS}
+
+# 新增的通道参数 (不含推子/静音) —— presets/前端面板/OSC 日志都遍历它
+CH_PARAM_SPECS = tuple(sp for sp in _SPECS if sp.group == "ch" and not sp.push)
+
+# 地址索引: (第3段, 第4段) → [spec, ...], 只收新增 kind。
+# 推子/静音的老地址模式在 state.match_address 里有专门分支 (行为逐字未动)，
+# 不在这里重复登记, 免得两条路径互相覆盖。
+CH_EXTRA_ADDR = {}
+for _sp in _SPECS:
+    if _sp.group != "ch" or _sp.push:
+        continue
+    _parts = _sp.osc.strip("/").split("/")
+    if len(_parts) == 4 and "%02d" in _parts[1]:
+        CH_EXTRA_ADDR.setdefault((_parts[2], _parts[3]), []).append(_sp)
+
+
+def spec_addr(sp, idx):
+    """spec → 真实地址。main 系列模板里**没有 %02d**，直接 % 会抛 TypeError
+    (历史 bug, 见共享协议规范 §3.5 第 4 条)。"""
+    return sp.osc % idx if "%02d" in sp.osc else sp.osc
+
+
+def _snap(sp, v):
+    """钳制 + 按档位量化。真台的旋钮是"有级"的，不是连续模拟量 ——
+    存一个连续值回去，回读时就会发现"设 124.3 Hz 回来变成 124.3 但台上是 124.3±档"。"""
+    if sp.enum is not None:
+        # 最近的枚举成员。hpslope 手册记 enum{12,18,24}，按**字面值**传
+        # （config/color 那种 {OFF,RD,...} 才是索引制）——万一真机按索引回
+        # 0/1/2，会被吸附成 12/12/18：不精确，但不会静默变成 0。
+        return min(sp.enum, key=lambda e: (abs(e - v), e))
+    v = min(max(v, sp.lo), sp.hi)
+    if sp.logsteps:
+        span = math.log(sp.hi / sp.lo)
+        i = int(round((sp.logsteps - 1) * math.log(max(v, sp.lo) / sp.lo) / span))
+        i = min(max(i, 0), sp.logsteps - 1)
+        return sp.lo * (sp.hi / sp.lo) ** (i / (sp.logsteps - 1))
+    if sp.step:
+        v = round(v / sp.step) * sp.step
+        return round(min(max(v, sp.lo), sp.hi), 6)   # 量化后再钳 (0.3 这种非整步长下限)
+    return v
+
+
+def param_coerce(kind, value):
+    """外部输入 → 该参数的合法值。未知 kind 抛 KeyError（调用方按"不支持"处理）。"""
+    sp = PARAM_SPECS[kind]
+    if sp.vtype == "bool":
+        return _truthy(value)
+    return _snap(sp, _finite(value, sp.default))
+
+
+def param_fmt(sp, v):
+    """日志/界面用的值文本（带单位与符号）。"""
+    if sp.vtype == "bool":
+        i = 1 if _truthy(v) else 0
+        if sp.labels:                 # 插入位置: PRE/POST 而不是"开/关"
+            return sp.labels[i]
+        return "开" if i else "关"
+    if sp.enum is not None:
+        return str(int(round(v)))
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return str(v)
+    if sp.unit == "dB":
+        return "%+.*f dB" % (sp.dec, x)
+    return "%.*f%s" % (sp.dec, x, (" " + sp.unit) if sp.unit else "")
+
+
+def blank_row(group):
+    """一个空行字典: 该组所有登记参数的出厂值（推子 0.75 / 静音开 / 参数缺省）。"""
+    return {sp.field: sp.default for sp in _SPECS if sp.group == group}
+
+
+# ==================================================================
+# ==== x32sim/consts.py
+# ==================================================================
+# -*- coding: utf-8 -*-
+"""x32sim/consts — 数据表: 容量/默认名/地址模板/动作与预设白名单/FX 元数据"""
+
+
+
+# ---------------------------------------------------------------- 混响 / FX 机架
+# X32 有 8 个 FX 槽. 混响类算法的参数**索引随算法变化**(官方文档里 Hall/Plate/Room/
+# Chamber/Vintage 各有自己的参数页), 因此这里把"时间/预延迟/阻尼"抽象出来, 索引集中
+# 在这一张表里 —— 真机联调时只需改这张表, 不用动逻辑。
+#   time     混响时间 (RT) 的参数索引, 值单位 = 秒
+#   predelay 预延迟的参数索引,       值单位 = 毫秒
+#   damp     阻尼/高频衰减的参数索引, 值单位 = 0..1
+#   tmin/tmax 该算法混响时间的合法范围 (秒), Tap 换算结果按此钳制
+FX_COUNT = 8
+# ⚠️ 效果库**属于控台驱动**，不是全局表（见「控台驱动层」一节）。
+#    同一个算法名在不同控台上参数索引可能不同，所以任何"按算法查参数索引"的
+#    地方都必须走 fx_algos()（= 当前控台的库），不能直接读某一张表 —— 否则
+#    换控台后就会出现"参数串味"（把 A 台的时间参数写到了 B 台的别的位置）。
+#
+#    X32 与 M32 使用**同一套效果引擎**（M32 是 Midas 贴牌的同代产品，固件效果器
+#    为同一 Klark Teknik 引擎），因此两张表当前内容一致；但**分别持有**，将来
+#    某一版固件效果库出现出入时，只需改对应的那一张，公共代码与卡片动作都不动。
+X32_FX_ALGOS = {
+    "HALL":    {"label": "大厅混响", "time": 1, "predelay": 2, "damp": 4, "tmin": 0.4, "tmax": 10.0},
+    "PLATE":   {"label": "板式混响", "time": 1, "predelay": 2, "damp": 4, "tmin": 0.3, "tmax": 8.0},
+    "ROOM":    {"label": "房间混响", "time": 1, "predelay": 2, "damp": 4, "tmin": 0.2, "tmax": 5.0},
+    "CHAMBER": {"label": "密室混响", "time": 1, "predelay": 2, "damp": 4, "tmin": 0.3, "tmax": 6.0},
+    "VINTAGE": {"label": "复古混响", "time": 1, "predelay": 2, "damp": 4, "tmin": 0.3, "tmax": 6.0},
+}
+M32_FX_ALGOS = {k: dict(v) for k, v in X32_FX_ALGOS.items()}   # 独立副本，便于日后分化
+# 出厂默认混响参数 (秒 / 毫秒 / 0..1), 索引与上面的表对应
+REVERB_DEFAULTS = {
+    "HALL":    {1: 2.40, 2: 25.0, 4: 0.45},
+    "PLATE":   {1: 1.80, 2: 15.0, 4: 0.30},
+    "ROOM":    {1: 1.10, 2: 12.0, 4: 0.55},
+    "CHAMBER": {1: 1.60, 2: 20.0, 4: 0.40},
+    "VINTAGE": {1: 1.50, 2: 18.0, 4: 0.35},
+}
+
+
+# Tap 定拍 / 时值换算
+TAP_INTERVAL_MIN = 0.15      # 两次点击靠得比这还近 → 抖动, 忽略
+TAP_RESET_GAP = 2.0          # 超过这么久没点 → 视为新的一组, 重头开始
+TAP_MAX_INTERVALS = 8        # 最多用最近 8 个间隔求均值
+TAP_BPM_MIN, TAP_BPM_MAX = 30.0, 300.0
+NOTE_BEATS = {"1/16": 0.25, "1/8": 0.5, "1/4": 1.0, "1/2": 2.0, "1": 4.0, "2": 8.0}
+
+
+# 各组通道数量 (名称读写与编辑器共用); main 单独处理 idx=0
+NAME_COUNTS = {"ch": 32, "bus": 16, "dca": 8, "auxin": 6, "usb": 2, "fxret": 8, "mtx": 6}
+# 出厂默认名称: 与内置卡片/控制键呼应 (15=音乐, Bus15=耳返), 均可在网页或 OSC 里改
+DEFAULT_NAMES = {
+    ("ch", 1): "底鼓", ("ch", 2): "军鼓", ("ch", 3): "踩镲", ("ch", 4): "嗵鼓",
+    ("ch", 5): "吊镲", ("ch", 6): "贝斯", ("ch", 7): "电吉1", ("ch", 8): "电吉2",
+    ("ch", 9): "木吉", ("ch", 10): "键盘1", ("ch", 11): "键盘2", ("ch", 12): "采样",
+    ("ch", 13): "无线麦1", ("ch", 14): "主持麦", ("ch", 15): "音乐", ("ch", 16): "视频声",
+    ("bus", 1): "鼓监听", ("bus", 2): "乐队监听", ("bus", 3): "主唱监听", ("bus", 15): "耳返",
+    ("dca", 1): "乐队", ("dca", 2): "人声", ("dca", 3): "鼓组",
+    ("main", 0): "主输出",
+}
+
+
+# 网页分组前缀 → 推子/静音 kind 映射 (/api/set 与 /api/setbatch 共用)
+# ch 一行由 params.CH_PARAM_SPECS 推导: 新增通道参数只改 params.py 一处,
+# 这里、卡片动作白名单、预设范围白名单、前端下拉 全部跟着走 (前端另有同内容镜像)
+SET_KINDMAP = {"ch": {"fader": "ch_fader", "on": "ch_on"},
+               "bus": {"fader": "bus_fader", "on": "bus_on"},
+               "dca": {"fader": "dca_fader", "on": "dca_on"},
+               "main": {"fader": "main_fader", "on": "main_on"},
+               "auxin": {"fader": "auxin_fader", "on": "auxin_on"},
+               "usb": {"fader": "usb_fader", "on": "usb_on"},
+               "fxret": {"fader": "fxret_fader", "on": "fxret_on"},
+               "mtx": {"fader": "mtx_fader", "on": "mtx_on"}}
+SET_KINDMAP["ch"].update({sp.field: sp.kind for sp in CH_PARAM_SPECS})
+
+# 推子/静音的 OSC 地址模板: 由 params.PARAM_SPECS **推导** (单一事实来源,
+# 曾经这里是字面字典, 改一个地址要同时惦记 profiles.addr 里的另一份)。
+# 只收 push=True 的项 —— 新增的 12 个通道参数不进 150ms 周期推送
+# (见 params.py 里 push 字段的说明: 那笔流量治理的账不能还回去)。
+FADER_ADDR = {sp.kind: sp.osc for sp in PARAM_SPECS.values()
+              if sp.push and sp.kind.endswith("_fader")}
+ON_ADDR = {sp.kind: sp.osc for sp in PARAM_SPECS.values()
+           if sp.push and sp.kind.endswith("_on")}
+KIND_LABEL = {"ch": "通道", "bus": "输出Bus", "dca": "DCA", "main": "Main",
+              "auxin": "AuxIn", "usb": "USB", "fxret": "FX返回", "mtx": "Matrix",
+              "fx_par": "FX参数", "fx_type": "FX算法", "fx_name": "FX名称",
+              "fx_on": "FX开关", "fx_mix": "FX混合比"}
+
+# ---- 预设范围：组 → 该组能存的参数 -------------------------------------
+# 为什么要有"范围"：以前一条预设永远是"79 路 × 推子+静音"的全量回归，用户想只还原
+# 人声那几路做不到，一动就是整台。范围把"存什么"和"还原什么"绑在一起，
+# 回归只写范围内的键 —— 没勾的通道一个字节都不碰。
+#   fader/on/name 是 79 路通用三项；dca 只对输入通道有意义（位掩码归属）；
+#   FX 整槽存（算法/名称/开关/混合比/参数）—— 参数号随算法变化，拆开存没有意义；
+#   scene 只记录当前场景号（回归时不发 OSC，发不发由卡片的场景动作决定）。
+PRESET_GROUP_PARAMS = {
+    "ch": ("fader", "on", "name", "dca"),
+    "bus": ("fader", "on", "name"),
+    "dca": ("fader", "on", "name"),
+    "auxin": ("fader", "on", "name"),
+    "usb": ("fader", "on", "name"),
+    "fxret": ("fader", "on", "name"),
+    "mtx": ("fader", "on", "name"),
+    "main": ("fader", "on", "name"),
+    "fx": ("slot",),
+    "scene": ("scene",),
+}
+# 输入通道的参数白名单跟上登记表 (增益/反相/延时/低切/插入/门)
+PRESET_GROUP_PARAMS["ch"] = tuple(PRESET_GROUP_PARAMS["ch"]) + tuple(
+    sp.field for sp in CH_PARAM_SPECS)
+PRESET_GROUP_LABEL = {"ch": "输入通道", "bus": "Mix Bus", "dca": "DCA",
+                      "auxin": "Aux In", "usb": "USB", "fxret": "FX 返回",
+                      "mtx": "Matrix", "main": "主输出", "fx": "FX 机架",
+                      "scene": "场景号"}
+PRESET_PARAM_LABEL = {"fader": "推子", "on": "静音", "name": "名称",
+                      "dca": "DCA 归属", "slot": "整槽", "scene": "当前场景"}
+PRESET_PARAM_LABEL.update({sp.field: sp.label for sp in CH_PARAM_SPECS})
+PRESET_DEFAULT_SCOPE = {
+    "groups": ["ch", "bus", "dca", "auxin", "usb", "fxret", "mtx", "main"],
+    "params": ["fader", "on"],
+    "indices": {},
+}
+
+
+FADE_ACT_KINDS = ("fade_all", "fade_odd_even", "fade_ch", "fade_bus",
+                  "fade_from", "fade_from_bus", "rel_db")
+
+
+# ---------------------------------------------------------------- 通用动作 set
+#
+# 背景: 原有 12 个动作是"常见演出套装"（全体渐变 / 奇偶过渡 / 相对增减 dB …），
+# 覆盖面广但补不全 —— 例如"把 DCA 3 拉到 80%""把 FX1 混响时间改成 2.4 秒"就做不到。
+#
+# 通用动作把它收敛成一件事: 指定**目标**和**值**。
+#   {"kind":"set", "target":{"group":"dca","id":3,"param":"fader"}, "value":0.8}
+#   {"kind":"set", "target":{"group":"fx","id":1,"param":"time"}, "value":2.4}
+#   {"kind":"set", "target":{"group":"scene","id":5}}
+#   target 里带 duration>0 时走渐变 (仅 param="fader" 有意义)。
+#
+# ⚠️ target 描述的是**语义**（哪个分组的第几路、改哪个参数），不含任何协议信息；
+#    落到真实地址的活交给 ConsoleProfile（见"控台驱动层"）。所以同一个 set 动作
+#    天然跨控台 —— 这不是额外做的适配，而是它本来就走在语义管道上。
+
+SET_GROUPS = ("ch", "bus", "dca", "main", "auxin", "usb", "fxret", "mtx",
+              "fx", "scene")
+SET_PARAMS = {
+    "ch": ("fader", "on"), "bus": ("fader", "on"), "dca": ("fader", "on"),
+    "main": ("fader", "on"), "auxin": ("fader", "on"), "usb": ("fader", "on"),
+    "fxret": ("fader", "on"), "mtx": ("fader", "on"),
+    "fx": ("type", "name", "on", "mix", "time", "predelay", "damp"),
+    "scene": ("load",),
+}
+# 通用设置动作的通道参数白名单 (与 SET_KINDMAP["ch"] 同源)
+SET_PARAMS["ch"] = tuple(SET_PARAMS["ch"]) + tuple(sp.field for sp in CH_PARAM_SPECS)
+SET_GROUP_LABEL = {"ch": "通道", "bus": "Bus", "dca": "DCA", "main": "主输出",
+                   "auxin": "AuxIn", "usb": "USB", "fxret": "FX返回",
+                   "mtx": "Matrix", "fx": "FX", "scene": "场景"}
+SET_PARAM_LABEL = {"fader": "推子", "on": "开关", "type": "算法", "name": "名称",
+                   "mix": "混合比", "time": "混响时间", "predelay": "预延迟",
+                   "damp": "阻尼", "load": "调用"}
+SET_PARAM_LABEL.update({sp.field: sp.label for sp in CH_PARAM_SPECS})
+
+
+CURVES = ("linear", "ease_out", "ease_in", "smooth")
+
+
+# 保存期只做**格式**清洗：防负数、防几百几千这种荒唐值。
+# 真正的范围校验在**执行期**做（target_exists / _fade_targets_for 的过滤），
+# 这样卡片天然跨控台 —— 在 32 路的台子上存下"写到第 40 路"的卡片，
+# 换到 48/64 路的台子就能直接生效，而不是保存时就被钳死成 32。
+# （曾经的写法在保存时就按当前控台规模钳 id，与"换到 64 通道后台子能写到 64 路"
+#   的注释自相矛盾。）
+SAVE_MAX = {"ch": 64, "bus": 32, "dca": 16, "auxin": 16, "usb": 8,
+            "fxret": 16, "mtx": 16, "main": 0}
+
+
+# ==================================================================
+# ==== x32sim/profiles.py
+# ==================================================================
+# -*- coding: utf-8 -*-
+"""x32sim/profiles — 控台驱动层: ConsoleProfile 与各控台地址表"""
+
+
+# ================================================================ 控台驱动层
+#
+# 卡片动作、桥接转发、状态回包 全部走在 (kind, idx) 这个**语义管道**上 —— 它里面
+# 不含任何协议信息（ch_fader 就是"某个输入通道的推子"）。把 kind 翻译成真实 OSC
+# 地址的活，全部收敛到 ConsoleProfile。换控台 = 换一个 profile 实例，动作层不动。
+#
+# ⚠️ 约定（很重要）：对"本控台不支持"的 kind，addr() 必须返回 None，而不是抛异常
+#    或返回一个"看着像对"的地址。调用方见到 None 要记一条日志再跳过 —— 让"不支持"
+#    变成**看得见的降级**，而不是"静默写到了别的地方"。这正是本项目栽过的跟头
+#    （见共享协议规范 §3.5：地址格式化异常被 try/except 吞掉，桥接真台时主输出
+#    推子从来没被转发过，日志里只剩一行看不出问题的"转发失败"）。
+
+# ⚠️ 可变容器: set_profile() 与 load_user_config() 都会改写它, 跨模块读取
+#    必须看到最新值 (理由同 runtime 的 LAN_IP)。
+CTRL_PROFILE_ID = ["x32"]
+
+
+class ConsoleProfile:
+    """控台驱动基类。子类只需填元信息 + 实现 addr()。
+
+    接口刻意留了 transport 字段：X32/M32/Wing 与 Yamaha 大多走 OSC，但
+    Allen & Heath 是 TCP MIDI、部分 Yamaha 型号也吃 MIDI —— 那种情况下
+    "地址翻译"之外还需要一层消息编码。把传输类型摆在接口上，是为了将来接
+    A&H 时不用推翻这套抽象，只需在编码层加一条分支。
+    """
+
+    id = ""
+    label = ""
+    vendor = ""
+    transport = "osc"      # "osc" | "midi" | ...
+    ready = False          # 地址表是否可用；False 时所有写入被拒绝并记日志
+    verified = False       # True = 地址表经真机核对过（ready 但非 verified，
+                           # 表示"照公开资料填了结构，但没上过真台"）
+    note = ""
+    counts = {}            # 各分组规模：卡片目标上限与导入校验用
+    caps = ()              # 支持的语义能力：UI 灰显 / 导入校验用
+    fx_algos = {}          # 本控台的效果库（算法名 → {label,time,predelay,damp,tmin,tmax}）
+                           # 空表 = 该控台效果库未标定 → 混响页禁用、写入被拒绝
+
+    def addr(self, kind, idx):
+        """(kind, idx) → 真实地址；本控台不支持则返回 None。"""
+        return None
+
+    def supports(self, kind):
+        return self.addr(kind, 0) is not None
+
+    def pending(self):
+        """未标定时列出还需要提供地址映射的 kind（供 UI 与规范 §12 使用）。"""
+        return []
+
+
+class X32Profile(ConsoleProfile):
+    """X32 —— 权威实现，地址表与真机 OSC 表逐条对齐。
+
+    M32 是 Midas 贴牌的同代产品，OSC 地址表与 X32 **完全一致**，因此直接继承
+    本类（见 M32Profile），只换显示名 —— 所谓"支持 M32"不需要任何新协议代码。
+    """
+
+    id = "x32"
+    label = "X32"
+    vendor = "Behringer"
+    ready = True
+    verified = True
+    counts = {"ch": 32, "bus": 16, "dca": 8, "auxin": 6, "usb": 2,
+              "fxret": 8, "mtx": 6, "main": 1, "fx": FX_COUNT}
+    caps = ("fader", "mute", "dca", "dca_member", "scene", "fx", "fx_par",
+            "name", "meter", "raw_osc")
+    fx_algos = X32_FX_ALGOS
+
+    def addr(self, kind, idx):
+        # 表驱动: 推子/静音/12 个通道参数的地址全在 params.PARAM_SPECS 里
+        # (单一事实来源; 曾经这里是字面分支, 与 consts 的字典各存一份)
+        sp = PARAM_SPECS.get(kind)
+        if sp is not None:
+            return spec_addr(sp, idx)
+        if kind == "ch_dca":
+            return "/ch/%02d/mix/dca" % idx
+        if kind == "fx_type":
+            return "/fx/%d/type" % idx
+        if kind == "fx_name":
+            return "/fx/%d/config/name" % idx
+        if kind == "fx_on":
+            return "/fx/%d/on" % idx
+        if kind == "fx_mix":
+            return "/fx/%d/mix" % idx
+        p = fx_par_num(kind)
+        if p is not None:
+            return "/fx/%d/par/%02d" % (idx, p)
+        # 表里没有、FX 也不是 → 本控台不支持这个 kind
+        return None
+
+
+class M32Profile(X32Profile):
+    """M32 —— 与 X32 同协议（Midas 贴牌），驱动完全复用，仅显示名不同。
+
+    效果库**单独持有一份**（当前与 X32 同内容，因为两者是同一 Klark Teknik
+    效果引擎）。分开持有的意义在于：万一某版固件效果库出现出入，改这里即可，
+    不必去动公共代码，也不会连带影响 X32。
+    """
+
+    id = "m32"
+    label = "M32"
+    vendor = "Midas"
+    fx_algos = M32_FX_ALGOS
+
+
+class _StubProfile(ConsoleProfile):
+    """未标定控台的骨架基类。
+
+    ⚠️ 这里**故意**让 addr() 保持返回 None，而不是编一套"看起来像"的地址。
+    因为地址蒙错的后果是"写到了别的参数上" —— 现场听起来就是莫名其妙的声音
+    变化，比"完全不动作"难排查得多。所以未标定的控台一律**拒绝写入并记日志**，
+    把问题摆在明面上。
+
+    接入一个新控台的做法：照 X32Profile 实现 addr()（清单见 pending()），
+    然后把 ready 置 True；经真机核对后再置 verified = True。
+    """
+
+    ready = False
+
+    def pending(self):
+        base = ["ch_fader", "ch_on", "bus_fader", "bus_on", "dca_fader",
+                "dca_on", "main_fader", "main_on"]
+        base += [g + "_fader" for g in ("auxin", "usb", "fxret", "mtx")]
+        base += [g + "_on" for g in ("auxin", "usb", "fxret", "mtx")]
+        base += ["ch_dca", "fx_type", "fx_on", "fx_mix", "fx_name", "fx_par_NN"]
+        # 通道参数 (增益/反相/延时/低切/插入/门): 从登记表推导, 新增即跟上
+        base += [sp.kind for sp in CH_PARAM_SPECS]
+        return base
+
+
+class WingProfile(_StubProfile):
+    id = "wing"
+    label = "Wing"
+    vendor = "Behringer"
+    note = "Wing 是全新平台，OSC 地址空间与 X32 不通用，地址表待填"
+    counts = {"ch": 48, "bus": 16, "dca": 8, "auxin": 8, "usb": 4,
+              "fxret": 8, "mtx": 8, "main": 1, "fx": 16}
+    caps = ("fader", "mute", "dca", "scene", "fx", "raw_osc")
+
+
+class YamahaProfile(_StubProfile):
+    id = "yamaha"
+    label = "Yamaha DM3 / TF / QL"
+    vendor = "Yamaha"
+    note = "Yamaha 各型号的 OSC/MIDI 接口不一致，需按型号分别标定"
+    counts = {"ch": 48, "bus": 24, "dca": 12, "auxin": 8, "usb": 2,
+              "fxret": 8, "mtx": 12, "main": 1, "fx": 8}
+    caps = ("fader", "mute", "dca", "scene", "raw_osc")
+
+
+class AHProfile(_StubProfile):
+    id = "ah"
+    label = "Allen & Heath dLive / SQ"
+    vendor = "Allen & Heath"
+    transport = "midi"
+    note = "A&H 走 TCP MIDI 而非 OSC，除地址表外还需一层 MIDI 消息编码，接口已预留 transport 字段"
+    counts = {"ch": 64, "bus": 32, "dca": 16, "auxin": 8, "usb": 2,
+              "fxret": 8, "mtx": 16, "main": 1, "fx": 8}
+    caps = ("fader", "mute", "dca", "scene")
+
+
+CONSOLE_PROFILES = {p.id: p for p in (
+    X32Profile(), M32Profile(), WingProfile(), YamahaProfile(), AHProfile())}
+
+
+def profile():
+    """当前生效的控台驱动（未知 id 回落到 X32）。"""
+    return CONSOLE_PROFILES.get(CTRL_PROFILE_ID[0]) or CONSOLE_PROFILES["x32"]
+
+
+def _fx_sync_on_console_change():
+    """换控台后，把效果槽收敛到新控台的效果库里。
+
+    为什么要做：算法名在新控台的库里可能不存在。留着它就成了"僵尸槽" ——
+    界面上看起来装着混响，实际参数索引是旧控台的（写出去就是**参数串味**），
+    或者根本写不出去。这里把它们明确置空并记日志，与"未标定控台拒绝写入"
+    是同一条原则：**让降级看得见，而不是让它安静地错下去**。
+
+    返回被清空的槽号列表。
+    """
+    # 延迟导入: profiles→state/fx 与 state→profiles 会成环, 只在函数体内打破
+    # (合成单文件形态下该行被剥离, 同一命名空间直接解析)。
+    lib = fx_algos()
+    cleared = []
+    with STATE.lock:
+        for s in range(1, FX_COUNT + 1):
+            t = (STATE.fx[s].get("type") or "").upper()
+            if t and t not in lib:
+                STATE.fx[s]["type"] = ""
+                STATE.fx[s]["par"] = {}
+                cleared.append(s)
+    if cleared:
+        log("CONSOLE 效果槽同步: FX%s 的算法不在「%s」效果库中, 已置空" % (
+            "/".join(str(x) for x in cleared), profile().label))
+    return cleared
+
+
+def set_profile(pid):
+    """切换控台驱动。返回 (ok, 描述文本, 附加上下文 dict)。
+
+    切完会立刻做一次**效果槽同步** —— 这正是"选了控台，混响页跟着变"的服务端一侧：
+    效果库换了，槽位上不属于新库的算法要退场，否则页面显示与实际写入会对不上。
+    """
+    # 延迟导入: profiles→persist 与 persist→profiles 会成环 (见 _fx_sync_on_console_change)
+    p = CONSOLE_PROFILES.get(str(pid))
+    if p is None:
+        return False, "未知控台: %s" % pid, {}
+    CTRL_PROFILE_ID[0] = p.id
+    cleared = _fx_sync_on_console_change()
+    extra = {"fxCleared": cleared, "fxLib": len(p.fx_algos),
+             "fxSlots": int(p.counts.get("fx", 0))}
+    log("CONSOLE 切换到 %s%s（效果库 %d 种）" % (
+        p.label, "" if p.ready else "（待标定：写入将被拒绝）", len(p.fx_algos)))
+    save_user_config()
+    return True, p.label, extra
+
+
+def console_listing():
+    """给 UI 用的控台清单（含能力与就绪状态）。"""
+    return [{"id": p.id, "label": p.label, "vendor": p.vendor,
+             "transport": p.transport, "ready": p.ready, "verified": p.verified,
+             "note": p.note, "counts": dict(p.counts),
+             "caps": list(p.caps), "pending": p.pending(),
+             "fxLib": len(p.fx_algos),
+             "fxLocked": (not p.ready) or ("fx" not in p.caps)}
+            for p in CONSOLE_PROFILES.values()]
+
+
+def addr_for_write(kind, idx):
+    """(kind, idx) → 真台地址。桥接转发与状态回包共用同一入口，避免两处走样。
+
+    返回 None 表示**当前控台不支持该 kind**（调用方须跳过并记日志）。
+    """
+    return profile().addr(kind, idx)
+
+
+# ==================================================================
 # ==== x32sim/state.py
 # ==================================================================
 # -*- coding: utf-8 -*-
@@ -971,14 +1196,18 @@ import time
 class MixerState:
     def __init__(self):
         self.lock = threading.Lock()
-        self.ch = {i: {"fader": 0.75, "on": 1} for i in range(1, 33)}
-        self.bus = {i: {"fader": 0.75, "on": 1} for i in range(1, 17)}   # 输出通道 Mix Bus 1-16
-        self.dca = {i: {"fader": 0.75, "on": 1} for i in range(1, 9)}
-        self.auxin = {i: {"fader": 0.75, "on": 1} for i in range(1, 7)}  # 辅助输入 Aux In 1-6
-        self.usb = {i: {"fader": 0.75, "on": 1} for i in range(1, 3)}    # USB 播放返回 1-2
-        self.fxret = {i: {"fader": 0.75, "on": 1} for i in range(1, 9)}  # 效果返回 FX Return 1-8
-        self.mtx = {i: {"fader": 0.75, "on": 1} for i in range(1, 7)}    # 矩阵输出 Matrix 1-6
-        self.main = {"fader": 0.75, "on": 1}
+        # 行字典由 params.blank_row 生成: 推子/静音 + 输入通道的 12 个参数
+        # (增益/反相/延时/低切/插入/门) 一次带出出厂值。新增参数只改 params.py
+        # 一行 —— 曾经这类默认值散落在各处的 __init__ 里, 漏一处就让新参数在
+        # snapshot/render 里 KeyError (表现为界面卡旧状态)。
+        self.ch = {i: blank_row("ch") for i in range(1, 33)}
+        self.bus = {i: blank_row("bus") for i in range(1, 17)}   # 输出通道 Mix Bus 1-16
+        self.dca = {i: blank_row("dca") for i in range(1, 9)}
+        self.auxin = {i: blank_row("auxin") for i in range(1, 7)}  # 辅助输入 Aux In 1-6
+        self.usb = {i: blank_row("usb") for i in range(1, 3)}    # USB 播放返回 1-2
+        self.fxret = {i: blank_row("fxret") for i in range(1, 9)}  # 效果返回 FX Return 1-8
+        self.mtx = {i: blank_row("mtx") for i in range(1, 7)}    # 矩阵输出 Matrix 1-6
+        self.main = blank_row("main")
         self.scene = 1
         # FX 机架 1-8: 混响器. par 存**原生单位**参数值 (时间=秒 / 预延迟=毫秒 / 阻尼=0..1),
         # 参数索引随算法变化, 映射表见 X32_FX_ALGOS / M32_FX_ALGOS (默认值需真机标定)
@@ -1026,6 +1255,21 @@ METER_LOCK = threading.Lock()
 START_TIME = time.time()
 
 
+def _row_of(group, idx):
+    """分组 → 行字典 (表驱动读写的公共出口)。
+
+    main 只有一路且编号固定 0，"行"就是 STATE.main 本身 (它没有按路分包)。
+    越界编号抛 KeyError —— 与旧行为一致，target_exists 正是靠它判断
+    "本地台面没有这个目标"。
+    """
+    if group == "main":
+        return STATE.main
+    store = getattr(STATE, group, None)
+    if store is None:
+        raise KeyError(group)
+    return store[idx]
+
+
 def match_address(pattern: str):
     """按 X32 通配符匹配,返回 (group, index, kind) 列表。
     kind: 'ch_fader' | 'ch_on' | 'dca_fader' | 'dca_on' | 'main_fader' | 'main_on'
@@ -1043,6 +1287,13 @@ def match_address(pattern: str):
                 for i in sorted(STATE.ch):
                     if seg_match(segs[1], "%02d" % i):
                         results.append((kind, i))
+        elif len(segs) == 4 and segs[0] == "ch" and (segs[2], segs[3]) in CH_EXTRA_ADDR:
+            # 通道参数 (增益/反相/延时/低切/插入/门): 与推子同款通配符语义。
+            # 地址索引由 params.py 从登记表生成, 新增参数不用来这里补分支。
+            for sp in CH_EXTRA_ADDR[(segs[2], segs[3])]:
+                for i in sorted(STATE.ch):
+                    if seg_match(segs[1], "%02d" % i):
+                        results.append((sp.kind, i))
         elif len(segs) == 4 and segs[0] == "bus" and segs[2] == "mix":
             kind = {"fader": "bus_fader", "on": "bus_on"}.get(segs[3])
             if kind:
@@ -1088,20 +1339,13 @@ def match_address(pattern: str):
 
 def get_value(kind, idx):
     with STATE.lock:
-        if kind == "ch_fader":  return float(STATE.ch[idx]["fader"])
-        if kind == "ch_on":     return int(STATE.ch[idx]["on"])
+        # 表驱动: 推子/静音/12 个通道参数全部走登记表 (params.PARAM_SPECS)
+        sp = PARAM_SPECS.get(kind)
+        if sp is not None:
+            return _row_of(sp.group, idx).get(sp.field)
         if kind == "ch_dca":    # 通道归属的 DCA 位掩码
             return sum(1 << (d - 1) for d in range(1, 9)
                        if idx in STATE.dca_members.get(d, []))
-        if kind == "bus_fader": return float(STATE.bus[idx]["fader"])
-        if kind == "bus_on":    return int(STATE.bus[idx]["on"])
-        if kind == "dca_fader": return float(STATE.dca[idx]["fader"])
-        if kind == "dca_on":    return int(STATE.dca[idx]["on"])
-        if kind == "main_fader": return float(STATE.main["fader"])
-        if kind == "main_on":   return int(STATE.main["on"])
-        for g in ("auxin", "usb", "fxret", "mtx"):
-            if kind == g + "_fader": return float(STATE.__dict__[g][idx]["fader"])
-            if kind == g + "_on":    return int(STATE.__dict__[g][idx]["on"])
         if 1 <= idx <= FX_COUNT:
             fx = STATE.fx[idx]
             if kind == "fx_type": return fx["type"]
@@ -1136,8 +1380,12 @@ def set_value(kind, idx, value, source="manual"):
     if kind == "dca_fader" and source == "manual":
         cascade_from = get_value(kind, idx)   # DCA 手动移动 → 成员级联基准
     with STATE.lock:
-        if kind == "ch_fader":   STATE.ch[idx]["fader"] = _clamp01(value)
-        elif kind == "ch_on":    STATE.ch[idx]["on"] = _truthy(value)
+        sp = PARAM_SPECS.get(kind)
+        if sp is not None:
+            # 表驱动: 钳制 + 档位量化 + 落库 (params.param_coerce)。
+            # 推子/静音/12 个通道参数共用这一条, 与旧的分支写法逐字等价
+            # (fader=_clamp01 / on=_truthy, 通道参数多一层量程与档位)。
+            _row_of(sp.group, idx)[sp.field] = param_coerce(kind, value)
         elif kind == "ch_dca":   # 位掩码: 通道归属哪些 DCA (bit0=DCA1 ...)
             mask = int(value) & 0xFF
             for d in range(1, 9):
@@ -1149,12 +1397,6 @@ def set_value(kind, idx, value, source="manual"):
                     members.sort()
                 elif has and not want:
                     members.remove(idx)
-        elif kind == "bus_fader": STATE.bus[idx]["fader"] = _clamp01(value)
-        elif kind == "bus_on":   STATE.bus[idx]["on"] = _truthy(value)
-        elif kind == "dca_fader": STATE.dca[idx]["fader"] = _clamp01(value)
-        elif kind == "dca_on":   STATE.dca[idx]["on"] = _truthy(value)
-        elif kind == "main_fader": STATE.main["fader"] = _clamp01(value)
-        elif kind == "main_on":  STATE.main["on"] = _truthy(value)
         elif 1 <= idx <= FX_COUNT:
             fx = STATE.fx[idx]
             if kind == "fx_type":
@@ -1172,20 +1414,11 @@ def set_value(kind, idx, value, source="manual"):
                 if p is not None:
                     fx["par"][p] = fx_par_clamp(idx, p, value)
         else:
-            hit = False
-            for g in ("auxin", "usb", "fxret", "mtx"):
-                if kind == g + "_fader":
-                    STATE.__dict__[g][idx]["fader"] = _clamp01(value)
-                    hit = True
-                elif kind == g + "_on":
-                    STATE.__dict__[g][idx]["on"] = _truthy(value)
-                    hit = True
-            if not hit:
-                # 走到这里说明 kind 完全不认识 —— 必须留痕。
-                # 曾经的写法是"什么都不做"，于是一个拼错的 kind 表现成
-                # "接口返回 ok 但台子没反应"，最难查的那类。
-                log("SET 未识别的写入: kind=%r idx=%r value=%r (已忽略)"
-                    % (kind, idx, value))
+            # 走到这里说明 kind 完全不认识 —— 必须留痕。
+            # 曾经的写法是"什么都不做"，于是一个拼错的 kind 表现成
+            # "接口返回 ok 但台子没反应"，最难查的那类。
+            log("SET 未识别的写入: kind=%r idx=%r value=%r (已忽略)"
+                % (kind, idx, value))
     if source == "manual":
         _push_manual_now(kind, idx)
     # 写出口 (WriteSink): 落库后的值交给各 sink。sink 只能拿到 after 值,
@@ -1296,12 +1529,17 @@ def value_reply(kind, idx):
     a = addr_for_write(kind, idx)
     if a is None or v is None:
         return None
+    # 表驱动定参数类型: float 参数 (推子/增益/延时/频率/门限) 发浮点,
+    # 开关发 0/1, 枚举 (低切斜率) 发整数值 —— 与 ParamSpec.vtype 一致
+    sp = PARAM_SPECS.get(kind)
+    if sp is not None:
+        return OscMsg(a, [float(v)] if sp.vtype == "float" else [int(v)])
     if kind == "ch_dca":
         return OscMsg(a, [int(v)])
-    if kind.endswith("_fader") or kind == "fx_mix" or fx_par_num(kind) is not None:
-        return OscMsg(a, [float(v)])
     if kind in ("fx_type", "fx_name"):
         return OscMsg(a, [str(v)])
+    if kind == "fx_mix" or fx_par_num(kind) is not None:   # FX 机架: 混合比/参数是浮点
+        return OscMsg(a, [float(v)])
     return OscMsg(a, [int(v)])
 
 
@@ -1478,11 +1716,27 @@ def _bridge_forward(kind, idx, value, source="manual", force=False):
     try:
         if value is None:
             return          # 本地没有这个目标（换控台后规模不匹配等）
+        sp = PARAM_SPECS.get(kind)
         if kind == "ch_dca":
             arg = int(value) & 0xFF
         elif kind in ("fx_type", "fx_name"):
             arg = str(value)[:12]
-        elif kind.endswith("_fader") or kind == "fx_mix" or fx_par_num(kind) is not None:
+        elif sp is not None:
+            # 表驱动定线上类型 (与 state.value_reply 同一套规则):
+            #   float → 浮点 (推子/增益/延时/频率/门限); int → 整数 (低切斜率);
+            #   bool  → 0/1 (静音/延时/低切/插入/门开关)
+            # ⚠️ 曾经这里是 `endswith("_fader") → float, 其余 _truthy` —— 新增的
+            #    通道参数全是非 _fader 结尾, 会被 _truthy 压成 0/1 发给真台
+            #    (trim 3.5 dB 变成 1), 于是"桥接转发"这一层整个失真。
+            if sp.vtype == "bool":
+                arg = _truthy(value)
+            else:
+                arg = float(value) if sp.vtype == "float" else int(value)
+                # 第二道闸: 万一将来哪条路径漏了 _finite, 宁可拒发也不把 NaN 发给真台
+                if not math.isfinite(arg):
+                    log("BRIDGE 拒发非有限值: %s %s = %r" % (kind, idx, value))
+                    return
+        elif kind == "fx_mix" or fx_par_num(kind) is not None:
             arg = float(value)
             # 第二道闸: 万一将来哪条路径漏了 _finite, 宁可拒发也不把 NaN 发给真台
             if not math.isfinite(arg):
@@ -2308,6 +2562,11 @@ def _snap_group_items_locked(g, params, idxs):
         if "dca" in params and g == "ch":
             item["dca"] = sum(1 << (d - 1) for d in range(1, 9)
                               if i in STATE.dca_members.get(d, []))
+        # 通道参数 (表驱动): 参数名与 spec.field 同名, 只抓范围内勾了的那些。
+        # 预设是老格式 (只有 fader/on) 时这里一个都不抓 —— 向后兼容。
+        for sp in CH_PARAM_SPECS:
+            if sp.field in params:
+                item[sp.field] = row.get(sp.field, sp.default)
         bag[str(i)] = item
     return bag
 
@@ -2452,6 +2711,11 @@ def _recall_instant(snap):
                       item.get("on", 1), source="action")
         if "dca" in item and g == "ch":
             set_value("ch_dca", i, item.get("dca", 0), source="action")
+        # 通道参数 (表驱动): 瞬时项, 立即应用。target_exists 挡掉越界编号
+        # (配置文件可手改; KeyError 会把整个回归线程炸掉, 见 _recall_body 的 try)
+        for sp in CH_PARAM_SPECS:
+            if sp.field in item and target_exists(sp.kind, i):
+                set_value(sp.kind, i, item[sp.field], source="action")
         if "name" in item:
             nm = str(item.get("name") or "").strip()[:12]
             with STATE.lock:
@@ -2798,6 +3062,15 @@ def _act_label(act):
             lbl = target_label(g, i)
             if p == "on":
                 return "%s %s" % (lbl, "开启" if act.get("value") else "静音")
+            # 通道参数: 用登记表的标签/单位/档位显示 (曾经这里一律 "→%.0f%%",
+            # 于是 trim 3.5 dB 在卡片进度条上显示成 "→4%")。
+            # ⚠️ 只对**新增**参数生效: 推子/静音也在登记表里 (push=True),
+            #    但它们有既有的百分比显示, 不能被这一支吃掉。
+            sp = PARAM_SPECS.get("%s_%s" % (g, p))
+            if sp is not None and not sp.push:
+                # param_fmt 按 vtype 分型: 开关→开/关 (插入位置→PRE/POST),
+                # 枚举→字面值, 浮点→带单位与符号
+                return "%s %s=%s" % (lbl, sp.label, param_fmt(sp, act.get("value")))
             return "%s →%.0f%%" % (lbl, float(act.get("value", 0)) * 100)
         if k == "osc":
             return "原始 OSC %s" % act.get("address", "")
@@ -3028,7 +3301,15 @@ def _clean_set_action(a, num, why=None):
         # 混响时间/预延迟/阻尼吃**原生单位**（秒/毫秒），范围交给 fx_par_clamp 按算法钳制
         out["value"] = num("value", 0.0, -1000.0, 20000.0)
     else:
-        out["value"] = num("value", 0.0, 0.0, 1.0)
+        # 通道参数 (增益/反相/延时/低切/插入/门): 按登记表的量程与档位清洗。
+        # ⚠️ 不能沿用上面 fader 的 [0,1] 钳制 —— trim 的量程是 -18..18 dB,
+        #    硬钳成 0..1 会让"存 3.5 变成 1"（保存时静默改值，最难查的那类）。
+        #    存进去的就是执行时将要应用的值（param_coerce 是幂等的）。
+        sp = PARAM_SPECS.get("%s_%s" % (group, param))
+        if sp is not None:
+            out["value"] = param_coerce(sp.kind, a.get("value", sp.default))
+        else:
+            out["value"] = num("value", 0.0, 0.0, 1.0)
     if a.get("duration") is not None:
         out["duration"] = num("duration", 0.0, 0.0, 60.0)
     if a.get("at") is not None:
@@ -4142,7 +4423,15 @@ def handle(msg: OscMsg, addr, sock):
                 pass                  # FX 类型/名称本来就是字符串("/fx/1/type HALL"), 原样往下传
         set_value(kind, idx, raw)
         label = KIND_LABEL.get(kind_group(kind), kind)
-        if kind == "ch_dca":
+        sp = PARAM_SPECS.get(kind)
+        if sp is not None and not sp.push:
+            # 新增通道参数 (增益/反相/延时/低切/插入/门): 标签与单位取自登记表。
+            # 打的是**落库后**的值 (钳制/量化之后) 而不是原始入参 —— 曾经的
+            # 通用分支会把 trim 打成 "fader=3.5 (11.1 dB)", 把 hpf_on 打成
+            # "mute=开", 日志整个失去排查价值。
+            log("    SET %s %02d %s=%s" % (label, idx, sp.label,
+                                           param_fmt(sp, get_value(kind, idx))))
+        elif kind == "ch_dca":
             log("    SET %s %02d DCA掩码=%d" % (label, idx, int(raw) & 0xFF))
         elif kind == "fx_on":
             log("    SET FX%d 开关=%s" % (idx, "开" if raw else "旁通"))
@@ -4426,6 +4715,39 @@ WEB_PAGE = r"""<!DOCTYPE html>
             padding:8px 12px;margin-bottom:8px;font-size:13px;flex-wrap:wrap}
   .schedrow b{color:var(--accent)}
   .schedrow .cd{font-variant-numeric:tabular-nums;color:var(--sub)}
+
+/* ---- 通道参数面板 (增益/反相/延时/低切/插入/噪声门) ---- */
+/* 编号本身是入口: 做成可点的圆角小牌, 有处理启用时右上角亮一个橙点。
+   不加额外按钮 —— 通道条在 390px 屏上已经挤满, 再塞一个图标会挤掉推子。 */
+.chnum{display:inline-block;padding:1px 5px;border-radius:6px;cursor:pointer;
+       border:1px solid transparent;transition:background .12s,border-color .12s}
+.chnum:active{background:var(--card2);border-color:var(--line)}
+.chnum.on{position:relative;background:var(--card2);border-color:#3a4050}
+.chnum.on::after{content:'';position:absolute;top:-2px;right:-3px;width:6px;height:6px;
+                 border-radius:50%;background:var(--accent);box-shadow:0 0 5px var(--accent)}
+.chp-row{display:flex;align-items:center;gap:10px;padding:6px 2px;
+         border-bottom:1px solid var(--line)}
+.chp-row:last-child{border-bottom:0}
+.chp-l{width:66px;flex:none;font-size:13px;color:var(--txt)}
+.chp-v{width:74px;flex:none;text-align:right;font-size:12px;color:var(--sub);
+       font-variant-numeric:tabular-nums;white-space:nowrap}
+.chp-row input[type=range]{flex:1;-webkit-appearance:none;appearance:none;
+                           background:transparent;height:30px;min-width:0}
+.chp-row input[type=range]::-webkit-slider-runnable-track{height:6px;border-radius:4px;
+  background:linear-gradient(90deg,#0d0f13,#31374a);box-shadow:inset 0 1px 3px rgba(0,0,0,.6)}
+.chp-row input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;height:28px;
+  margin-top:-11px;border-radius:6px;background:linear-gradient(180deg,#3d4454,#22262f);
+  border:1px solid #4d566b;box-shadow:0 3px 8px rgba(0,0,0,.55)}
+.chp-row input[type=range]::-moz-range-track{height:6px;border-radius:4px;
+  background:linear-gradient(90deg,#0d0f13,#31374a)}
+.chp-row input[type=range]::-moz-range-thumb{width:20px;height:26px;border-radius:6px;
+  background:linear-gradient(180deg,#3d4454,#22262f);border:1px solid #4d566b}
+.chp-tog{flex:1;max-width:120px;padding:8px 10px;border-radius:9px;font-size:13px;font-weight:700;
+         border:1px solid var(--line);background:var(--card2);color:var(--sub)}
+.chp-tog.on{background:rgba(255,180,84,.16);border-color:var(--accent);color:var(--accent)}
+.chp-row select{flex:1;max-width:130px}
+.chp-row.off{opacity:.5}
+.chp-row.off .chp-l{color:var(--sub)}
 </style>
 </head>
 <body>
@@ -4704,6 +5026,15 @@ WEB_PAGE = r"""<!DOCTYPE html>
   </div>
 </div>
 
+<div class="modal" id="chParamModal" onclick="if(event.target===this)closeChParams()">
+  <div class="mdlg" role="dialog" aria-label="通道参数">
+    <div class="mhd"><b id="chpTitle">通道参数</b>
+      <button class="mclose" onclick="closeChParams()" aria-label="关闭">✕</button></div>
+    <div class="ds">增益 / 反相 / 延时 / 低切 / 插入 / 噪声门 · 拖动即写入台面（不是草稿）</div>
+    <div id="chParamBody"></div>
+  </div>
+</div>
+
 <div class="modal" id="keyModal" onclick="if(event.target===this)closeKeyModal()">
   <div class="mdlg" role="dialog" aria-label="新增控制键">
     <div class="mhd"><b id="keyModalTitle">➕ 新增控制键</b>
@@ -4769,7 +5100,8 @@ function dispName(g,i){
 function rowHTML(prefix, i){
   const L={m:'<b>MAIN</b><small class="nm2"></small>', d:i=>`<b>D${i}</b><small class="nm2"></small>`, b:i=>`<b>B${i}</b><small class="nm2"></small>`,
            a:i=>`<b>A${i}</b><small class="nm2"></small>`, u:i=>`<b>U${i}</b><small class="nm2"></small>`, x:i=>`<b>FX${i}</b><small class="nm2"></small>`, t:i=>`<b>M${i}</b><small class="nm2"></small>`};
-  const num = prefix==='m' ? L.m : (L[prefix] ? L[prefix](i) : `<b>${String(i).padStart(2,'0')}</b><small class="nm2"></small>`);
+  const num = prefix==='m' ? L.m : (L[prefix] ? L[prefix](i)
+    : `<b class="chnum" onclick="openChParams(${i})" title="通道参数: 增益/反相/延时/低切/插入/噪声门">${String(i).padStart(2,'0')}</b><small class="nm2"></small>`);
   return `<div class="row" id="r-${prefix}-${i}">
     <div class="meter"><i></i></div>
     <div class="num">${num}</div>
@@ -4853,6 +5185,97 @@ function flushSend(){
     {method:'POST',headers:{'Content-Type':'application/json'},
      body:JSON.stringify(arr.length===1?arr[0]:{sets:arr})});
 }
+// ---- 通道参数面板: 增益 / 反相 / 延时 / 低切 / 插入 / 噪声门 ----
+// 声明式控件表: f=字段名 必须与后端 params.py 的 ParamSpec 一致 (量程/档位也一致),
+// 改任一边都要同步改另一边 —— test_params.py 会把不一致打成红灯。
+// t: num=滑块+数值 / bool=两态按钮 / enum=下拉
+const CH_PARAM_UI=[
+  {f:'trim',       l:'增益',     t:'num',  u:'dB',     lo:-18, hi:18,  step:0.25, dec:1, dv:0},
+  {f:'invert',     l:'反相',     t:'bool', lb:['正常','反相']},
+  {f:'delay_on',   l:'延时',     t:'bool', lb:['关','开']},
+  {f:'delay_ms',   l:'延时时间', t:'num',  u:'ms',     lo:0.3, hi:500, step:0.1,  dec:1, dv:0.3, dep:'delay_on'},
+  {f:'hpf_on',     l:'低切',     t:'bool', lb:['关','开']},
+  {f:'hpf_slope',  l:'低切斜率', t:'enum', u:'dB/oct', opts:[[12,'12'],[18,'18'],[24,'24']], dep:'hpf_on'},
+  {f:'hpf_f',      l:'低切频率', t:'num',  u:'Hz',     lo:20,  hi:400, step:1,    dec:0, dv:80, dep:'hpf_on'},
+  {f:'ins_on',     l:'插入',     t:'bool', lb:['关','开']},
+  {f:'ins_pos',    l:'插入位置', t:'enum', opts:[[0,'PRE'],[1,'POST']], dep:'ins_on'},
+  {f:'gate_on',    l:'噪声门',   t:'bool', lb:['关','开']},
+  {f:'gate_thr',   l:'门限',     t:'num',  u:'dB',     lo:-80, hi:0,   step:0.5,  dec:1, dv:-40, dep:'gate_on'},
+  {f:'gate_range', l:'门范围',   t:'num',  u:'dB',     lo:3,   hi:60,  step:1,    dec:0, dv:15, dep:'gate_on'},
+];
+function chpSpec(f){ for(const r of CH_PARAM_UI) if(r.f===f) return r; return null; }
+let chpIdx=0;
+function chpFmt(r,v){
+  const x=+v||0;
+  return (r.dec?x.toFixed(r.dec):String(Math.round(x)))+(r.u?(' '+r.u):'');
+}
+function chpRowHTML(r){
+  const id='chp-'+r.f;
+  if(r.t==='bool')
+    return `<div class="chp-row" id="${id}-row"><span class="chp-l">${r.l}</span>`
+      +`<button type="button" class="chp-tog" id="${id}" onclick="chpTog('${r.f}')">—</button>`
+      +`<span class="chp-v"></span></div>`;
+  if(r.t==='enum')
+    return `<div class="chp-row" id="${id}-row"><span class="chp-l">${r.l}</span>`
+      +`<select class="nkin" id="${id}" onchange="chpSet('${r.f}',this.value)">`
+      +r.opts.map(o=>`<option value="${o[0]}">${o[1]}</option>`).join('')+`</select>`
+      +`<span class="chp-v">${r.u||''}</span></div>`;
+  return `<div class="chp-row" id="${id}-row"><span class="chp-l">${r.l}</span>`
+    +`<input type="range" id="${id}" min="${r.lo}" max="${r.hi}" step="${r.step}"`
+    +` oninput="chpSlide('${r.f}',this)"><span class="chp-v" id="${id}-v"></span></div>`;
+}
+function openChParams(i){
+  chpIdx=i;
+  const nm=nameOf('ch',i);
+  $('#chpTitle').textContent='CH '+String(i).padStart(2,'0')+(nm?' · '+nm:'');
+  $('#chParamBody').innerHTML=CH_PARAM_UI.map(chpRowHTML).join('');
+  $('#chParamModal').classList.add('on');
+  document.body.style.overflow='hidden';
+  chpSync();
+}
+function closeChParams(){
+  $('#chParamModal').classList.remove('on'); document.body.style.overflow='';
+}
+// 状态回读: 只更新控件, 不重建 (拖动中不动滑块, 手机上会把手指下的位置拽回去)
+function chpSync(){
+  const m=$('#chParamModal');
+  if(!m||!m.classList.contains('on')||!S||!S.ch) return;
+  const row=S.ch[String(chpIdx)]; if(!row) return;
+  CH_PARAM_UI.forEach(r=>{
+    const el=document.getElementById('chp-'+r.f); if(!el) return;
+    const v=row[r.f];
+    if(r.t==='bool'){
+      const on=!!v;
+      el.textContent=on?r.lb[1]:r.lb[0];
+      el.classList.toggle('on',on);
+    } else if(r.t==='enum'){
+      if(document.activeElement!==el) el.value=String(v);
+    } else if(v!==undefined&&v!==null){
+      if(document.activeElement!==el) el.value=v;
+      const lab=document.getElementById('chp-'+r.f+'-v');
+      if(lab) lab.textContent=chpFmt(r,v);
+    }
+    // 从属项 (延时时间/低切斜率…) 在主开关关闭时变淡 —— 仍可调, 只是提示"当前不生效"
+    const wrap=document.getElementById('chp-'+r.f+'-row');
+    if(wrap&&r.dep) wrap.classList.toggle('off',!row[r.dep]);
+  });
+}
+function chpSlide(f,el){
+  const r=chpSpec(f); if(!r) return;
+  const lab=document.getElementById('chp-'+f+'-v');
+  if(lab) lab.textContent=chpFmt(r,el.value);
+  send('c',chpIdx,f,+el.value);
+}
+function chpSet(f,v){ send('c',chpIdx,f,+v); }
+function chpTog(f){
+  if(!S||!S.ch) return;
+  const row=S.ch[String(chpIdx)]; if(!row) return;
+  const nv=row[f]?0:1;
+  send('c',chpIdx,f,nv);
+  // 乐观切换: 写盘+轮询有 ~250ms 延迟, 不先动一下会觉得"点了没反应"
+  const r=chpSpec(f), el=document.getElementById('chp-'+f);
+  if(r&&el){ el.textContent=nv?r.lb[1]:r.lb[0]; el.classList.toggle('on',!!nv); }
+}
 function runShow(id){ fetch('/api/show',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({id:id})}); }
 function stopShow(){ fetch('/api/show',{method:'POST',headers:{'Content-Type':'application/json'},
@@ -4868,7 +5291,8 @@ function api(path,obj){ fetch(path,{method:'POST',headers:{'Content-Type':'appli
 const PS_GROUPS=[['ch','输入通道'],['bus','Mix Bus'],['dca','DCA'],['auxin','Aux In'],
   ['usb','USB'],['fxret','FX 返回'],['mtx','Matrix'],['main','主输出'],
   ['fx','FX 机架'],['scene','场景号']];
-const PS_PARAMS=[['fader','推子'],['on','静音'],['name','名称'],['dca','DCA 归属']];
+const PS_PARAMS=[['fader','推子'],['on','静音'],['name','名称'],['dca','DCA 归属']]
+  .concat(CH_PARAM_UI.map(r=>[r.f,r.l]));   // 12 个通道处理参数也能单独勾选存/回归
 const PS_CAP={ch:32,bus:16,dca:8,auxin:6,usb:2,fxret:8,mtx:6,main:1,fx:8,scene:1};
 const PS_PATH_GROUPS=['ch','bus','dca','auxin','usb','fxret','mtx','main'];
 let psGroups=['ch','bus','dca','auxin','usb','fxret','mtx','main'], psParams=['fader','on'];
@@ -4881,6 +5305,7 @@ function closeSnapModal(){ $('#snapModal').classList.remove('on'); document.body
 function psUsable(g,p){
   if(p==='dca') return g==='ch';
   if(p==='fader'||p==='on'||p==='name') return g!=='fx'&&g!=='scene';
+  if(chpSpec(p)) return g==='ch';      // 增益/延时/低切… 只有输入通道有
   return false;
 }
 function renderPsChips(){
@@ -5196,12 +5621,15 @@ const CA_LABEL={mute:'静音通道',mute_bus:'静音 Bus',scene:'切场景',unmu
 const ST_GROUPS=[['ch','输入通道',32],['bus','Bus 输出',16],['dca','DCA 编组',8],
   ['main','主输出',1],['auxin','Aux In',6],['usb','USB 返回',2],['fxret','FX 返回',8],
   ['mtx','Matrix',6],['fx','FX 效果槽',8],['scene','场景',99]];
-const ST_PARAMS={ch:['fader','on'],bus:['fader','on'],dca:['fader','on'],main:['fader','on'],
+const ST_PARAMS={ch:['fader','on'].concat(CH_PARAM_UI.map(r=>r.f)),
+  bus:['fader','on'],dca:['fader','on'],main:['fader','on'],
   auxin:['fader','on'],usb:['fader','on'],fxret:['fader','on'],mtx:['fader','on'],
   fx:['time','predelay','damp','mix','on','type','name'],scene:['load']};
 const ST_PLABEL={fader:'推子 %',on:'开关 (1开启/0静音)',mix:'混合比 (0-1)',
   time:'混响时间 (秒)',predelay:'预延迟 (毫秒)',damp:'阻尼 (0-1)',
   type:'算法 (HALL/PLATE/ROOM/…)',name:'名称 (文本)',load:'切场景'};
+// 12 个通道参数沿用面板里的中文名与单位 (两边只有这一处定义, 不会漂)
+CH_PARAM_UI.forEach(r=>{ ST_PLABEL[r.f]=r.l+(r.u?(' ('+r.u+')'):''); });
 function numIn(id,label,def){
   return `<input id="${id}" type="number" value="${def}" placeholder="${label}"
     title="${label}" aria-label="${label}" class="nkin" style="width:84px">`;
@@ -5284,11 +5712,24 @@ function stGroupChg(){
 function stParamChg(){
   const p=$('#stParam').value, w=$('#stValWrap');
   if(!w) return;
+  const sp=chpSpec(p);
   if(p==='on') w.innerHTML=`<select id="stValSel" class="nkin"><option value="1">开启</option><option value="0">静音 / 旁通</option></select>`;
   else if(p==='type') w.innerHTML=`<select id="stValSel" class="nkin">`
     + fxAlgoOpts('(清空)') + `</select>`;
   else if(p==='name') w.innerHTML=`<input id="stValTxt" class="nkin" style="width:120px" maxlength="12" placeholder="名称">`;
   else if(p==='load') w.innerHTML=`<span class="ds" style="margin:0">按上面的编号切换场景</span>`;
+  else if(sp&&sp.t==='bool')
+    w.innerHTML=`<select id="stValSel" class="nkin">`
+      +`<option value="1">${sp.lb?sp.lb[1]:'开'}</option>`
+      +`<option value="0">${sp.lb?sp.lb[0]:'关'}</option></select>`;
+  else if(sp&&sp.t==='enum')
+    w.innerHTML=`<select id="stValSel" class="nkin">`
+      +sp.opts.map(o=>`<option value="${o[0]}">${o[1]}</option>`).join('')+`</select>`
+      +`<span class="ds" style="margin:0 0 0 6px;min-width:34px">${sp.u||''}</span>`;
+  else if(sp)
+    w.innerHTML=`<input id="stValNum" type="number" class="nkin" style="width:100px"`
+      +` min="${sp.lo}" max="${sp.hi}" step="${sp.step}" value="${sp.dv!==undefined?sp.dv:sp.lo}">`
+      +`<span class="ds" style="margin:0 0 0 6px;min-width:34px">${sp.u||''}</span>`;
   // ⚠️ 单位必须**贴着输入框**显示：混响参数吃的是原生单位（秒 / 毫秒），
   //    而 fader/mix 又是 0–1。少了单位标签，用户极易把"混响时间 80"填成 0.8 秒，
   //    跑起来"没什么效果"还以为是台子坏了。
@@ -5359,17 +5800,26 @@ function curValue(g,p,i){
     if(p==='on') return row.on?1:0;
     if(p==='name'){ const nm=(S.names||{})[g]||{}; return nm[String(i)]||''; }
     if(p==='fader') return row.fader;
+    // 新增通道参数: 行字典里同名字段直接返回 (缺省 = 该组没这个参数 → null)
+    if(row[p]!==undefined) return row[p];
   }catch(e){}
   return null;
 }
 function learnSet(){
   const g=$('#stGroup').value, p=$('#stParam').value;
   const i=(g==='main')?0:(+($('#stId').value)||1);
+  const sp=chpSpec(p);
   const v=curValue(g,p,i);
   if(v===null){ cardErr('读不到「'+g+' '+i+'」的当前值（编号越界，或该参数尚未建模）'); return; }
   if(p==='on'||p==='load'){
     const sel=$('#stValSel'); if(sel) sel.value=String(v?1:0);
     cardInfo('已抓取：'+(v?'开启':'静音'));
+  } else if(sp&&sp.t==='bool'){
+    const sel=$('#stValSel'); if(sel) sel.value=String(v?1:0);
+    cardInfo('已抓取：'+(v?sp.lb[1]:sp.lb[0]));
+  } else if(sp&&sp.t==='enum'){
+    const sel=$('#stValSel'); if(sel) sel.value=String(v);
+    cardInfo('已抓取：'+v+' '+(sp.u||''));
   } else if(p==='type'){
     const sel=$('#stValSel'); if(sel) sel.value=v||'';
     cardInfo('已抓取算法：'+(v||'(空)'));
@@ -5379,7 +5829,7 @@ function learnSet(){
   } else {
     const el=$('#stValNum');
     if(el) el.value=(p==='fader')?Math.round(v*100):v;
-    cardInfo('已抓取：'+((p==='fader')?Math.round(v*100)+'%':v));
+    cardInfo('已抓取：'+((p==='fader')?Math.round(v*100)+'%':(sp?chpFmt(sp,v):v)));
   }
 }
 function cardInfo(msg){
@@ -5413,14 +5863,17 @@ function addAct(){
     if(grp!=='main'&&grp!=='scene'&&i<1){ cardErr('请填写目标编号'); return; }
     if(grp==='scene'&&i<1){ cardErr('请填写场景号'); return; }
     a.target={group:grp,param:p,id:i};
+    const sp=chpSpec(p);
     if(p==='on') a.value=(+($('#stValSel')?$('#stValSel').value:0))?1:0;
+    else if(sp&&sp.t==='bool') a.value=(+($('#stValSel')?$('#stValSel').value:0))?1:0;
+    else if(sp&&sp.t==='enum') a.value=+($('#stValSel')?$('#stValSel').value:0);
     else if(p==='type') a.value=($('#stValSel')?$('#stValSel').value:'');   // 库来自当前控台
     else if(p==='name') a.value=($('#stValTxt')?$('#stValTxt').value.trim():'');
     else if(p==='load') a.value=1;
     else {
       let v=+($('#stValNum')?$('#stValNum').value:0)||0;
       if(p==='fader') v=pct(v);          // 表单里填百分比, 传 0..1
-      a.value=v;
+      a.value=v;                          // 新通道参数吃原生单位 (dB/ms/Hz), 不做百分比换算
     }
     const d=+($('#stDur')?$('#stDur').value:0)||0;
     if(d>0&&p==='fader') a.duration=Math.max(d,0.5);   // 只有推子类能渐变
@@ -6150,10 +6603,16 @@ function render(){
       r.querySelector('.mute').classList.toggle('on',!on);
       const nmEl=r.querySelector('.nm2');
       if(nmEl){ const nm=nameOf(P2G[p],+k); nmEl.textContent=nm; }
+      // 该通道有任一处理在启用 (反相/延时/低切/插入/噪声门) → 编号上点个灯,
+      // 不用逐个点开就知道"哪几路带了处理"
+      const cn=r.querySelector('.chnum');
+      if(cn) cn.classList.toggle('on',
+        !!(map[k].invert||map[k].delay_on||map[k].hpf_on||map[k].ins_on||map[k].gate_on));
     }
   };
   upd('c',S.ch); upd('b',S.bus); upd('d',S.dca); upd('m',{0:S.main});
   upd('a',S.auxin); upd('u',S.usb); upd('x',S.fxret); upd('t',S.mtx);
+  chpSync();
 
   // 电平表: 前 32 路是输入通道,后 16 路是输出 Bus
   drawMeters();
@@ -6531,14 +6990,17 @@ class WebHandler(BaseHTTPRequestHandler):
                                            idx, profile().label)}).encode("utf-8"))
                 return
             v = data.get("value")
-            # fader 类必须是数字：'abc'/null 会被 _clamp01 收敛成 0.0，
-            # 于是"发了个垃圾值"表现成"推子归零"—— 比报错难查得多。
-            if k.endswith("_fader") or k == "fx_mix":
+            # 浮点类参数必须是数字：'abc'/null 会被收敛成默认值，
+            # 于是"发了个垃圾值"表现成"参数归零"—— 比报错难查得多。
+            # 判定走登记表 (vtype)：推子/增益/延时/低切频率/门限都是 float；
+            # 越界不报 400 而是按 spec 钳制，与推子一贯的行为保持一致。
+            sp = PARAM_SPECS.get(k)
+            if (sp is not None and sp.vtype == "float") or k == "fx_mix":
                 try:
                     float(v)
                 except (TypeError, ValueError):
                     self._send(400, "application/json", json.dumps(
-                        {"ok": False, "error": "推子值必须是数字"}).encode("utf-8"))
+                        {"ok": False, "error": "该参数必须是数字"}).encode("utf-8"))
                     return
             set_value(k, idx, v)
             self._send(200, "application/json", b'{"ok":true}')
@@ -7296,12 +7758,6 @@ def main():
                     log("处理 %s 出错: %r" % (msg.address, e))
     except KeyboardInterrupt:
         log("\n已退出")
-
-
-def _register_sinks():
-    """装配写出口。state 只认 SINKS, 不认识 bridge (依赖方向: app → 两者)。"""
-    if BRIDGE_SINK not in SINKS:
-        SINKS.append(BRIDGE_SINK)
 
 
 if __name__ == "__main__":

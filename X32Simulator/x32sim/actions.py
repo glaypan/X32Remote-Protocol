@@ -9,6 +9,7 @@ from .fx import fx_algo
 from .kinds import fx_par_kind
 from .logbus import log
 from .osc import OscMsg, encode_message
+from .params import PARAM_SPECS, param_coerce, param_fmt
 from .presets import SNAPSHOTS, _recall_instant, find_snapshot, snap_fade_targets
 from .profiles import profile
 from .state import STATE, _interrupted, db_to_fader, get_value, match_address, set_value, target_exists, target_label
@@ -228,6 +229,15 @@ def _act_label(act):
             lbl = target_label(g, i)
             if p == "on":
                 return "%s %s" % (lbl, "开启" if act.get("value") else "静音")
+            # 通道参数: 用登记表的标签/单位/档位显示 (曾经这里一律 "→%.0f%%",
+            # 于是 trim 3.5 dB 在卡片进度条上显示成 "→4%")。
+            # ⚠️ 只对**新增**参数生效: 推子/静音也在登记表里 (push=True),
+            #    但它们有既有的百分比显示, 不能被这一支吃掉。
+            sp = PARAM_SPECS.get("%s_%s" % (g, p))
+            if sp is not None and not sp.push:
+                # param_fmt 按 vtype 分型: 开关→开/关 (插入位置→PRE/POST),
+                # 枚举→字面值, 浮点→带单位与符号
+                return "%s %s=%s" % (lbl, sp.label, param_fmt(sp, act.get("value")))
             return "%s →%.0f%%" % (lbl, float(act.get("value", 0)) * 100)
         if k == "osc":
             return "原始 OSC %s" % act.get("address", "")
@@ -458,7 +468,15 @@ def _clean_set_action(a, num, why=None):
         # 混响时间/预延迟/阻尼吃**原生单位**（秒/毫秒），范围交给 fx_par_clamp 按算法钳制
         out["value"] = num("value", 0.0, -1000.0, 20000.0)
     else:
-        out["value"] = num("value", 0.0, 0.0, 1.0)
+        # 通道参数 (增益/反相/延时/低切/插入/门): 按登记表的量程与档位清洗。
+        # ⚠️ 不能沿用上面 fader 的 [0,1] 钳制 —— trim 的量程是 -18..18 dB,
+        #    硬钳成 0..1 会让"存 3.5 变成 1"（保存时静默改值，最难查的那类）。
+        #    存进去的就是执行时将要应用的值（param_coerce 是幂等的）。
+        sp = PARAM_SPECS.get("%s_%s" % (group, param))
+        if sp is not None:
+            out["value"] = param_coerce(sp.kind, a.get("value", sp.default))
+        else:
+            out["value"] = num("value", 0.0, 0.0, 1.0)
     if a.get("duration") is not None:
         out["duration"] = num("duration", 0.0, 0.0, 60.0)
     if a.get("at") is not None:

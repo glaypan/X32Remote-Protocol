@@ -1,7 +1,8 @@
 
-from .consts import FADER_ADDR, FX_COUNT, M32_FX_ALGOS, ON_ADDR, X32_FX_ALGOS
+from .consts import FX_COUNT, M32_FX_ALGOS, X32_FX_ALGOS
 from .kinds import fx_par_num
 from .logbus import log
+from .params import CH_PARAM_SPECS, PARAM_SPECS, spec_addr
 # -*- coding: utf-8 -*-
 """x32sim/profiles — 控台驱动层: ConsoleProfile 与各控台地址表"""
 
@@ -79,6 +80,11 @@ class X32Profile(ConsoleProfile):
     fx_algos = X32_FX_ALGOS
 
     def addr(self, kind, idx):
+        # 表驱动: 推子/静音/12 个通道参数的地址全在 params.PARAM_SPECS 里
+        # (单一事实来源; 曾经这里是字面分支, 与 consts 的字典各存一份)
+        sp = PARAM_SPECS.get(kind)
+        if sp is not None:
+            return spec_addr(sp, idx)
         if kind == "ch_dca":
             return "/ch/%02d/mix/dca" % idx
         if kind == "fx_type":
@@ -92,17 +98,8 @@ class X32Profile(ConsoleProfile):
         p = fx_par_num(kind)
         if p is not None:
             return "/fx/%d/par/%02d" % (idx, p)
-        # ⚠️ Main 必须单独返回：`/main/st/mix/fader` 里**没有 %02d 占位符**，
-        #    走 `% idx` 会抛 TypeError（历史 bug，见共享协议规范 §3.5 第 4 条）。
-        if kind == "main_fader":
-            return "/main/st/mix/fader"
-        if kind == "main_on":
-            return "/main/st/mix/on"
-        if kind.endswith("_fader"):
-            pat = FADER_ADDR.get(kind)
-            return pat % idx if pat else None
-        pat = ON_ADDR.get(kind)
-        return pat % idx if pat else None
+        # 表里没有、FX 也不是 → 本控台不支持这个 kind
+        return None
 
 
 class M32Profile(X32Profile):
@@ -139,6 +136,8 @@ class _StubProfile(ConsoleProfile):
         base += [g + "_fader" for g in ("auxin", "usb", "fxret", "mtx")]
         base += [g + "_on" for g in ("auxin", "usb", "fxret", "mtx")]
         base += ["ch_dca", "fx_type", "fx_on", "fx_mix", "fx_name", "fx_par_NN"]
+        # 通道参数 (增益/反相/延时/低切/插入/门): 从登记表推导, 新增即跟上
+        base += [sp.kind for sp in CH_PARAM_SPECS]
         return base
 
 

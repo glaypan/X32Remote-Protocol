@@ -290,6 +290,15 @@
   </div>
 </div>
 
+<div class="modal" id="chParamModal" onclick="if(event.target===this)closeChParams()">
+  <div class="mdlg" role="dialog" aria-label="通道参数">
+    <div class="mhd"><b id="chpTitle">通道参数</b>
+      <button class="mclose" onclick="closeChParams()" aria-label="关闭">✕</button></div>
+    <div class="ds">增益 / 反相 / 延时 / 低切 / 插入 / 噪声门 · 拖动即写入台面（不是草稿）</div>
+    <div id="chParamBody"></div>
+  </div>
+</div>
+
 <div class="modal" id="keyModal" onclick="if(event.target===this)closeKeyModal()">
   <div class="mdlg" role="dialog" aria-label="新增控制键">
     <div class="mhd"><b id="keyModalTitle">➕ 新增控制键</b>

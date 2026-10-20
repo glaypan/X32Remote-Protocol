@@ -10,6 +10,7 @@ from .consts import DEFAULT_NAMES, FADER_ADDR, FX_COUNT, KIND_LABEL, ON_ADDR, RE
 from .kinds import fx_par_kind, fx_par_num, kind_group
 from .logbus import EVENTS, EVT_SEQ, log
 from .osc import OscMsg, encode_message
+from .params import CH_EXTRA_ADDR, PARAM_SPECS, blank_row, param_coerce
 from .profiles import addr_for_write, profile
 from .runtime import MAIN_SOCK
 from .util import _clamp01, _finite, _truthy
@@ -23,14 +24,18 @@ from .util import _clamp01, _finite, _truthy
 class MixerState:
     def __init__(self):
         self.lock = threading.Lock()
-        self.ch = {i: {"fader": 0.75, "on": 1} for i in range(1, 33)}
-        self.bus = {i: {"fader": 0.75, "on": 1} for i in range(1, 17)}   # 输出通道 Mix Bus 1-16
-        self.dca = {i: {"fader": 0.75, "on": 1} for i in range(1, 9)}
-        self.auxin = {i: {"fader": 0.75, "on": 1} for i in range(1, 7)}  # 辅助输入 Aux In 1-6
-        self.usb = {i: {"fader": 0.75, "on": 1} for i in range(1, 3)}    # USB 播放返回 1-2
-        self.fxret = {i: {"fader": 0.75, "on": 1} for i in range(1, 9)}  # 效果返回 FX Return 1-8
-        self.mtx = {i: {"fader": 0.75, "on": 1} for i in range(1, 7)}    # 矩阵输出 Matrix 1-6
-        self.main = {"fader": 0.75, "on": 1}
+        # 行字典由 params.blank_row 生成: 推子/静音 + 输入通道的 12 个参数
+        # (增益/反相/延时/低切/插入/门) 一次带出出厂值。新增参数只改 params.py
+        # 一行 —— 曾经这类默认值散落在各处的 __init__ 里, 漏一处就让新参数在
+        # snapshot/render 里 KeyError (表现为界面卡旧状态)。
+        self.ch = {i: blank_row("ch") for i in range(1, 33)}
+        self.bus = {i: blank_row("bus") for i in range(1, 17)}   # 输出通道 Mix Bus 1-16
+        self.dca = {i: blank_row("dca") for i in range(1, 9)}
+        self.auxin = {i: blank_row("auxin") for i in range(1, 7)}  # 辅助输入 Aux In 1-6
+        self.usb = {i: blank_row("usb") for i in range(1, 3)}    # USB 播放返回 1-2
+        self.fxret = {i: blank_row("fxret") for i in range(1, 9)}  # 效果返回 FX Return 1-8
+        self.mtx = {i: blank_row("mtx") for i in range(1, 7)}    # 矩阵输出 Matrix 1-6
+        self.main = blank_row("main")
         self.scene = 1
         # FX 机架 1-8: 混响器. par 存**原生单位**参数值 (时间=秒 / 预延迟=毫秒 / 阻尼=0..1),
         # 参数索引随算法变化, 映射表见 X32_FX_ALGOS / M32_FX_ALGOS (默认值需真机标定)
@@ -78,6 +83,21 @@ METER_LOCK = threading.Lock()
 START_TIME = time.time()
 
 
+def _row_of(group, idx):
+    """分组 → 行字典 (表驱动读写的公共出口)。
+
+    main 只有一路且编号固定 0，"行"就是 STATE.main 本身 (它没有按路分包)。
+    越界编号抛 KeyError —— 与旧行为一致，target_exists 正是靠它判断
+    "本地台面没有这个目标"。
+    """
+    if group == "main":
+        return STATE.main
+    store = getattr(STATE, group, None)
+    if store is None:
+        raise KeyError(group)
+    return store[idx]
+
+
 def match_address(pattern: str):
     """按 X32 通配符匹配,返回 (group, index, kind) 列表。
     kind: 'ch_fader' | 'ch_on' | 'dca_fader' | 'dca_on' | 'main_fader' | 'main_on'
@@ -95,6 +115,13 @@ def match_address(pattern: str):
                 for i in sorted(STATE.ch):
                     if seg_match(segs[1], "%02d" % i):
                         results.append((kind, i))
+        elif len(segs) == 4 and segs[0] == "ch" and (segs[2], segs[3]) in CH_EXTRA_ADDR:
+            # 通道参数 (增益/反相/延时/低切/插入/门): 与推子同款通配符语义。
+            # 地址索引由 params.py 从登记表生成, 新增参数不用来这里补分支。
+            for sp in CH_EXTRA_ADDR[(segs[2], segs[3])]:
+                for i in sorted(STATE.ch):
+                    if seg_match(segs[1], "%02d" % i):
+                        results.append((sp.kind, i))
         elif len(segs) == 4 and segs[0] == "bus" and segs[2] == "mix":
             kind = {"fader": "bus_fader", "on": "bus_on"}.get(segs[3])
             if kind:
@@ -140,20 +167,13 @@ def match_address(pattern: str):
 
 def get_value(kind, idx):
     with STATE.lock:
-        if kind == "ch_fader":  return float(STATE.ch[idx]["fader"])
-        if kind == "ch_on":     return int(STATE.ch[idx]["on"])
+        # 表驱动: 推子/静音/12 个通道参数全部走登记表 (params.PARAM_SPECS)
+        sp = PARAM_SPECS.get(kind)
+        if sp is not None:
+            return _row_of(sp.group, idx).get(sp.field)
         if kind == "ch_dca":    # 通道归属的 DCA 位掩码
             return sum(1 << (d - 1) for d in range(1, 9)
                        if idx in STATE.dca_members.get(d, []))
-        if kind == "bus_fader": return float(STATE.bus[idx]["fader"])
-        if kind == "bus_on":    return int(STATE.bus[idx]["on"])
-        if kind == "dca_fader": return float(STATE.dca[idx]["fader"])
-        if kind == "dca_on":    return int(STATE.dca[idx]["on"])
-        if kind == "main_fader": return float(STATE.main["fader"])
-        if kind == "main_on":   return int(STATE.main["on"])
-        for g in ("auxin", "usb", "fxret", "mtx"):
-            if kind == g + "_fader": return float(STATE.__dict__[g][idx]["fader"])
-            if kind == g + "_on":    return int(STATE.__dict__[g][idx]["on"])
         if 1 <= idx <= FX_COUNT:
             fx = STATE.fx[idx]
             if kind == "fx_type": return fx["type"]
@@ -189,8 +209,12 @@ def set_value(kind, idx, value, source="manual"):
     if kind == "dca_fader" and source == "manual":
         cascade_from = get_value(kind, idx)   # DCA 手动移动 → 成员级联基准
     with STATE.lock:
-        if kind == "ch_fader":   STATE.ch[idx]["fader"] = _clamp01(value)
-        elif kind == "ch_on":    STATE.ch[idx]["on"] = _truthy(value)
+        sp = PARAM_SPECS.get(kind)
+        if sp is not None:
+            # 表驱动: 钳制 + 档位量化 + 落库 (params.param_coerce)。
+            # 推子/静音/12 个通道参数共用这一条, 与旧的分支写法逐字等价
+            # (fader=_clamp01 / on=_truthy, 通道参数多一层量程与档位)。
+            _row_of(sp.group, idx)[sp.field] = param_coerce(kind, value)
         elif kind == "ch_dca":   # 位掩码: 通道归属哪些 DCA (bit0=DCA1 ...)
             mask = int(value) & 0xFF
             for d in range(1, 9):
@@ -202,12 +226,6 @@ def set_value(kind, idx, value, source="manual"):
                     members.sort()
                 elif has and not want:
                     members.remove(idx)
-        elif kind == "bus_fader": STATE.bus[idx]["fader"] = _clamp01(value)
-        elif kind == "bus_on":   STATE.bus[idx]["on"] = _truthy(value)
-        elif kind == "dca_fader": STATE.dca[idx]["fader"] = _clamp01(value)
-        elif kind == "dca_on":   STATE.dca[idx]["on"] = _truthy(value)
-        elif kind == "main_fader": STATE.main["fader"] = _clamp01(value)
-        elif kind == "main_on":  STATE.main["on"] = _truthy(value)
         elif 1 <= idx <= FX_COUNT:
             fx = STATE.fx[idx]
             if kind == "fx_type":
@@ -225,20 +243,11 @@ def set_value(kind, idx, value, source="manual"):
                 if p is not None:
                     fx["par"][p] = fx_par_clamp(idx, p, value)
         else:
-            hit = False
-            for g in ("auxin", "usb", "fxret", "mtx"):
-                if kind == g + "_fader":
-                    STATE.__dict__[g][idx]["fader"] = _clamp01(value)
-                    hit = True
-                elif kind == g + "_on":
-                    STATE.__dict__[g][idx]["on"] = _truthy(value)
-                    hit = True
-            if not hit:
-                # 走到这里说明 kind 完全不认识 —— 必须留痕。
-                # 曾经的写法是"什么都不做"，于是一个拼错的 kind 表现成
-                # "接口返回 ok 但台子没反应"，最难查的那类。
-                log("SET 未识别的写入: kind=%r idx=%r value=%r (已忽略)"
-                    % (kind, idx, value))
+            # 走到这里说明 kind 完全不认识 —— 必须留痕。
+            # 曾经的写法是"什么都不做"，于是一个拼错的 kind 表现成
+            # "接口返回 ok 但台子没反应"，最难查的那类。
+            log("SET 未识别的写入: kind=%r idx=%r value=%r (已忽略)"
+                % (kind, idx, value))
     if source == "manual":
         _push_manual_now(kind, idx)
     # 写出口 (WriteSink): 落库后的值交给各 sink。sink 只能拿到 after 值,
@@ -350,12 +359,17 @@ def value_reply(kind, idx):
     a = addr_for_write(kind, idx)
     if a is None or v is None:
         return None
+    # 表驱动定参数类型: float 参数 (推子/增益/延时/频率/门限) 发浮点,
+    # 开关发 0/1, 枚举 (低切斜率) 发整数值 —— 与 ParamSpec.vtype 一致
+    sp = PARAM_SPECS.get(kind)
+    if sp is not None:
+        return OscMsg(a, [float(v)] if sp.vtype == "float" else [int(v)])
     if kind == "ch_dca":
         return OscMsg(a, [int(v)])
-    if kind.endswith("_fader") or kind == "fx_mix" or fx_par_num(kind) is not None:
-        return OscMsg(a, [float(v)])
     if kind in ("fx_type", "fx_name"):
         return OscMsg(a, [str(v)])
+    if kind == "fx_mix" or fx_par_num(kind) is not None:   # FX 机架: 混合比/参数是浮点
+        return OscMsg(a, [float(v)])
     return OscMsg(a, [int(v)])
 
 

@@ -8,7 +8,8 @@ import time
 from .bridge import _bridge_force_sync
 from .consts import FX_COUNT, NAME_COUNTS, PRESET_DEFAULT_SCOPE, PRESET_GROUP_LABEL, PRESET_GROUP_PARAMS, PRESET_PARAM_LABEL
 from .logbus import log
-from .state import STATE, get_value, set_value
+from .params import CH_PARAM_SPECS
+from .state import STATE, get_value, set_value, target_exists
 from .util import _clamp01, _finite
 
 # ------------------------------------------------------------
@@ -179,6 +180,11 @@ def _snap_group_items_locked(g, params, idxs):
         if "dca" in params and g == "ch":
             item["dca"] = sum(1 << (d - 1) for d in range(1, 9)
                               if i in STATE.dca_members.get(d, []))
+        # 通道参数 (表驱动): 参数名与 spec.field 同名, 只抓范围内勾了的那些。
+        # 预设是老格式 (只有 fader/on) 时这里一个都不抓 —— 向后兼容。
+        for sp in CH_PARAM_SPECS:
+            if sp.field in params:
+                item[sp.field] = row.get(sp.field, sp.default)
         bag[str(i)] = item
     return bag
 
@@ -324,6 +330,11 @@ def _recall_instant(snap):
                       item.get("on", 1), source="action")
         if "dca" in item and g == "ch":
             set_value("ch_dca", i, item.get("dca", 0), source="action")
+        # 通道参数 (表驱动): 瞬时项, 立即应用。target_exists 挡掉越界编号
+        # (配置文件可手改; KeyError 会把整个回归线程炸掉, 见 _recall_body 的 try)
+        for sp in CH_PARAM_SPECS:
+            if sp.field in item and target_exists(sp.kind, i):
+                set_value(sp.kind, i, item[sp.field], source="action")
         if "name" in item:
             nm = str(item.get("name") or "").strip()[:12]
             with STATE.lock:

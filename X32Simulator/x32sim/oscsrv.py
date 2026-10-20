@@ -8,7 +8,8 @@ from .consts import KIND_LABEL, NAME_COUNTS
 from .kinds import fx_par_num, kind_group
 from .logbus import log
 from .osc import OscMsg, encode_bundle, encode_message
-from .state import METER_LOCK, METER_SUBSCRIBERS, STATE, compute_levels, get_name, match_address, set_name, set_value, value_reply
+from .params import PARAM_SPECS, param_fmt
+from .state import METER_LOCK, METER_SUBSCRIBERS, STATE, compute_levels, get_name, get_value, match_address, set_name, set_value, value_reply
 from .version import SIM_FIRMWARE, SIM_MODEL, SIM_NAME
 
 # ------------------------------------------------------------
@@ -112,7 +113,15 @@ def handle(msg: OscMsg, addr, sock):
                 pass                  # FX 类型/名称本来就是字符串("/fx/1/type HALL"), 原样往下传
         set_value(kind, idx, raw)
         label = KIND_LABEL.get(kind_group(kind), kind)
-        if kind == "ch_dca":
+        sp = PARAM_SPECS.get(kind)
+        if sp is not None and not sp.push:
+            # 新增通道参数 (增益/反相/延时/低切/插入/门): 标签与单位取自登记表。
+            # 打的是**落库后**的值 (钳制/量化之后) 而不是原始入参 —— 曾经的
+            # 通用分支会把 trim 打成 "fader=3.5 (11.1 dB)", 把 hpf_on 打成
+            # "mute=开", 日志整个失去排查价值。
+            log("    SET %s %02d %s=%s" % (label, idx, sp.label,
+                                           param_fmt(sp, get_value(kind, idx))))
+        elif kind == "ch_dca":
             log("    SET %s %02d DCA掩码=%d" % (label, idx, int(raw) & 0xFF))
         elif kind == "fx_on":
             log("    SET FX%d 开关=%s" % (idx, "开" if raw else "旁通"))

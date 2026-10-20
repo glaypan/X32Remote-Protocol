@@ -137,11 +137,3 @@ def main():
                     log("处理 %s 出错: %r" % (msg.address, e))
     except KeyboardInterrupt:
         log("\n已退出")
-
-
-def _register_sinks():
-    """装配写出口。state 只认 SINKS, 不认识 bridge (依赖方向: app → 两者)。"""
-    from .state import SINKS
-    from .bridge import BRIDGE_SINK
-    if BRIDGE_SINK not in SINKS:
-        SINKS.append(BRIDGE_SINK)

@@ -5,6 +5,8 @@
 # 以下代码自 x32_simulator.py 逐字搬运 (B1 模块化), 仅头部导入为本工具生成
 # ------------------------------------------------------------
 
+from .params import CH_PARAM_SPECS, PARAM_SPECS
+
 # ---------------------------------------------------------------- 混响 / FX 机架
 # X32 有 8 个 FX 槽. 混响类算法的参数**索引随算法变化**(官方文档里 Hall/Plate/Room/
 # Chamber/Vintage 各有自己的参数页), 因此这里把"时间/预延迟/阻尼"抽象出来, 索引集中
@@ -63,6 +65,8 @@ DEFAULT_NAMES = {
 
 
 # 网页分组前缀 → 推子/静音 kind 映射 (/api/set 与 /api/setbatch 共用)
+# ch 一行由 params.CH_PARAM_SPECS 推导: 新增通道参数只改 params.py 一处,
+# 这里、卡片动作白名单、预设范围白名单、前端下拉 全部跟着走 (前端另有同内容镜像)
 SET_KINDMAP = {"ch": {"fader": "ch_fader", "on": "ch_on"},
                "bus": {"fader": "bus_fader", "on": "bus_on"},
                "dca": {"fader": "dca_fader", "on": "dca_on"},
@@ -71,24 +75,16 @@ SET_KINDMAP = {"ch": {"fader": "ch_fader", "on": "ch_on"},
                "usb": {"fader": "usb_fader", "on": "usb_on"},
                "fxret": {"fader": "fxret_fader", "on": "fxret_on"},
                "mtx": {"fader": "mtx_fader", "on": "mtx_on"}}
+SET_KINDMAP["ch"].update({sp.field: sp.kind for sp in CH_PARAM_SPECS})
 
-
-FADER_ADDR = {"ch_fader": "/ch/%02d/mix/fader",
-              "bus_fader": "/bus/%02d/mix/fader",
-              "dca_fader": "/dca/%02d/fader",
-              "auxin_fader": "/auxin/%02d/mix/fader",
-              "usb_fader": "/usb/%02d/mix/fader",
-              "fxret_fader": "/fxret/%02d/mix/fader",
-              "mtx_fader": "/mtx/%02d/mix/fader",
-              "main_fader": "/main/st/mix/fader"}
-ON_ADDR = {"ch_on": "/ch/%02d/mix/on",
-           "bus_on": "/bus/%02d/mix/on",
-           "dca_on": "/dca/%02d/on",
-           "auxin_on": "/auxin/%02d/mix/on",
-           "usb_on": "/usb/%02d/mix/on",
-           "fxret_on": "/fxret/%02d/mix/on",
-           "mtx_on": "/mtx/%02d/mix/on",
-           "main_on": "/main/st/mix/on"}
+# 推子/静音的 OSC 地址模板: 由 params.PARAM_SPECS **推导** (单一事实来源,
+# 曾经这里是字面字典, 改一个地址要同时惦记 profiles.addr 里的另一份)。
+# 只收 push=True 的项 —— 新增的 12 个通道参数不进 150ms 周期推送
+# (见 params.py 里 push 字段的说明: 那笔流量治理的账不能还回去)。
+FADER_ADDR = {sp.kind: sp.osc for sp in PARAM_SPECS.values()
+              if sp.push and sp.kind.endswith("_fader")}
+ON_ADDR = {sp.kind: sp.osc for sp in PARAM_SPECS.values()
+           if sp.push and sp.kind.endswith("_on")}
 KIND_LABEL = {"ch": "通道", "bus": "输出Bus", "dca": "DCA", "main": "Main",
               "auxin": "AuxIn", "usb": "USB", "fxret": "FX返回", "mtx": "Matrix",
               "fx_par": "FX参数", "fx_type": "FX算法", "fx_name": "FX名称",
@@ -113,12 +109,16 @@ PRESET_GROUP_PARAMS = {
     "fx": ("slot",),
     "scene": ("scene",),
 }
+# 输入通道的参数白名单跟上登记表 (增益/反相/延时/低切/插入/门)
+PRESET_GROUP_PARAMS["ch"] = tuple(PRESET_GROUP_PARAMS["ch"]) + tuple(
+    sp.field for sp in CH_PARAM_SPECS)
 PRESET_GROUP_LABEL = {"ch": "输入通道", "bus": "Mix Bus", "dca": "DCA",
                       "auxin": "Aux In", "usb": "USB", "fxret": "FX 返回",
                       "mtx": "Matrix", "main": "主输出", "fx": "FX 机架",
                       "scene": "场景号"}
 PRESET_PARAM_LABEL = {"fader": "推子", "on": "静音", "name": "名称",
                       "dca": "DCA 归属", "slot": "整槽", "scene": "当前场景"}
+PRESET_PARAM_LABEL.update({sp.field: sp.label for sp in CH_PARAM_SPECS})
 PRESET_DEFAULT_SCOPE = {
     "groups": ["ch", "bus", "dca", "auxin", "usb", "fxret", "mtx", "main"],
     "params": ["fader", "on"],
@@ -154,12 +154,15 @@ SET_PARAMS = {
     "fx": ("type", "name", "on", "mix", "time", "predelay", "damp"),
     "scene": ("load",),
 }
+# 通用设置动作的通道参数白名单 (与 SET_KINDMAP["ch"] 同源)
+SET_PARAMS["ch"] = tuple(SET_PARAMS["ch"]) + tuple(sp.field for sp in CH_PARAM_SPECS)
 SET_GROUP_LABEL = {"ch": "通道", "bus": "Bus", "dca": "DCA", "main": "主输出",
                    "auxin": "AuxIn", "usb": "USB", "fxret": "FX返回",
                    "mtx": "Matrix", "fx": "FX", "scene": "场景"}
 SET_PARAM_LABEL = {"fader": "推子", "on": "开关", "type": "算法", "name": "名称",
                    "mix": "混合比", "time": "混响时间", "predelay": "预延迟",
                    "damp": "阻尼", "load": "调用"}
+SET_PARAM_LABEL.update({sp.field: sp.label for sp in CH_PARAM_SPECS})
 
 
 CURVES = ("linear", "ease_out", "ease_in", "smooth")

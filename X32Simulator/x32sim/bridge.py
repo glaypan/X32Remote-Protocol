@@ -10,6 +10,7 @@ from .consts import FADER_ADDR, ON_ADDR
 from .kinds import fx_par_kind, fx_par_num, kind_group
 from .logbus import EVENTS, EVT_SEQ, log
 from .osc import OscMsg, decode_packet, encode_bundle, encode_message
+from .params import PARAM_SPECS
 from .profiles import addr_for_write, profile
 from .state import FADE_LOCK, FADE_ZONE, INTERRUPTS, WriteSink, get_value, match_address, set_value, target_label
 from .util import _truthy
@@ -30,11 +31,27 @@ def _bridge_forward(kind, idx, value, source="manual", force=False):
     try:
         if value is None:
             return          # 本地没有这个目标（换控台后规模不匹配等）
+        sp = PARAM_SPECS.get(kind)
         if kind == "ch_dca":
             arg = int(value) & 0xFF
         elif kind in ("fx_type", "fx_name"):
             arg = str(value)[:12]
-        elif kind.endswith("_fader") or kind == "fx_mix" or fx_par_num(kind) is not None:
+        elif sp is not None:
+            # 表驱动定线上类型 (与 state.value_reply 同一套规则):
+            #   float → 浮点 (推子/增益/延时/频率/门限); int → 整数 (低切斜率);
+            #   bool  → 0/1 (静音/延时/低切/插入/门开关)
+            # ⚠️ 曾经这里是 `endswith("_fader") → float, 其余 _truthy` —— 新增的
+            #    通道参数全是非 _fader 结尾, 会被 _truthy 压成 0/1 发给真台
+            #    (trim 3.5 dB 变成 1), 于是"桥接转发"这一层整个失真。
+            if sp.vtype == "bool":
+                arg = _truthy(value)
+            else:
+                arg = float(value) if sp.vtype == "float" else int(value)
+                # 第二道闸: 万一将来哪条路径漏了 _finite, 宁可拒发也不把 NaN 发给真台
+                if not math.isfinite(arg):
+                    log("BRIDGE 拒发非有限值: %s %s = %r" % (kind, idx, value))
+                    return
+        elif kind == "fx_mix" or fx_par_num(kind) is not None:
             arg = float(value)
             # 第二道闸: 万一将来哪条路径漏了 _finite, 宁可拒发也不把 NaN 发给真台
             if not math.isfinite(arg):

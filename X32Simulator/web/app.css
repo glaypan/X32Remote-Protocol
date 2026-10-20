@@ -206,3 +206,36 @@
             padding:8px 12px;margin-bottom:8px;font-size:13px;flex-wrap:wrap}
   .schedrow b{color:var(--accent)}
   .schedrow .cd{font-variant-numeric:tabular-nums;color:var(--sub)}
+
+/* ---- 通道参数面板 (增益/反相/延时/低切/插入/噪声门) ---- */
+/* 编号本身是入口: 做成可点的圆角小牌, 有处理启用时右上角亮一个橙点。
+   不加额外按钮 —— 通道条在 390px 屏上已经挤满, 再塞一个图标会挤掉推子。 */
+.chnum{display:inline-block;padding:1px 5px;border-radius:6px;cursor:pointer;
+       border:1px solid transparent;transition:background .12s,border-color .12s}
+.chnum:active{background:var(--card2);border-color:var(--line)}
+.chnum.on{position:relative;background:var(--card2);border-color:#3a4050}
+.chnum.on::after{content:'';position:absolute;top:-2px;right:-3px;width:6px;height:6px;
+                 border-radius:50%;background:var(--accent);box-shadow:0 0 5px var(--accent)}
+.chp-row{display:flex;align-items:center;gap:10px;padding:6px 2px;
+         border-bottom:1px solid var(--line)}
+.chp-row:last-child{border-bottom:0}
+.chp-l{width:66px;flex:none;font-size:13px;color:var(--txt)}
+.chp-v{width:74px;flex:none;text-align:right;font-size:12px;color:var(--sub);
+       font-variant-numeric:tabular-nums;white-space:nowrap}
+.chp-row input[type=range]{flex:1;-webkit-appearance:none;appearance:none;
+                           background:transparent;height:30px;min-width:0}
+.chp-row input[type=range]::-webkit-slider-runnable-track{height:6px;border-radius:4px;
+  background:linear-gradient(90deg,#0d0f13,#31374a);box-shadow:inset 0 1px 3px rgba(0,0,0,.6)}
+.chp-row input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;height:28px;
+  margin-top:-11px;border-radius:6px;background:linear-gradient(180deg,#3d4454,#22262f);
+  border:1px solid #4d566b;box-shadow:0 3px 8px rgba(0,0,0,.55)}
+.chp-row input[type=range]::-moz-range-track{height:6px;border-radius:4px;
+  background:linear-gradient(90deg,#0d0f13,#31374a)}
+.chp-row input[type=range]::-moz-range-thumb{width:20px;height:26px;border-radius:6px;
+  background:linear-gradient(180deg,#3d4454,#22262f);border:1px solid #4d566b}
+.chp-tog{flex:1;max-width:120px;padding:8px 10px;border-radius:9px;font-size:13px;font-weight:700;
+         border:1px solid var(--line);background:var(--card2);color:var(--sub)}
+.chp-tog.on{background:rgba(255,180,84,.16);border-color:var(--accent);color:var(--accent)}
+.chp-row select{flex:1;max-width:130px}
+.chp-row.off{opacity:.5}
+.chp-row.off .chp-l{color:var(--sub)}

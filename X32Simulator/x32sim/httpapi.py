@@ -12,6 +12,7 @@ from .cards import SHOW_CARDS
 from .consts import FX_COUNT, NAME_COUNTS, NOTE_BEATS, SET_KINDMAP
 from .fx import FX_MODE_LABEL, FX_SYNC, FX_SYNC_LOCK, fx_set_param, fx_tap_apply, tap_register, tap_reset
 from .logbus import EVENTS, EVT_SEQ, log
+from .params import PARAM_SPECS
 from .persist import CONFIG_PATH, ID_SEQ, clear_console, next_id, recall_last, save_user_config
 from .presets import AUTO_SNAPS, SNAPSHOTS, _recall_stop_current, preset_scope_text, recall_snapshot, save_snapshot, start_recall
 from .profiles import profile, set_profile
@@ -208,14 +209,17 @@ class WebHandler(BaseHTTPRequestHandler):
                                            idx, profile().label)}).encode("utf-8"))
                 return
             v = data.get("value")
-            # fader 类必须是数字：'abc'/null 会被 _clamp01 收敛成 0.0，
-            # 于是"发了个垃圾值"表现成"推子归零"—— 比报错难查得多。
-            if k.endswith("_fader") or k == "fx_mix":
+            # 浮点类参数必须是数字：'abc'/null 会被收敛成默认值，
+            # 于是"发了个垃圾值"表现成"参数归零"—— 比报错难查得多。
+            # 判定走登记表 (vtype)：推子/增益/延时/低切频率/门限都是 float；
+            # 越界不报 400 而是按 spec 钳制，与推子一贯的行为保持一致。
+            sp = PARAM_SPECS.get(k)
+            if (sp is not None and sp.vtype == "float") or k == "fx_mix":
                 try:
                     float(v)
                 except (TypeError, ValueError):
                     self._send(400, "application/json", json.dumps(
-                        {"ok": False, "error": "推子值必须是数字"}).encode("utf-8"))
+                        {"ok": False, "error": "该参数必须是数字"}).encode("utf-8"))
                     return
             set_value(k, idx, v)
             self._send(200, "application/json", b'{"ok":true}')
