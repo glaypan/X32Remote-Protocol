@@ -31,6 +31,7 @@ X32 虚拟调音台模拟器 (Behringer X32/M32 OSC Server Simulator)
 
 import argparse
 import collections
+import hashlib
 import json
 import math
 import os
@@ -3963,9 +3964,43 @@ def _sanitize_snapshot(obj):
     return obj
 
 
-def snapshot_state_safe(since_log=None):
-    """snapshot_state + NaN 消毒（HTTP 层只走这个入口）。"""
-    return _sanitize_snapshot(snapshot_state(since_log))
+def _state_version(head):
+    """状态内容指纹 (调用方已剔除 meters/log/logseq/ver)。
+
+    用途: /api/state?v=N 条件轮询。网页 250ms 全量轮询在空台也要 15-21KB,
+    实测 271-300MB/h (4G 场景不可接受)。命中"没变"时服务端只回 ~30 字节。
+    哈希失败 (含不可序列化对象) 时返回 None —— 调用方必须恒返全量,
+    **绝不能**把 None 当合法版本号 (否则下次 v=None 也匹配, 界面被冻结)。
+    """
+    try:
+        raw = json.dumps(head, sort_keys=True, ensure_ascii=False,
+                         separators=(",", ":"), allow_nan=False)
+    except (TypeError, ValueError):
+        return None
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def snapshot_state_safe(since_log=None, ver=None):
+    """snapshot_state + NaN 消毒（HTTP 层只走这个入口）。
+
+    ver 给定时进入**条件快照**模式 (网页专用, 旧客户端不传):
+      - 剔除 meters (改由 /api/meters 单独取, 它每 tick 都变, 不能进指纹);
+      - 按内容指纹比对, 未变更 → {"unchanged":true, log, logseq};
+      - 有变更 → 全量 + ver 字段 (下次轮询带上)。
+    """
+    snap = _sanitize_snapshot(snapshot_state(since_log))
+    if ver is None:
+        return snap
+    snap.pop("meters", None)
+    head = {k: v for k, v in snap.items() if k not in ("log", "logseq", "ver")}
+    cur = _state_version(head)
+    if cur is not None and cur == ver:
+        return {"unchanged": True, "log": snap.get("log") or [],
+                "logseq": snap.get("logseq", 0)}
+    if cur is None:
+        return snap                  # 放弃条件模式, 恒返全量 (客户端会看到无 ver)
+    snap["ver"] = cur
+    return snap
 
 
 # ================================================================ Web 控制台
@@ -4053,21 +4088,31 @@ class WebHandler(BaseHTTPRequestHandler):
             self._send(200, "text/html; charset=utf-8", WEB_PAGE.encode("utf-8"))
         elif path == "/api/state":
             since = None
+            ver = None
             try:
-                qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query,
+                                           keep_blank_values=True)
                 if "logseq" in qs:
                     since = int(qs["logseq"][0])
+                if "v" in qs:
+                    ver = str(qs["v"][0])[:32]     # 空串 = 首轮: 返全量并带上 ver
             except (TypeError, ValueError):
                 since = None
             # allow_nan=False 是**测试阶段就该炸**的开关：万一哪条新写入路径漏了
             # _finite，让它在服务端抛出来，而不是等线上前端 JSON.parse 崩、界面卡死
             try:
-                body = json.dumps(snapshot_state_safe(since),
+                body = json.dumps(snapshot_state_safe(since, ver),
                                   allow_nan=False).encode("utf-8")
             except ValueError as e:
                 log("STATE 快照含非有限数 (%s)，已降级为空快照" % e)
                 body = b"{}"
             self._send(200, "application/json; charset=utf-8", body)
+        elif path == "/api/meters":
+            # 电平单独取: 它每 tick 都变, 不能进 /api/state 的内容指纹,
+            # 否则"没变更"永远命中不了。旧 /api/state 仍带 meters (App 兼容)。
+            self._send(200, "application/json; charset=utf-8",
+                       json.dumps({"meters": compute_levels()},
+                                  allow_nan=False).encode("utf-8"))
         elif path == "/api/info":
             self._send(200, "application/json; charset=utf-8", json.dumps({
                 "lanIp": LAN_IP, "udpPort": UDP_PORT, "webPort": WEB_PORT,
@@ -5431,6 +5476,7 @@ function init(){
     b.classList.add('on'); $('#pg-'+b.dataset.p).classList.add('on');
   });
   poll();
+  pollMeters();
 }
 
 function drag(p,i,el){
@@ -6764,14 +6810,7 @@ function render(){
   upd('a',S.auxin); upd('u',S.usb); upd('x',S.fxret); upd('t',S.mtx);
 
   // 电平表: 前 32 路是输入通道,后 16 路是输出 Bus
-  const meters=[...document.querySelectorAll('#chlist .meter i'),
-                ...document.querySelectorAll('#buslist .meter i')];
-  meters.forEach((el,idx)=>{
-    if(idx<S.meters.length){
-      const db=S.meters[idx];
-      el.style.height=(db<=-60?0:Math.min(100,(db+60)/60*100))+'%';
-    }
-  });
+  drawMeters();
   $('#scene').textContent='场景 '+S.scene;
   if($('#scene2')) $('#scene2').textContent='场景 '+S.scene;
   $('#subs').textContent=S.subscribers;
@@ -6883,19 +6922,53 @@ function render(){
   if(lg.dataset.t!==txt){ lg.textContent=txt; lg.scrollTop=lg.scrollHeight; lg.dataset.t=txt; }
 }
 
+// 电平表单独刷新 (数据来自 /api/meters, 不进 /api/state 的内容指纹)
+function drawMeters(){
+  if(!S||!S.meters) return;
+  const meters=[...document.querySelectorAll('#chlist .meter i'),
+                ...document.querySelectorAll('#buslist .meter i')];
+  meters.forEach((el,idx)=>{
+    if(idx<S.meters.length){
+      const db=S.meters[idx];
+      el.style.height=(db<=-60?0:Math.min(100,(db+60)/60*100))+'%';
+    }
+  });
+}
+
 function poll(){
-  const q=window._logSeq===undefined?'/api/state':('/api/state?logseq='+window._logSeq);
+  // 条件轮询: 带上一次的状态指纹 v, 服务端没变更就只回 ~30 字节
+  // (全量轮询曾达 271-300MB/h; 电平改走 /api/meters, 不进指纹)
+  let q=(window._logSeq===undefined?'/api/state':('/api/state?logseq='+window._logSeq));
+  q+=(q.indexOf('?')<0?'?':'&')+'v='+encodeURIComponent(window._stateVer||'');
   fetch(q).then(r=>r.json()).then(d=>{
     if(window._logSeq===undefined){ window._logAcc=(d.log||[]).slice(); }
     else if(d.log && d.log.length){
       window._logAcc=window._logAcc.concat(d.log);
       if(window._logAcc.length>300) window._logAcc=window._logAcc.slice(-300);
     }
-    d.log=window._logAcc||d.log||[];
     window._logSeq=d.logseq;
-    S=d; $('#conn').style.background='#22c55e'; pollEvents(); render();
+    if(d.unchanged){
+      // 状态没变: 只更新日志框, 不重建界面 (打断输入/按钮交互的元凶)
+      if(S){
+        S.log=window._logAcc||[];
+        const lg=$('#logbox'); const txt=S.log.join('\\n');
+        if(lg.dataset.t!==txt){ lg.textContent=txt; lg.scrollTop=lg.scrollHeight; lg.dataset.t=txt; }
+      }
+      $('#conn').style.background='#22c55e';
+    }else{
+      d.log=window._logAcc||d.log||[];
+      if(d.ver) window._stateVer=d.ver;
+      S=d; $('#conn').style.background='#22c55e'; pollEvents(); render();
+    }
   }).catch(()=>{ $('#conn').style.background='#ef4444'; $('#hdinfo').textContent='连接断开,重试中…'; })
    .finally(()=>setTimeout(poll,250));
+}
+
+function pollMeters(){
+  fetch('/api/meters').then(r=>r.json()).then(d=>{
+    if(!S) return;
+    S.meters=d.meters||S.meters; drawMeters();
+  }).catch(()=>{}).finally(()=>setTimeout(pollMeters,250));
 }
 // 局部刷新: 内容没变不重建 innerHTML (避免打断按钮交互/选中状态)
 function setHTML(id,html){
