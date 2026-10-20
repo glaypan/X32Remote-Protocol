@@ -47,3 +47,7 @@ outputs/*页-*.png
 # ---- 会话/工具状态 ----
 .workbuddy/
 *.genie
+
+# ---- 回归测试临时文件 / 浏览器会话 ----
+X32Simulator/_regr_*.json
+X32Simulator/.playwright-cli/

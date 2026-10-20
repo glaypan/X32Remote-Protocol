@@ -1,0 +1,175 @@
+# -*- coding: utf-8 -*-
+"""x32sim/consts — 数据表: 容量/默认名/地址模板/动作与预设白名单/FX 元数据"""
+
+# ------------------------------------------------------------
+# 以下代码自 x32_simulator.py 逐字搬运 (B1 模块化), 仅头部导入为本工具生成
+# ------------------------------------------------------------
+
+# ---------------------------------------------------------------- 混响 / FX 机架
+# X32 有 8 个 FX 槽. 混响类算法的参数**索引随算法变化**(官方文档里 Hall/Plate/Room/
+# Chamber/Vintage 各有自己的参数页), 因此这里把"时间/预延迟/阻尼"抽象出来, 索引集中
+# 在这一张表里 —— 真机联调时只需改这张表, 不用动逻辑。
+#   time     混响时间 (RT) 的参数索引, 值单位 = 秒
+#   predelay 预延迟的参数索引,       值单位 = 毫秒
+#   damp     阻尼/高频衰减的参数索引, 值单位 = 0..1
+#   tmin/tmax 该算法混响时间的合法范围 (秒), Tap 换算结果按此钳制
+FX_COUNT = 8
+# ⚠️ 效果库**属于控台驱动**，不是全局表（见「控台驱动层」一节）。
+#    同一个算法名在不同控台上参数索引可能不同，所以任何"按算法查参数索引"的
+#    地方都必须走 fx_algos()（= 当前控台的库），不能直接读某一张表 —— 否则
+#    换控台后就会出现"参数串味"（把 A 台的时间参数写到了 B 台的别的位置）。
+#
+#    X32 与 M32 使用**同一套效果引擎**（M32 是 Midas 贴牌的同代产品，固件效果器
+#    为同一 Klark Teknik 引擎），因此两张表当前内容一致；但**分别持有**，将来
+#    某一版固件效果库出现出入时，只需改对应的那一张，公共代码与卡片动作都不动。
+X32_FX_ALGOS = {
+    "HALL":    {"label": "大厅混响", "time": 1, "predelay": 2, "damp": 4, "tmin": 0.4, "tmax": 10.0},
+    "PLATE":   {"label": "板式混响", "time": 1, "predelay": 2, "damp": 4, "tmin": 0.3, "tmax": 8.0},
+    "ROOM":    {"label": "房间混响", "time": 1, "predelay": 2, "damp": 4, "tmin": 0.2, "tmax": 5.0},
+    "CHAMBER": {"label": "密室混响", "time": 1, "predelay": 2, "damp": 4, "tmin": 0.3, "tmax": 6.0},
+    "VINTAGE": {"label": "复古混响", "time": 1, "predelay": 2, "damp": 4, "tmin": 0.3, "tmax": 6.0},
+}
+M32_FX_ALGOS = {k: dict(v) for k, v in X32_FX_ALGOS.items()}   # 独立副本，便于日后分化
+# 出厂默认混响参数 (秒 / 毫秒 / 0..1), 索引与上面的表对应
+REVERB_DEFAULTS = {
+    "HALL":    {1: 2.40, 2: 25.0, 4: 0.45},
+    "PLATE":   {1: 1.80, 2: 15.0, 4: 0.30},
+    "ROOM":    {1: 1.10, 2: 12.0, 4: 0.55},
+    "CHAMBER": {1: 1.60, 2: 20.0, 4: 0.40},
+    "VINTAGE": {1: 1.50, 2: 18.0, 4: 0.35},
+}
+
+
+# Tap 定拍 / 时值换算
+TAP_INTERVAL_MIN = 0.15      # 两次点击靠得比这还近 → 抖动, 忽略
+TAP_RESET_GAP = 2.0          # 超过这么久没点 → 视为新的一组, 重头开始
+TAP_MAX_INTERVALS = 8        # 最多用最近 8 个间隔求均值
+TAP_BPM_MIN, TAP_BPM_MAX = 30.0, 300.0
+NOTE_BEATS = {"1/16": 0.25, "1/8": 0.5, "1/4": 1.0, "1/2": 2.0, "1": 4.0, "2": 8.0}
+
+
+# 各组通道数量 (名称读写与编辑器共用); main 单独处理 idx=0
+NAME_COUNTS = {"ch": 32, "bus": 16, "dca": 8, "auxin": 6, "usb": 2, "fxret": 8, "mtx": 6}
+# 出厂默认名称: 与内置卡片/控制键呼应 (15=音乐, Bus15=耳返), 均可在网页或 OSC 里改
+DEFAULT_NAMES = {
+    ("ch", 1): "底鼓", ("ch", 2): "军鼓", ("ch", 3): "踩镲", ("ch", 4): "嗵鼓",
+    ("ch", 5): "吊镲", ("ch", 6): "贝斯", ("ch", 7): "电吉1", ("ch", 8): "电吉2",
+    ("ch", 9): "木吉", ("ch", 10): "键盘1", ("ch", 11): "键盘2", ("ch", 12): "采样",
+    ("ch", 13): "无线麦1", ("ch", 14): "主持麦", ("ch", 15): "音乐", ("ch", 16): "视频声",
+    ("bus", 1): "鼓监听", ("bus", 2): "乐队监听", ("bus", 3): "主唱监听", ("bus", 15): "耳返",
+    ("dca", 1): "乐队", ("dca", 2): "人声", ("dca", 3): "鼓组",
+    ("main", 0): "主输出",
+}
+
+
+# 网页分组前缀 → 推子/静音 kind 映射 (/api/set 与 /api/setbatch 共用)
+SET_KINDMAP = {"ch": {"fader": "ch_fader", "on": "ch_on"},
+               "bus": {"fader": "bus_fader", "on": "bus_on"},
+               "dca": {"fader": "dca_fader", "on": "dca_on"},
+               "main": {"fader": "main_fader", "on": "main_on"},
+               "auxin": {"fader": "auxin_fader", "on": "auxin_on"},
+               "usb": {"fader": "usb_fader", "on": "usb_on"},
+               "fxret": {"fader": "fxret_fader", "on": "fxret_on"},
+               "mtx": {"fader": "mtx_fader", "on": "mtx_on"}}
+
+
+FADER_ADDR = {"ch_fader": "/ch/%02d/mix/fader",
+              "bus_fader": "/bus/%02d/mix/fader",
+              "dca_fader": "/dca/%02d/fader",
+              "auxin_fader": "/auxin/%02d/mix/fader",
+              "usb_fader": "/usb/%02d/mix/fader",
+              "fxret_fader": "/fxret/%02d/mix/fader",
+              "mtx_fader": "/mtx/%02d/mix/fader",
+              "main_fader": "/main/st/mix/fader"}
+ON_ADDR = {"ch_on": "/ch/%02d/mix/on",
+           "bus_on": "/bus/%02d/mix/on",
+           "dca_on": "/dca/%02d/on",
+           "auxin_on": "/auxin/%02d/mix/on",
+           "usb_on": "/usb/%02d/mix/on",
+           "fxret_on": "/fxret/%02d/mix/on",
+           "mtx_on": "/mtx/%02d/mix/on",
+           "main_on": "/main/st/mix/on"}
+KIND_LABEL = {"ch": "通道", "bus": "输出Bus", "dca": "DCA", "main": "Main",
+              "auxin": "AuxIn", "usb": "USB", "fxret": "FX返回", "mtx": "Matrix",
+              "fx_par": "FX参数", "fx_type": "FX算法", "fx_name": "FX名称",
+              "fx_on": "FX开关", "fx_mix": "FX混合比"}
+
+# ---- 预设范围：组 → 该组能存的参数 -------------------------------------
+# 为什么要有"范围"：以前一条预设永远是"79 路 × 推子+静音"的全量回归，用户想只还原
+# 人声那几路做不到，一动就是整台。范围把"存什么"和"还原什么"绑在一起，
+# 回归只写范围内的键 —— 没勾的通道一个字节都不碰。
+#   fader/on/name 是 79 路通用三项；dca 只对输入通道有意义（位掩码归属）；
+#   FX 整槽存（算法/名称/开关/混合比/参数）—— 参数号随算法变化，拆开存没有意义；
+#   scene 只记录当前场景号（回归时不发 OSC，发不发由卡片的场景动作决定）。
+PRESET_GROUP_PARAMS = {
+    "ch": ("fader", "on", "name", "dca"),
+    "bus": ("fader", "on", "name"),
+    "dca": ("fader", "on", "name"),
+    "auxin": ("fader", "on", "name"),
+    "usb": ("fader", "on", "name"),
+    "fxret": ("fader", "on", "name"),
+    "mtx": ("fader", "on", "name"),
+    "main": ("fader", "on", "name"),
+    "fx": ("slot",),
+    "scene": ("scene",),
+}
+PRESET_GROUP_LABEL = {"ch": "输入通道", "bus": "Mix Bus", "dca": "DCA",
+                      "auxin": "Aux In", "usb": "USB", "fxret": "FX 返回",
+                      "mtx": "Matrix", "main": "主输出", "fx": "FX 机架",
+                      "scene": "场景号"}
+PRESET_PARAM_LABEL = {"fader": "推子", "on": "静音", "name": "名称",
+                      "dca": "DCA 归属", "slot": "整槽", "scene": "当前场景"}
+PRESET_DEFAULT_SCOPE = {
+    "groups": ["ch", "bus", "dca", "auxin", "usb", "fxret", "mtx", "main"],
+    "params": ["fader", "on"],
+    "indices": {},
+}
+
+
+FADE_ACT_KINDS = ("fade_all", "fade_odd_even", "fade_ch", "fade_bus",
+                  "fade_from", "fade_from_bus", "rel_db")
+
+
+# ---------------------------------------------------------------- 通用动作 set
+#
+# 背景: 原有 12 个动作是"常见演出套装"（全体渐变 / 奇偶过渡 / 相对增减 dB …），
+# 覆盖面广但补不全 —— 例如"把 DCA 3 拉到 80%""把 FX1 混响时间改成 2.4 秒"就做不到。
+#
+# 通用动作把它收敛成一件事: 指定**目标**和**值**。
+#   {"kind":"set", "target":{"group":"dca","id":3,"param":"fader"}, "value":0.8}
+#   {"kind":"set", "target":{"group":"fx","id":1,"param":"time"}, "value":2.4}
+#   {"kind":"set", "target":{"group":"scene","id":5}}
+#   target 里带 duration>0 时走渐变 (仅 param="fader" 有意义)。
+#
+# ⚠️ target 描述的是**语义**（哪个分组的第几路、改哪个参数），不含任何协议信息；
+#    落到真实地址的活交给 ConsoleProfile（见"控台驱动层"）。所以同一个 set 动作
+#    天然跨控台 —— 这不是额外做的适配，而是它本来就走在语义管道上。
+
+SET_GROUPS = ("ch", "bus", "dca", "main", "auxin", "usb", "fxret", "mtx",
+              "fx", "scene")
+SET_PARAMS = {
+    "ch": ("fader", "on"), "bus": ("fader", "on"), "dca": ("fader", "on"),
+    "main": ("fader", "on"), "auxin": ("fader", "on"), "usb": ("fader", "on"),
+    "fxret": ("fader", "on"), "mtx": ("fader", "on"),
+    "fx": ("type", "name", "on", "mix", "time", "predelay", "damp"),
+    "scene": ("load",),
+}
+SET_GROUP_LABEL = {"ch": "通道", "bus": "Bus", "dca": "DCA", "main": "主输出",
+                   "auxin": "AuxIn", "usb": "USB", "fxret": "FX返回",
+                   "mtx": "Matrix", "fx": "FX", "scene": "场景"}
+SET_PARAM_LABEL = {"fader": "推子", "on": "开关", "type": "算法", "name": "名称",
+                   "mix": "混合比", "time": "混响时间", "predelay": "预延迟",
+                   "damp": "阻尼", "load": "调用"}
+
+
+CURVES = ("linear", "ease_out", "ease_in", "smooth")
+
+
+# 保存期只做**格式**清洗：防负数、防几百几千这种荒唐值。
+# 真正的范围校验在**执行期**做（target_exists / _fade_targets_for 的过滤），
+# 这样卡片天然跨控台 —— 在 32 路的台子上存下"写到第 40 路"的卡片，
+# 换到 48/64 路的台子就能直接生效，而不是保存时就被钳死成 32。
+# （曾经的写法在保存时就按当前控台规模钳 id，与"换到 64 通道后台子能写到 64 路"
+#   的注释自相矛盾。）
+SAVE_MAX = {"ch": 64, "bus": 32, "dca": 16, "auxin": 16, "usb": 8,
+            "fxret": 16, "mtx": 16, "main": 0}

@@ -137,6 +137,12 @@ def group_b3():
     return run("test_b3_scan.py")
 
 
+def group_dual():
+    """双形态差分: python -m x32sim vs x32_simulator.py (端口写死 21001/21002)"""
+    time.sleep(0.5)
+    return run("test_dual_form.py")
+
+
 # 组名 -> (显示名, 执行函数)
 GROUPS = [
     ("selftest", ("自检 (OSC 全流程)", lambda: group_single(
@@ -149,6 +155,7 @@ GROUPS = [
         "presets", "test_presets.py", ["--port", str(OSC_PORT), "--web-port", "28080"], 28080))),
     ("bridge", ("桥接双实例", group_bridge)),
     ("b3_scan", ("B3 自动发现", group_b3)),
+    ("dualform", ("双形态差分 (包 vs 单文件)", group_dual)),
 ]
 
 

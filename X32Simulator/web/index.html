@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#121419">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="X32 调音台">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" type="image/svg+xml" href="/icon.svg">
+<link rel="apple-touch-icon" href="/icon.svg">
+<title>X32 模拟器 · 控制台</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<header><span class="dot" id="conn"></span>X32 虚拟调音台
+  <small id="hdinfo">连接中…</small></header>
+
+<div class="page" id="pg-mix"><h3>🎚 输入通道 1-32 <span class="scenechip" id="scene">场景 1</span></h3>
+  <div id="chlist"></div>
+  <h3>Aux In 辅助输入 1-6</h3><div id="auxlist"></div>
+  <h3>USB 播放返回 1-2</h3><div id="usblist"></div>
+  <h3>FX Return 效果返回 1-8</h3><div id="fxretlist"></div>
+  <h3>📤 输出 Bus 1-16 <span class="scenechip" id="scene2">场景 1</span></h3>
+  <div id="buslist"></div>
+  <h3>Matrix 矩阵输出 1-6</h3><div id="mtxlist"></div>
+  <h3>主输出 Main LR</h3><div id="mainrow"></div>
+  <h3>DCA 编组 1-8</h3><div id="dcalist"></div></div>
+
+<div class="page on" id="pg-cards"><h3>🎬 演出卡片 (点按运行 · 实时显示台面值)</h3>
+  <div class="ds">点卡片=执行,自动按顺序跑动作;执行前自动存撤销点,执行中再点一次停止。含「全体」类动作的危险卡需<b>长按 0.8 秒</b>执行。新卡片点最后的「➕ 添加」。</div>
+  <div id="schedRow"></div>
+  <div class="tilegrid" id="undoRow" style="grid-template-columns:repeat(auto-fill,minmax(220px,1fr))"></div>
+  <div class="tilegrid" id="tileCards"></div>
+  <h3>📌 台面预设 (可选范围 · 点按回归)</h3>
+  <div class="card"><div class="nm">保存当前台面为预设</div>
+    <div class="ds">可以只记推子/静音/名称/DCA 归属/FX 整槽，也能只挑几路。回归时<b>只写范围内的参数</b>——没勾的通道一个字节都不动，静音立即恢复、推子平滑滑回。</div>
+    <button onclick="openSnapModal()">💾 保存预设（可选范围）</button></div>
+  <div id="snaplist"></div>
+</div>
+
+<div class="page" id="pg-keys"><h3>⚡ 控制键 (点按微调)</h3>
+  <div class="ds">点按键=按步长(设置页可调)渐变增减目标推子,适合歌手耳返、主输出这类现场微调。新按键点最后的「➕ 添加」。</div>
+  <div class="tilegrid" id="tileKeys"></div>
+</div>
+
+<div class="page" id="pg-fx"><h3>🎛 混响控制 (Tap 定拍 · 混响时间同步)</h3>
+  <div class="card">
+    <div class="nm">🎛 效果库来源：<span id="fxConsoleName">—</span>
+      <span class="ds" id="fxConsoleTag" style="margin:0"></span></div>
+    <div class="ds" id="fxConsoleNote">效果槽、算法清单与参数索引都来自<b>当前控台驱动</b> —— 在「设置」里换控台，这里会自动换库。</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:6px">
+      <button id="fxPullBtn" onclick="fxPull()">⟳ 从真台同步效果</button>
+      <span class="ds" id="fxPullNote" style="margin:0">读回真台各效果槽的算法/开关/参数（需桥接真台）</span>
+    </div>
+  </div>
+  <div class="ds">这里是 <b id="fxConsoleName2">当前控台</b> 的 <b>FX 效果槽 1-8</b>。给槽选一个混响算法后, 就能调<b>混响时间</b>、预延迟、阻尼与混合比。
+    <b>Tap 定拍</b>可直接把混响时间算到节拍上, 再按「同步设置」铺给联动的其他槽。</div>
+
+  <div class="card">
+    <div class="nm">🥁 Tap 定拍</div>
+    <div class="ds">连点 2 下以上。取最近 8 个间隔的均值算 BPM(比只看最后一拍稳得多); 间隔超过 2 秒自动重新开始, 靠得太近的抖动会被忽略。</div>
+    <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:10px 0">
+      <button id="tapBtn" onpointerdown="tapHit()"
+        style="font-size:22px;font-weight:800;letter-spacing:.08em;padding:18px 40px;border:0;
+               border-radius:16px;background:var(--accent);color:#141414;cursor:pointer">TAP</button>
+      <div style="font-size:13px;line-height:1.7">
+        <b id="tapBpm" style="font-size:17px;font-variant-numeric:tabular-nums">— BPM</b><br>
+        <span class="ds" id="tapInfo" style="margin:0">连点 2 下以上定拍</span>
+      </div>
+      <button style="background:#565d6d;color:#fff;padding:9px 14px" onclick="tapReset()">清零</button>
+      <button style="background:var(--green);color:#141414;padding:9px 16px;font-weight:700" onclick="tapApply()">↧ 换算并写入</button>
+    </div>
+    <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+      <label style="font-size:13px">时值
+        <select id="fxNote" onchange="fxSyncSet()" class="nkin"></select></label>
+      <label style="font-size:13px;display:flex;gap:5px;align-items:center">
+        <input type="checkbox" id="fxDotted" onchange="fxSyncSet()"> 附点 ×1.5</label>
+      <span class="ds" id="fxTapSecs" style="margin:0"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="nm">🔗 同步设置</div>
+    <div class="ds">决定「谁说了算」, 避免软件与真台互写产生回声回环。改动会自动下发真台(桥接模式)。</div>
+    <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:8px 0">
+      <label style="font-size:13px">模式
+        <select id="fxMode" onchange="fxSyncSet()" class="nkin">
+          <option value="software">软件主导 (软件改→铺全组; 真台改只镜像)</option>
+          <option value="console">台面主导 (真台改→铺全组; 软件改不外扩)</option>
+          <option value="both">双向互同步 (谁改都铺全组)</option>
+        </select></label>
+      <label style="font-size:13px;display:flex;gap:5px;align-items:center">
+        <input type="checkbox" id="fxFollow" onchange="fxSyncSet()"> 跟随 Tap (Tap 结果自动写入联动组)</label>
+    </div>
+    <div class="ds" style="margin:0 0 6px">联动组 — 勾选的槽互相同步混响时间(全不勾 = 所有混响槽):</div>
+    <div id="fxGroup" style="display:flex;gap:6px;flex-wrap:wrap"></div>
+  </div>
+
+  <h3>🎚 效果槽 1-8</h3>
+  <div id="fxlist"></div>
+</div>
+
+<div class="page" id="pg-set">
+  <div class="infobox">
+    UDP 端口 <b id="pinfoUdp">10023</b> · 网页端口 <b id="pinfoWeb">8080</b> · 电平表订阅者 <b id="subs">0</b><br>
+    手机 App:设置 → 调音台 IP 填本机局域网 IP,或用自动发现<br>
+    本网页与 UDP 共享同一台"虚拟调音台",改动实时互通
+  </div>
+  <h3>🔌 网络端口 (可自由设置 · 重启生效)</h3>
+  <div class="card">
+    <div class="ds">端口是模拟器<b>启动时绑定</b>的,运行中改不了 —— 保存后<b>重启模拟器</b>(Ctrl+C 后重新启动)
+      才生效。默认 OSC/UDP <b>10023</b>、网页 <b>8080</b>;两个端口不能相同。</div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:8px">
+      <label style="font-size:13px;display:flex;gap:6px;align-items:center">OSC / UDP
+        <input id="pUdp" class="nkin" style="width:92px" inputmode="numeric" placeholder="10023"
+               oninput="window.portDirty=true"></label>
+      <label style="font-size:13px;display:flex;gap:6px;align-items:center">网页
+        <input id="pWeb" class="nkin" style="width:92px" inputmode="numeric" placeholder="8080"
+               oninput="window.portDirty=true"></label>
+      <button onclick="savePorts()">💾 保存</button>
+      <button style="background:#565d6d;color:#fff" onclick="resetPorts()">↺ 恢复默认</button>
+      <span class="scenechip" id="portStat">…</span>
+    </div>
+    <div id="portNote" class="ds" style="margin-top:8px"></div>
+  </div>
+  <h3>🎛 控台型号 (驱动层)</h3>
+  <div class="card">
+    <div class="ds">卡片动作、控制键、桥接转发都走同一套「语义目标」管道,由控台驱动翻译成真实地址。
+      换控台只需在这里切换 —— X32 与 M32 同协议(M32 是 Midas 贴牌),驱动完全复用。</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <select id="ctrlSel" class="nkin" onchange="setConsole(this.value)" style="min-width:230px"></select>
+      <span class="scenechip" id="ctrlStat">…</span>
+    </div>
+    <div id="ctrlNote" class="ds" style="margin-top:8px"></div>
+    <div id="ctrlCaps" class="ds" style="margin-top:6px"></div>
+  </div>
+  <h3>📱 手机 / 安卓平板连接</h3>
+  <div class="card">
+    <div class="nm">手机连同一 WiFi,浏览器打开</div>
+    <div class="ds" style="font-size:16px;font-weight:700;user-select:all" id="lanurl">…</div>
+    <div class="ds">安卓 Chrome 菜单 → <b>添加到主屏幕</b>,即可像 App 一样全屏使用(图标自动生成)<br>
+    其他设备(OSC 客户端)把调音台 IP 填为 <b id="lanip2">…</b>,端口 <b id="pinfoUdp2">10023</b></div>
+  </div>
+  <h3>OSC 收发日志 (最近 40 条)</h3><div id="logbox"></div>
+  <h3 id="sec-keycfg">🔧 控制键步长与渐变速度</h3>
+  <div class="card">
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <label style="font-size:13px">步长
+        <select id="stepSel" onchange="setKeyCfg()" style="padding:8px;border-radius:8px;border:1px solid var(--line);font-size:13px">
+          <option value="1.5">1.5 dB</option><option value="3" selected>3 dB</option><option value="6">6 dB</option>
+        </select></label>
+      <label style="font-size:13px">渐变
+        <select id="rampSel" onchange="setKeyCfg()" style="padding:8px;border-radius:8px;border:1px solid var(--line);font-size:13px">
+          <option value="0">瞬间</option><option value="0.4" selected>0.4 秒</option><option value="1">1 秒</option><option value="2">2 秒</option>
+        </select></label>
+    </div>
+  </div>
+  <h3>🏷 通道命名 (调音台 / 卡片 / 控制键显示同一名称)</h3>
+  <div class="card">
+    <div class="ds">给通道起名字,卡片和推子行就会显示「音乐」「人声」而不是「通道15」。连真台后这些名字也可以从台子直接读取。</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <select id="nmGroup" onchange="updNmIdx()" class="nkin">
+        <option value="ch">输入通道</option><option value="auxin">Aux In</option>
+        <option value="usb">USB 返回</option><option value="fxret">FX 返回</option>
+        <option value="bus">Bus 输出</option><option value="mtx">Matrix</option>
+        <option value="dca">DCA 编组</option><option value="main">主输出</option>
+      </select>
+      <select id="nmIdx" class="nkin"></select>
+      <input id="nmVal" class="nkin" style="flex:1;min-width:120px" placeholder="名称(最长12字),留空=清除" maxlength="12">
+      <button onclick="saveName()">💾 保存</button>
+    </div>
+  </div>
+  <h3>📦 配置导入 / 导出 (卡片 · 控制键 · 通道命名 · 设置)</h3>
+  <div class="card">
+    <div class="ds">导出一个 JSON 备份文件;导入会覆盖现有的卡片、控制键、命名与步长设置(台面推子状态不受影响)。换手机、备份演出配置都用它。</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <button onclick="doExport()">📤 导出配置文件</button>
+      <button style="background:#565d6d;color:#fff" onclick="$('#impFile').click()">📥 选择文件导入</button>
+      <input type="file" id="impFile" accept=".json,application/json" style="display:none" onchange="impFileChg(this)">
+    </div>
+    <textarea id="impText" class="nkin" style="width:100%;min-height:64px;margin-top:8px;display:none"
+      placeholder="或把配置 JSON 粘贴到这里"></textarea>
+    <div id="impRow" style="display:none;margin-top:8px;gap:8px;align-items:center;flex-wrap:wrap">
+      <button style="background:var(--green)" onclick="doImport()">✔ 确认导入</button>
+      <span class="ds" style="margin:0">导入前请确认文件来源可信</span>
+    </div>
+  </div>
+  <h3>🌉 桥接真台 (写入转发 · /xremote 保活 · 状态回读)</h3>
+  <div class="card">
+    <div class="ds">同一局域网内点「🔍 扫描」即可自动找到调音台,点一下就连上——手机端不用装任何东西。连接后:网页/卡片/控制键的写入自动转发到真台;真台面板上的手动改动回读同步到本页;卡片渐变中真台被人手动干预 → 只停该通道并通知。连过一台会被记住,下次开服务自动重连。</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <input id="brAddr" class="nkin" style="flex:1;min-width:170px" placeholder="真台地址,如 192.168.1.100:10023">
+      <button onclick="brGo()">🔌 连接</button>
+      <button style="background:#565d6d;color:#fff" onclick="api('/api/bridge',{addr:''});showToast('桥接已断开,已清除自动重连')">断开</button>
+      <span class="scenechip" id="brStat">未桥接</span>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px">
+      <button id="scanBtn" style="background:var(--accent);color:#141414" onclick="scanConsoles()">🔍 扫描局域网调音台</button>
+      <span class="ds" style="margin:0" id="scanHint">同一网段直连即可,无需配置</span>
+    </div>
+    <div id="scanRes" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"></div>
+  </div>
+  <h3>🗑 管理 (编辑 / 删除卡片·控制键)</h3>
+  <div id="cardlist"></div>
+  <div id="keylist"></div>
+  <h3>📭 数据读取与调用</h3>
+  <div class="card"><div class="nm">调用预设 → 空台子 → 回传数据</div>
+    <div class="ds">①「保存预设」记录台面 ②「空台子」全部推子拉底得到干净空台 ③「回传数据」把最近保存的预设平滑写回。<br>这套流程走标准 X32 OSC 指令,连真调音台同样适用。</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <button style="background:#565d6d;color:#fff" onclick="api('/api/console',{action:'clear'})">🧹 空台子</button>
+      <button onclick="api('/api/console',{action:'recall_last'})">↩️ 回传数据</button>
+    </div>
+  </div>
+</div>
+
+<nav>
+  <button class="on" data-p="cards"><span class="ic">🎬</span>卡片</button>
+  <button data-p="fx"><span class="ic">🎛</span>混响</button>
+  <button data-p="keys"><span class="ic">⚡</span>控制键</button>
+  <button data-p="mix"><span class="ic">🎚</span>调音台</button>
+  <button data-p="set"><span class="ic">⚙️</span>设置</button>
+</nav>
+
+<div class="modal" id="cardModal" onclick="if(event.target===this)closeCardModal()">
+  <div class="mdlg" role="dialog" aria-label="新建演出卡片">
+    <div class="mhd"><b id="cardModalTitle">➕ 新建演出卡片</b>
+      <button class="mclose" onclick="closeCardModal()" aria-label="关闭">✕</button></div>
+    <div class="ds">把一组动作按顺序拼成一张卡片:先瞬时动作(静音/切场景),再渐变动作。保存后出现在「卡片」页卡片墙,重启也不丢。</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0">
+      <input id="ncName" placeholder="卡片名称 *必填,如:🎤 开场模式" style="flex:1;min-width:150px" class="nkin"
+             oninput="this.classList.remove('inv');hideCardErr()">
+      <input id="ncDesc" placeholder="一句话描述(可选)" style="flex:2;min-width:180px" class="nkin">
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <select id="caKind" onchange="updCaParams()" class="nkin">
+        <option value="mute">静音通道 (可多选)</option><option value="mute_bus">静音 Bus (可多选)</option>
+        <option value="scene">切换场景（全局 / 局部）</option>
+        <option value="preset">📌 调用预设（带范围与渐变）</option>
+        <option value="unmute_all">全部取消静音</option>
+        <option value="wait">等待 / 停顿</option>
+        <option value="fade_all">全体推子渐变</option><option value="fade_odd_even">奇偶过渡</option>
+        <option value="fade_ch">通道渐变 (可多选)</option><option value="fade_bus">Bus 渐变 (可多选)</option>
+        <option value="fade_from">通道从指定值渐变</option><option value="fade_from_bus">Bus 从指定值渐变</option>
+        <option value="rel_db">相对增减 dB (可多选)</option>
+        <option value="set">⚡ 通用设置 (任意目标 + 值)</option>
+        <option value="osc">⚠️ 原始 OSC (高级 · 仅当前控台)</option>
+      </select>
+      <span id="caParams" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;width:100%"></span>
+      <button onclick="addAct()">＋加入动作</button>
+    </div>
+    <div id="actChips" style="margin-top:8px"></div>
+    <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
+      <span style="font-size:12px;color:var(--sub)">执行完自动接续:</span>
+      <select id="ncNext" class="nkin" style="flex:1"></select>
+    </div>
+    <div class="merr" id="cardErr"></div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px">
+      <button style="background:var(--card2);color:var(--txt)" onclick="closeCardModal()">取消</button>
+      <button id="cardSaveBtn" style="background:var(--green)" onclick="saveCard()">💾 保存卡片</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="snapModal" onclick="if(event.target===this)closeSnapModal()">
+  <div class="mdlg" role="dialog" aria-label="保存台面预设">
+    <div class="mhd"><b>📌 保存台面预设</b>
+      <button class="mclose" onclick="closeSnapModal()" aria-label="关闭">✕</button></div>
+    <div class="ds">先选「存哪些组」，再选「存哪些参数」；编号留空=该组全部，也可以只挑几路（如 1-8,13-16）。保存按当前台面取值。</div>
+    <input id="snapName" class="nkin" style="width:100%;margin:8px 0" maxlength="20"
+           placeholder="预设名称（可选），如：开场-人声突出">
+    <div style="display:flex;gap:10px;align-items:flex-start;margin:8px 0">
+      <b style="font-size:12px;color:var(--sub);min-width:34px;padding-top:6px">组</b>
+      <div id="snapGroups" class="chipgrid" style="flex:1"></div></div>
+    <div style="display:flex;gap:10px;align-items:flex-start;margin:8px 0">
+      <b style="font-size:12px;color:var(--sub);min-width:34px;padding-top:6px">参数</b>
+      <div id="snapParams" class="chipgrid" style="flex:1"></div></div>
+    <div style="display:flex;gap:10px;align-items:center;margin:8px 0">
+      <b style="font-size:12px;color:var(--sub);min-width:34px">编号</b>
+      <input id="snapIdx" class="nkin" style="flex:1;min-width:150px"
+             placeholder="留空=全部，如 1-8,13-16">
+    </div>
+    <div class="ds" id="snapCount" style="margin:4px 0;color:var(--accent)"></div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:12px">
+      <button style="background:var(--card2);color:var(--txt)" onclick="closeSnapModal()">取消</button>
+      <button style="background:var(--green)" onclick="doSaveSnap()">💾 保存</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="keyModal" onclick="if(event.target===this)closeKeyModal()">
+  <div class="mdlg" role="dialog" aria-label="新增控制键">
+    <div class="mhd"><b id="keyModalTitle">➕ 新增控制键</b>
+      <button class="mclose" onclick="closeKeyModal()" aria-label="关闭">✕</button></div>
+    <div class="ds">选一个目标推子和方向,按键就按当前步长(设置页可调)渐变增减它。图标随便填个 emoji,留空则用 ⚡。</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0">
+      <input id="nkIcon" placeholder="🎧 (可留空)" style="width:90px;text-align:center" class="nkin" maxlength="4">
+      <input id="nkName" placeholder="名称 *必填,如:人声 增大" style="flex:1;min-width:150px" class="nkin"
+             oninput="this.classList.remove('inv');hideKeyErr()">
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <select id="nkKind" onchange="updNkIdx()" class="nkin">
+        <option value="ch">输入通道</option><option value="auxin">Aux In</option>
+        <option value="usb">USB 返回</option><option value="fxret">FX 返回</option>
+        <option value="bus">Bus 输出</option><option value="mtx">Matrix</option>
+        <option value="dca">DCA 编组</option><option value="main">主输出</option>
+      </select>
+      <select id="nkIdx" class="nkin"></select>
+      <select id="nkSign" class="nkin">
+        <option value="1">＋ 增大</option><option value="-1">－ 减小</option>
+      </select>
+    </div>
+    <div class="merr" id="keyErr"></div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px">
+      <button style="background:var(--card2);color:var(--txt)" onclick="closeKeyModal()">取消</button>
+      <button id="keySaveBtn" style="background:var(--green)" onclick="saveKey()">💾 添加控制键</button>
+    </div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

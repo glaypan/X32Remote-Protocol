@@ -1,0 +1,1 @@
+{"name": "X32 虚拟调音台", "short_name": "X32 调音台", "description": "Behringer X32/M32 虚拟调音台控制台", "start_url": "/", "scope": "/", "display": "standalone", "orientation": "portrait", "background_color": "#121419", "theme_color": "#121419", "icons": [{"src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}]}
