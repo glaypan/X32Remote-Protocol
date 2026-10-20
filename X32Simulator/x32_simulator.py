@@ -38,6 +38,7 @@ import socket
 import socketserver
 import struct
 import sys
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -695,7 +696,7 @@ SET_KINDMAP = {"ch": {"fader": "ch_fader", "on": "ch_on"},
 
 def set_value(kind, idx, value, source="manual"):
     # source="manual" (网页/控制键/外部 OSC 默认) 会触发冲突检测;
-    # source="action"/"dca" 是卡片/回归/DCA 级联自己的写入, 不检测
+    # source="action"/"dca"/"fade" 是卡片/回归/DCA 级联/渐变插值自己的写入, 不检测
     if source == "manual":
         _check_manual_takeover(kind, idx)
     cascade_from = None
@@ -754,8 +755,12 @@ def set_value(kind, idx, value, source="manual"):
                     % (kind, idx, value))
     if source == "manual":
         _push_manual_now(kind, idx)
-    if BRIDGE["addr"] is not None and source in ("manual", "action", "dca"):
-        _bridge_forward(kind, idx, value)
+    if BRIDGE["addr"] is not None and source in ("manual", "action", "dca", "fade"):
+        # ⚠️ 必须转发**写进 STATE 之后的值**: 曾经直接转发调用入参 —— 本地把
+        #    1.7 钳到 1.0, 真台却收到 1.7（推子面板直接越界顶格）; NaN 也会
+        #    顺着 OSC 发给真台。get_value 返回 None = 本地没这个目标, 不转发。
+        # source="fade" 是渐变插值 (与 action 分开: 接管拦截只拦插值, 不拦显式动作)
+        _bridge_forward(kind, idx, get_value(kind, idx), source)
     if cascade_from is not None:
         _dca_cascade(idx, cascade_from, _finite(value, 0.0))
     # 混响时间改动 → 按同步模式广播到联动组。
@@ -804,15 +809,28 @@ def _push_manual_now(kind, idx):
             pass
 
 
-def _bridge_forward(kind, idx, value):
-    """桥接模式下把写入转成 OSC 发往真台, 并登记回声抑制记录。"""
+def _bridge_forward(kind, idx, value, source="manual", force=False):
+    """桥接模式下把写入转成 OSC 发往真台, 并登记回声抑制记录。
+
+    入参 value 必须是**已经过本地钳制/消毒的值**（调用方传 get_value 的结果）——
+    真台收到什么, 就应该和本地台面看到的一致, 不能再出现"本地 1.0 / 真台 1.7"。
+    source 决定合并限速档位 (手动灵敏 / 渐变放宽), 见 BRIDGE_FWD_MIN_GAP。
+    force=True 用于"停止时同步冻结值": 绕过限速下一拍必出 (gap=0),
+    保证卡片/回归中途停止后真台与本地台面一致, 不停在中间值上。
+    """
     try:
+        if value is None:
+            return          # 本地没有这个目标（换控台后规模不匹配等）
         if kind == "ch_dca":
             arg = int(value) & 0xFF
         elif kind in ("fx_type", "fx_name"):
             arg = str(value)[:12]
         elif kind.endswith("_fader") or kind == "fx_mix" or fx_par_num(kind) is not None:
             arg = float(value)
+            # 第二道闸: 万一将来哪条路径漏了 _finite, 宁可拒发也不把 NaN 发给真台
+            if not math.isfinite(arg):
+                log("BRIDGE 拒发非有限值: %s %s = %r" % (kind, idx, value))
+                return
         else:
             arg = _truthy(value)
         addr = addr_for_write(kind, idx)      # ⚠️ Main 无 %02d, 必须走统一映射 (见该函数注释)
@@ -825,11 +843,104 @@ def _bridge_forward(kind, idx, value):
         sock = BRIDGE_SOCK[0]
         if sock is None:
             return
-        sock.sendto(encode_message(OscMsg(addr, [arg])), BRIDGE["addr"])
-        with BRIDGE_LOCK:
-            FWD_RECENT[(kind, idx)] = [arg, time.time()]
+        # 渐变插值遇"已手动接管": 这条值是接管前算出来的, 发出去会把真台拽回
+        # 旧位置, 回读回声还会把本地也覆盖回旧值 (用户白接管了)。入口就拦掉。
+        # 显式动作 (set/mute/回归...) 不走这支 —— 它们的语义是"其余动作继续"。
+        from_fade = (source == "fade")
+        if from_fade and (kind, idx) in INTERRUPTS:
+            return
+        # 进合并队列 (同地址只保留最新值), 由 _bridge_fwd_flusher 按 Bundle 发出;
+        # FWD_RECENT 也在实际发出时登记 —— 回声抑制要对得上真台真正收到的值。
+        gap = 0.0 if force else BRIDGE_FWD_MIN_GAP.get(source, BRIDGE_FWD_GAP_DEFAULT)
+        with BRIDGE_FWD["lock"]:
+            BRIDGE_FWD["pending"][(kind, idx)] = (addr, arg, gap, from_fade)
     except Exception as e:
         log("BRIDGE 转发失败 %s: %r" % (kind, e))
+
+
+def _bridge_force_sync(keys, skip_interrupted=False):
+    """把一批 (kind, idx) 的**当前本地值**立即转发给真台 (绕过合并限速)。
+
+    用于渐变被中途停止的场景: 本地冻结在当前值, 而最后一次插值可能还没
+    转发 (或被合并器限速挡着) —— 不同步的话真台停在中间值, 与台面不一致。
+    keys 是可迭代的 (kind, idx); 内部取快照, 调用方无需加锁。
+    skip_interrupted: 跳过已被手动接管的通道 (卡片停止时用 —— 那些通道
+    归手动管, 停止同步不该把它们拽回本地值)。
+    """
+    if BRIDGE["addr"] is None:
+        return
+    n = 0
+    for kind, idx in list(keys):
+        if skip_interrupted and (kind, idx) in INTERRUPTS:
+            continue
+        v = get_value(kind, idx)
+        if v is None:
+            continue
+        _bridge_forward(kind, idx, v, source="action", force=True)
+        n += 1
+    if n:
+        log("BRIDGE 停止同步: %d 个目标当前值已强制转发" % n)
+
+
+def _bridge_fwd_flusher():
+    """常驻合并器外壳: 任何异常写日志重启, 不静默死亡 (死亡=转发永远停)。"""
+    while True:
+        try:
+            _bridge_fwd_flush_once()
+        except Exception as e:
+            log("BRIDGE 合并器异常 (已自动重启): %r" % e)
+            time.sleep(0.5)
+
+
+def _bridge_fwd_flush_once():
+    """一轮合并发送: 把到期的转发条目打包成一个 Bundle 发给真台。"""
+    time.sleep(BRIDGE_FWD_TICK)
+    sock = BRIDGE_SOCK[0]
+    addr = BRIDGE["addr"]
+    if sock is None or addr is None:
+        with BRIDGE_FWD["lock"]:
+            if BRIDGE_FWD["pending"]:
+                BRIDGE_FWD["pending"].clear()
+        return
+    now = time.time()
+    batch = []
+    with BRIDGE_FWD["lock"]:
+        pend = BRIDGE_FWD["pending"]
+        overflow = len(pend) > BRIDGE_FWD_MAX_BATCH
+        for key in list(pend.keys()):
+            _a, _v, gap, from_fade = pend[key]
+            if from_fade and key in INTERRUPTS:
+                # 接管发生后积压的渐变插值: 过期, 直接丢弃 (真台不能收到它,
+                # 否则会把用户刚抢回的手动值拽回旧位置, 回读回声还会覆盖本地)
+                pend.pop(key)
+                continue
+            if overflow or now - BRIDGE_FWD["last"].get(key, 0.0) >= gap:
+                batch.append((key, pend.pop(key)))
+        for key, _av in batch:
+            BRIDGE_FWD["last"][key] = now
+    if not batch:
+        return
+    msgs = [OscMsg(a, [v]) for _k, (a, v, _g, _f) in batch]
+    try:
+        sock.sendto(encode_bundle(msgs), addr)
+    except OSError as e:
+        log("BRIDGE 合并转发失败 (%d 条): %r" % (len(msgs), e))
+        return
+    with BRIDGE_LOCK:
+        t = time.time()
+        for key, (_a, v, _g, _f) in batch:
+            FWD_RECENT[key] = [v, t]
+
+
+def _ensure_fwd_flusher():
+    """幂等启动合并器线程 (bridge_start 每次都会调, 不能起重复)。"""
+    with BRIDGE_FWD["lock"]:
+        t = BRIDGE_FWD_THREAD[0]
+        if t is not None and t.is_alive():
+            return
+        t = threading.Thread(target=_bridge_fwd_flusher, daemon=True)
+        t.start()
+        BRIDGE_FWD_THREAD[0] = t
 
 
 def _fwd_is_echo(key, value):
@@ -968,6 +1079,7 @@ def bridge_client(ip, port):
 
 def _bridge_client_run(ip, port):
     """桥接后台线程: 5 秒 /xremote 保活, 持续接收真台回读并同步本地。"""
+    _ensure_fwd_flusher()            # 转发合并器 (幂等; --bridge 启动参数也走这里)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.settimeout(0.5)
     BRIDGE_SOCK[0] = sock
@@ -1046,6 +1158,7 @@ def bridge_start(addr_str):
     bridge_stop()
     BRIDGE["addr"] = (ip, port)      # 先占位, 让线程启动前 set_value 也能拿到
     BRIDGE["ip"], BRIDGE["port"] = ip, port
+    _ensure_fwd_flusher()            # 转发合并器 (常驻幂等)
     threading.Thread(target=bridge_client, args=(ip, port), daemon=True).start()
     return True, "桥接已启动 → %s:%d" % (ip, port)
 
@@ -1054,6 +1167,8 @@ def bridge_stop():
     if BRIDGE["addr"] is not None:
         ip, port = BRIDGE["addr"]
         BRIDGE["addr"] = None
+        with BRIDGE_FWD["lock"]:
+            BRIDGE_FWD["pending"].clear()   # 断开后不再有真台可发, 别留着旧值
         log("BRIDGE 停止桥接 (%s:%d)" % (ip, port))
 
 
@@ -1700,7 +1815,37 @@ SHOW_CARDS = [
 ]
 
 SHOW_STATE = {"running": None, "name": "", "progress": 0.0, "step": ""}
-SHOW_STOP = threading.Event()
+
+# 卡片运行控制: 每次启动都是一个独立"代"(gen) + 专属停止事件 + 卡片 id。
+# ⚠️ 曾经用过一个全局 Event (SHOW_STOP): 新 worker 开头 clear() 会把"停止旧卡片"
+#    刚 set 的信号吃掉 → 连点两次出两个 worker 同时驱动同一张卡; 停止 A 再开 B,
+#    A 收不到停止信号继续把通道推往 A 的目标。现在停止信号按代发放, 旧 worker
+#    只认自己那个 Event, 物理上不可能被新运行清掉; 共享状态(SHOW_STATE)的清理
+#    也带 gen 校验, 旧代退场时不会把新代的状态擦掉。
+SHOW_RUN = {"gen": 0, "stop": None, "card": None}
+SHOW_RUN_LOCK = threading.Lock()
+
+
+def _show_stop_current():
+    """停止当前卡片运行 (幂等)。没有在跑就什么也不做。"""
+    with SHOW_RUN_LOCK:
+        ev = SHOW_RUN["stop"]
+        SHOW_RUN["stop"] = None
+        SHOW_RUN["card"] = None
+        SHOW_RUN["gen"] += 1
+    if ev is not None:
+        ev.set()
+    # 渐变就地冻结在当前值 → 把 FADE_ZONE 里各目标的当前值立即同步给真台。
+    # ⚠️ 不同步的话: 最后一次插值可能已被合并器限速挡下或根本没写,
+    #    真台停在中间值, 本地台面却是冻结值 —— 桥接模式下两边不一致。
+    #    取快照要趁 worker 还没跑 finally (FADE_ZONE 还未注销), 所以在 ev.set() 后立刻做。
+    with FADE_LOCK:
+        zone_keys = list(FADE_ZONE.keys())
+    if zone_keys:
+        _bridge_force_sync(zone_keys, skip_interrupted=True)
+    SHOW_STATE["running"] = None
+    SHOW_STATE["progress"] = 1.0
+    SHOW_STATE["step"] = ""
 
 # ---- 卡片定时触发: 延时 N 秒后 / 定在 HH:MM 自动启动, 可取消 ----
 SCHEDULES = []        # {"sid", "card_id", "card_name", "run_at"(epoch), "mode", "timer"}
@@ -1724,8 +1869,6 @@ def schedule_card(card, mode, delay=None, clock=None):
     def fire():
         with SCHED_LOCK:
             SCHEDULES[:] = [s for s in SCHEDULES if s["sid"] != sid]
-        if SHOW_STOP.is_set():
-            SHOW_STOP.clear()
         cur = next((c for c in SHOW_CARDS if c["id"] == card["id"]), None)
         if not cur:
             log("SCHED 定时启动失败: 卡片已被删除")
@@ -1767,6 +1910,22 @@ BRIDGE_TARGET = ""   # 记住上次连过的真台地址, 下次启动自动重�
 FWD_RECENT = {}      # (kind, idx) -> [value, time] 最近转发记录, 用于抑制回读回声
 MAIN_SOCK = [None]   # 主 UDP socket (手动变更立即广播用)
 NOTIFY_LAST = {}     # 手动变更推送节流: (kind, idx) -> [上次推送的值, 时间]
+
+# ---- 桥接转发合并器 (治"写风暴") ----
+# ⚠️ 曾经每条写入都单独 sendto: fade_all 时 80 个地址 × 20Hz ≈ 1000+ 个 UDP 包/秒,
+#    真台 OSC 栈被刷满 (本机也忙)。现在高频写入先进合并队列 (同地址只留最新值),
+#    由常驻线程每 20ms 按 **一个 Bundle** 发出:
+#      - 同一地址按来源限速: 手动(用户拖推子) 50ms 保灵敏, 卡片/回归渐变 250ms
+#       (真台 4Hz 跟随电动推子无感知, 而 fade_all 的包量直接降一个量级);
+#      - 包数降一个量级 (真台每包只 recvfrom + 解析一次);
+#      - **最后一个值一定送达**: pending 始终只留最新值, 渐变到点/被停止后,
+#        一拍 (≤20ms + 间隔) 内一定发出, 不会卡在中间值上。
+BRIDGE_FWD_MIN_GAP = {"manual": 0.05, "fade": 0.25, "action": 0.25, "dca": 0.1}
+BRIDGE_FWD_GAP_DEFAULT = 0.1
+BRIDGE_FWD_TICK = 0.02       # 合并器轮询间隔
+BRIDGE_FWD_MAX_BATCH = 256   # 单拍最多发出条数 (防极端堆积把 UDP 包撑爆)
+BRIDGE_FWD = {"pending": {}, "last": {}, "lock": threading.Lock()}
+BRIDGE_FWD_THREAD = [None]
                      # ⚠️ 必须**连同值一起**判断"是否重复": 只看时间会把真台的面板干预挤掉。
                      # 桥接时本地渐变每 tick 都转发一次, 真台把转发也当手动变更 → 时间戳被
                      # 持续刷新; 等真正的干预到达, "距上次 < 80ms" 恒成立, 立即推送被丢,
@@ -2034,6 +2193,39 @@ SNAP_ID = [0]
 AUTO_SNAPS = collections.deque(maxlen=5)   # 自动撤销点: 每次卡片执行前自动保存, 最多留 5 个
 RECALL_STATE = {"running": None, "name": "", "progress": 0.0}
 RECALL_STOP = threading.Event()
+# 回归打断机制: 曾经只靠一个全局 Event —— 新回归的 worker 开头 clear() 会把
+# "停止旧回归" 刚 set 的信号吃掉 (与卡片 SHOW_STOP 同族的坑), 旧回归的渐变
+# 会继续跑, 和新回归抢同一批通道。现在每次启动/停止都发一个新"代"(gen),
+# worker 只认自己那代; 旧 worker 下次检查 (≤0.1s) 发现代号过期即退场。
+RECALL_GEN = [0]
+RECALL_LOCK = threading.Lock()
+RECALL_ZONE = {"gen": None, "keys": set()}   # 正在被回归渐变驱动的目标, 停止时同步用
+
+
+def _recall_zone_register(starts, gen):
+    with RECALL_LOCK:
+        RECALL_ZONE["gen"] = gen
+        RECALL_ZONE["keys"] = set((k, i) for k, i, _a, _b in starts)
+
+
+def _recall_zone_clear(gen):
+    """只有当代 worker 才能清 zone —— 旧代退场时不能把新代的登记擦掉。"""
+    with RECALL_LOCK:
+        if RECALL_ZONE["gen"] == gen:
+            RECALL_ZONE["keys"] = set()
+
+
+def _recall_stop_current():
+    """停止当前回归 (幂等) + 把渐变冻结值同步给真台。"""
+    with RECALL_LOCK:
+        RECALL_GEN[0] += 1
+        keys = list(RECALL_ZONE["keys"])
+        RECALL_ZONE["keys"] = set()
+    RECALL_STOP.set()
+    RECALL_STATE["running"] = None
+    if keys:
+        _bridge_force_sync(keys)
+    log("SNAPSHOT 手动停止回归")
 
 # ---- 预设范围：组 → 该组能存的参数 -------------------------------------
 # 为什么要有"范围"：以前一条预设永远是"79 路 × 推子+静音"的全量回归，用户想只还原
@@ -2077,24 +2269,43 @@ def preset_group_cap(g):
 
 
 def clean_preset_scope(scope):
-    """规范化预设范围。只认白名单 —— 配置文件可手改，脏范围不能让回归变成"乱写"。"""
+    """规范化预设范围。返回 (cleaned, ok, why)。
+
+    只认白名单 —— 配置文件可手改，脏范围不能让回归变成"乱写"。
+    ⚠️ ok=False 的两种情况, 调用方必须**拒绝**, 绝不能静默回落全量:
+       - 传入的 scope 结构不对 (不是 dict / groups 不是 list ...);
+       - 清完 groups 或 params 为空 (一个组都不合法 / 一个参数都不合法),
+         或某组的编号全部越界。
+       "局部预设"被脏数据变成全局, 回归时误改全台, 比报错严重得多 ——
+       这就是本函数返回 ok 而不是自己挑默认值的原因。
+    scope=None → 默认全量范围, ok=True (旧格式预设没有 scope 字段)。
+    """
+    default = {"groups": list(PRESET_DEFAULT_SCOPE["groups"]),
+               "params": list(PRESET_DEFAULT_SCOPE["params"]), "indices": {}}
+    if scope is None:
+        return default, True, ""
     if not isinstance(scope, dict):
-        return {"groups": list(PRESET_DEFAULT_SCOPE["groups"]),
-                "params": list(PRESET_DEFAULT_SCOPE["params"]), "indices": {}}
+        return default, False, "预设范围格式不对（应为 {groups, params, indices}）"
+    raw_groups = scope.get("groups")
+    if not isinstance(raw_groups, list):
+        return default, False, "预设范围缺少 groups 列表"
     groups = []
-    for g in (scope.get("groups") or []):
+    for g in raw_groups:
         if g in PRESET_GROUP_PARAMS and g not in groups:
             groups.append(g)
     if not groups:
-        groups = list(PRESET_DEFAULT_SCOPE["groups"])
+        return default, False, "范围里没有合法的组（至少选择一组）"
+    raw_params = scope.get("params")
+    if not isinstance(raw_params, list):
+        return default, False, "预设范围缺少 params 列表"
     params = []
-    for p in (scope.get("params") or []):
+    for p in raw_params:
         if p not in PRESET_PARAM_LABEL:
             continue
         if any(p in PRESET_GROUP_PARAMS[g] for g in groups) and p not in params:
             params.append(p)
     if not params:
-        params = ["fader", "on"]
+        return default, False, "范围里没有合法的参数（当前所选组不支持任何已选参数）"
     indices = {}
     raw = scope.get("indices")
     if isinstance(raw, dict):
@@ -2108,12 +2319,18 @@ def clean_preset_scope(scope):
                     n = int(float(v))
                 except (TypeError, ValueError):
                     continue
-                n = min(max(n, 1), max(1, cap))
-                if n not in picked:
+                # 越界编号**丢弃**而不是钳到边界: 手写 999 更可能是笔误,
+                # 钳成 32 等于偷偷改了一个用户没选的路
+                if 1 <= n <= cap and n not in picked:
                     picked.append(n)
             if picked:
                 indices[g] = sorted(picked)
-    return {"groups": groups, "params": params, "indices": indices}
+            elif isinstance(arr, list) and arr:
+                # 原始列表非空但清完为空 = 编号全越界 → 这个组的限制会凭空消失,
+                # 必须算非法, 不能让"局部"悄悄变"整组"
+                return default, False, "%s 的编号全部越界（1–%d）" % (
+                    PRESET_GROUP_LABEL.get(g, g), cap)
+    return {"groups": groups, "params": params, "indices": indices}, True, ""
 
 
 def preset_scope_text(scope):
@@ -2207,9 +2424,16 @@ def _grab_state_locked():
 
 
 def save_snapshot(name=None, auto=False, scope=None):
-    sc = clean_preset_scope(scope) if scope is not None else {
-        "groups": list(PRESET_DEFAULT_SCOPE["groups"]),
-        "params": list(PRESET_DEFAULT_SCOPE["params"]), "indices": {}}
+    """保存预设。返回 (snap, saved_ok) —— saved_ok=False 表示只在内存里, 没落盘
+    (写盘失败的"假成功"由 HTTP 层据此回报, 见 save_user_config)。
+    scope 非法时抛 ValueError(原因) —— 由 HTTP 层转 400, 绝不静默存成全量。"""
+    if scope is None:
+        sc = {"groups": list(PRESET_DEFAULT_SCOPE["groups"]),
+              "params": list(PRESET_DEFAULT_SCOPE["params"]), "indices": {}}
+    else:
+        sc, ok, why = clean_preset_scope(scope)
+        if not ok:
+            raise ValueError(why)
     with STATE.lock:
         data, count = _grab_state_scoped_locked(sc)
         scene_now = int(STATE.scene)
@@ -2221,13 +2445,14 @@ def save_snapshot(name=None, auto=False, scope=None):
     if auto:
         AUTO_SNAPS.append(snap)
         log("SNAPSHOT 自动撤销点: %s (%d 值)" % (snap["name"], count))
-        return snap
+        return snap, True
     SNAPSHOTS.insert(0, snap)
     if len(SNAPSHOTS) > 8:
         SNAPSHOTS.pop()
-    save_user_config()          # 预设必须跨重启（以前只存在内存里，重启即丢）
-    log("SNAPSHOT 保存: %s (%d 值 · %s)" % (snap["name"], count, preset_scope_text(sc)))
-    return snap
+    saved = save_user_config()     # 预设必须跨重启（以前只存在内存里，重启即丢）
+    log("SNAPSHOT 保存: %s (%d 值 · %s)%s" % (
+        snap["name"], count, preset_scope_text(sc), "" if saved else " ⚠️ 未落盘"))
+    return snap, saved
 
 
 def recall_snapshot(snap_id, seconds=3.0):
@@ -2324,19 +2549,25 @@ def _recall_fader_starts(snap):
     return out
 
 
-def _recall_body(snap, seconds):
-    """回归主体（阻塞）。调用方负责 RECALL_STATE 与线程。"""
+def _recall_body(snap, seconds, my_gen=None):
+    """回归主体（阻塞）。调用方负责 RECALL_STATE 与线程。
+
+    my_gen: 本次回归的代 (见 RECALL_GEN)。代号过期 (又有新回归启动/手动停止)
+    立即退场 —— 曾经旧回归会和新回归抢同一批通道, 谁后跑完谁说话。
+    """
     RECALL_STATE["running"] = snap.get("id")
     RECALL_STATE["name"] = snap.get("name", "")
     RECALL_STATE["progress"] = 0.0
     try:
         starts = _recall_fader_starts(snap)
+        if my_gen is not None:
+            _recall_zone_register(starts, my_gen)
         _recall_instant(snap)
         log("SNAPSHOT 回归开始: %s (%d 项 · %d 路推子 %.1f 秒归位)"
             % (snap.get("name", ""), snap.get("count", 0), len(starts), seconds))
         steps = max(1, int(seconds / 0.1))
         for s in range(1, steps + 1):
-            if RECALL_STOP.is_set():
+            if RECALL_STOP.is_set() or (my_gen is not None and my_gen != RECALL_GEN[0]):
                 log("SNAPSHOT 回归被打断")
                 return
             time.sleep(0.1)
@@ -2348,19 +2579,26 @@ def _recall_body(snap, seconds):
     except Exception as e:
         log("SNAPSHOT 回归出错: %r" % e)
     finally:
-        if RECALL_STATE["running"] == snap.get("id"):
-            RECALL_STATE["running"] = None
-            RECALL_STATE["progress"] = 1.0
+        stale = my_gen is not None and my_gen != RECALL_GEN[0]
+        if not stale:
+            if RECALL_STATE["running"] == snap.get("id"):
+                RECALL_STATE["running"] = None
+                RECALL_STATE["progress"] = 1.0
+            if my_gen is not None:
+                _recall_zone_clear(my_gen)
 
 
 def start_recall(snap, seconds=3.0):
     """异步回归（网页按钮用）。"""
-    RECALL_STOP.set()                # 打断进行中的回归
+    with RECALL_LOCK:
+        RECALL_GEN[0] += 1          # 旧代作废 (比 set 更可靠: worker 的 clear 吃不掉代号)
+        my_gen = RECALL_GEN[0]
+        RECALL_STOP.set()           # 打断进行中的回归
     seconds = min(max(_finite(seconds, 1.0), 0.5), 15.0)
 
     def worker():
         RECALL_STOP.clear()
-        _recall_body(snap, seconds)
+        _recall_body(snap, seconds, my_gen)
 
     threading.Thread(target=worker, daemon=True).start()
     return snap
@@ -2372,13 +2610,16 @@ def recall_now(snap, seconds=1.0):
     ⚠️ 卡片动作**不要**用它 —— 时间轴是单线程非阻塞的，这里一阻塞，
     整张卡片的进度条与并行渐变都会被冻住。卡片里用「瞬时项 + 渐变分支」组合。
     """
-    RECALL_STOP.set()
-    RECALL_STOP.clear()
+    with RECALL_LOCK:
+        RECALL_GEN[0] += 1
+        my_gen = RECALL_GEN[0]
+        RECALL_STOP.set()
+        RECALL_STOP.clear()
     seconds = min(max(_finite(seconds, 1.0), 0.0), 15.0)
     if seconds <= 0:
         _recall_instant(snap)
         return snap
-    _recall_body(snap, seconds)
+    _recall_body(snap, seconds, my_gen)
     return snap
 
 
@@ -2467,6 +2708,8 @@ def apply_key(key_id):
 # ---- 自定义配置持久化: 控制键/演出卡片/步长存 JSON, 重启不丢 ----
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "user_config.json")
 ID_SEQ = [1000]
+CONFIG_SAVE_LOCK = threading.Lock()
+CONFIG_BROKEN_BACKUP = [None]   # 上次加载时坏文件的备份路径 (None=上次加载正常)
 
 
 def next_id(prefix):
@@ -2475,24 +2718,73 @@ def next_id(prefix):
 
 
 def save_user_config():
-    try:
-        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump({"quickKeys": QUICK_KEYS, "cards": SHOW_CARDS,
-                       "keyCfg": KEY_CFG, "idSeq": ID_SEQ[0],
-                       "bridgeTarget": BRIDGE_TARGET,
-                       "fxSync": dict(FX_SYNC),
-                       "console": CTRL_PROFILE_ID,
-                       "ports": {"udp": PORT_CFG["udp"], "web": PORT_CFG["web"]},
-                       "fxSlots": {str(s): {"type": STATE.fx[s]["type"],
-                                            "name": STATE.fx[s]["name"],
-                                            "mix": STATE.fx[s]["mix"],
-                                            "par": {str(p): v for p, v in STATE.fx[s]["par"].items()}}
-                                   for s in range(1, FX_COUNT + 1)},
-                       "presets": SNAPSHOTS,
-                       "names": {"%s|%d" % k: v for k, v in STATE.names.items()}},
-                      f, ensure_ascii=False, indent=1, allow_nan=False)
-    except Exception as e:
-        log("配置保存失败: %r" % e)
+    """把自定义配置**原子**写盘。返回 True=落盘成功, False=失败 (已记日志)。
+
+    ⚠️ 曾经这里有三种"假成功", 全部堵上:
+      1. 直接 open(目标, "w") 开写 → 写一半断电/磁盘满就是半个 JSON,
+         下次启动 json.load 报错 → 预设/卡片静默全丢。
+         现在: 同目录临时文件 + flush + fsync + os.replace 原子替换,
+         任何时刻磁盘上都是一个完整文件。
+      2. 失败只 log 一行, 接口照样返 ok:true → 用户以为存住了, 重启就没。
+         现在返回 False, HTTP 层据此返 500 并说明"改动只在内存中"。
+      3. 并发保存互相踩 (PermissionError 静默失败) → 全局保存锁 +
+         每次独立临时文件名, 物理上不冲突。
+    """
+    with CONFIG_SAVE_LOCK:
+        try:
+            # list(...) 浅拷贝: 卡片/预设可能在别的线程里 append, 直接序列化原列表
+            # 会抛 "dict changed size during iteration" (曾经偶发 PermissionError 的亲戚)
+            text = json.dumps({"quickKeys": list(QUICK_KEYS), "cards": list(SHOW_CARDS),
+                               "keyCfg": KEY_CFG, "idSeq": ID_SEQ[0],
+                               "bridgeTarget": BRIDGE_TARGET,
+                               "fxSync": dict(FX_SYNC),
+                               "console": CTRL_PROFILE_ID,
+                               "ports": {"udp": PORT_CFG["udp"], "web": PORT_CFG["web"]},
+                               "fxSlots": {str(s): {"type": STATE.fx[s]["type"],
+                                                    "name": STATE.fx[s]["name"],
+                                                    "mix": STATE.fx[s]["mix"],
+                                                    "par": {str(p): v for p, v in STATE.fx[s]["par"].items()}}
+                                           for s in range(1, FX_COUNT + 1)},
+                               "presets": list(SNAPSHOTS),
+                               "names": {"%s|%d" % k: v for k, v in STATE.names.items()}},
+                              ensure_ascii=False, indent=1, allow_nan=False)
+        except Exception as e:
+            # allow_nan=False: NaN 混进状态时在这里炸, 而不是写出一个 Python 专有
+            # 字面量、别的工具还读不了的"假配置"
+            log("配置序列化失败 (疑似 NaN 混进台面状态): %r" % e)
+            return False
+        folder = os.path.dirname(CONFIG_PATH) or "."
+        tmp = None
+        try:
+            fd, tmp = tempfile.mkstemp(prefix=".user_config-", suffix=".tmp", dir=folder)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(text)
+                f.flush()
+                os.fsync(f.fileno())
+            # Windows 上 replace 的目标可能被读进程占着 → 短暂重试, 别静默失败
+            for attempt in range(4):
+                try:
+                    os.replace(tmp, CONFIG_PATH)
+                    tmp = None
+                    break
+                except PermissionError:
+                    if attempt == 3:
+                        raise
+                    time.sleep(0.05 * (attempt + 1))
+            if CONFIG_BROKEN_BACKUP[0]:
+                log("配置已用当前台面覆盖旧文件 (损坏的旧配置备份在 %s)"
+                    % CONFIG_BROKEN_BACKUP[0])
+                CONFIG_BROKEN_BACKUP[0] = None
+            return True
+        except Exception as e:
+            log("配置保存失败: 无法写入 %s (%r) — 本次改动只在内存中, 重启后会丢失"
+                % (CONFIG_PATH, e))
+            if tmp:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+            return False
 
 
 def load_user_config():
@@ -2537,9 +2829,24 @@ def load_user_config():
         # 配置文件可手改 → 必须逐条消毒，脏数据最多被丢弃，不能把回归变成乱写。
         if isinstance(d.get("presets"), list):
             loaded = []
+            skipped_bad_scope = 0
             for s in d["presets"][:8]:
                 if not isinstance(s, dict) or not isinstance(s.get("data"), dict):
                     continue
+                # scope: 缺字段 = 旧格式全量预设 (合法); 有字段但清不出合法范围
+                # = 脏数据 → **跳过这条预设**并记日志。曾经的写法是静默回落全量,
+                # 一条坏 scope 就能让回归误改全台; 原文件我们不动, 用户修完能恢复。
+                raw_scope = s.get("scope")
+                if raw_scope is None:
+                    sc = {"groups": list(PRESET_DEFAULT_SCOPE["groups"]),
+                          "params": list(PRESET_DEFAULT_SCOPE["params"]), "indices": {}}
+                else:
+                    sc, ok, why = clean_preset_scope(raw_scope)
+                    if not ok:
+                        skipped_bad_scope += 1
+                        log("预设「%s」的范围非法 (%s)，已跳过；原配置未改动，修复后可恢复"
+                            % (s.get("name") or "?", why))
+                        continue
                 try:
                     sid = int(s.get("id") or 0)
                 except (TypeError, ValueError):
@@ -2556,12 +2863,14 @@ def load_user_config():
                                "name": str(s.get("name") or "预设")[:20],
                                "time": str(s.get("time") or ""),
                                "scene": min(max(scene_no, 0), 99),
-                               "scope": clean_preset_scope(s.get("scope")),
+                               "scope": sc,
                                "data": s["data"], "count": max(0, cnt)})
             SNAPSHOTS[:] = loaded
             if SNAPSHOTS:
                 SNAP_ID[0] = max([x["id"] for x in SNAPSHOTS] + [SNAP_ID[0]])
-                log("已载入 %d 条预设" % len(SNAPSHOTS))
+                log("已载入 %d 条预设%s" % (
+                    len(SNAPSHOTS),
+                    ("，%d 条因范围非法被跳过" % skipped_bad_scope) if skipped_bad_scope else ""))
         # 迁移旧结构: 内置/历史卡片用独立 fades 字段, 统一转成 fade_from 动作, 保证简介与动作一致
         migrated = False
         for c in SHOW_CARDS:
@@ -2578,8 +2887,15 @@ def load_user_config():
                 c["fades"] = []
                 migrated = True
         if migrated:
-            save_user_config()
-            log("已迁移旧版 fades 结构为 fade_from 动作")
+            # ⚠️ 有预设因范围非法被跳过时**不做迁移保存**: 保存写的是内存状态,
+            #     会把用户手改坏、还没来得及修的那条预设从文件里抹掉。
+            #     旧结构留在内存里不影响运行, 用户修好配置后的下次启动再迁移。
+            if skipped_bad_scope:
+                log("检测到旧版 fades 结构; 因有预设被跳过, 本次不自动保存, "
+                    "修复配置后的下次启动将自动迁移")
+            else:
+                save_user_config()
+                log("已迁移旧版 fades 结构为 fade_from 动作")
         if isinstance(d.get("keyCfg"), dict):
             KEY_CFG.update(d["keyCfg"])
         if isinstance(d.get("names"), dict):
@@ -2634,16 +2950,32 @@ def load_user_config():
             % (len(QUICK_KEYS), len(SHOW_CARDS),
                (", 记住的真台地址 %s" % BRIDGE_TARGET) if BRIDGE_TARGET else ""))
     except FileNotFoundError:
-        pass
+        return True          # 没有配置文件 = 全新装机, 正常
     except Exception as e:
-        log("配置加载失败: %r" % e)
+        # 坏文件 (写一半被杀 / 手改坏): 曾经只是 log 一行, 然后内存里的默认值
+        # 会在下次保存时把用户数据覆盖掉 → 预设/卡片"静默全丢"。
+        # 现在先把坏文件备份出来 (数据可救), 再明确告知, 绝不明不明白覆盖。
+        backup = None
+        try:
+            backup = "%s.corrupt-%s" % (CONFIG_PATH, time.strftime("%Y%m%d-%H%M%S"))
+            os.replace(CONFIG_PATH, backup)
+        except OSError:
+            backup = None
+        CONFIG_BROKEN_BACKUP[0] = backup
+        if backup:
+            log("配置加载失败: %r — 文件已损坏, 备份到 %s; 本次用默认配置启动, "
+                "修复后可把备份内容并回 user_config.json" % (e, backup))
+        else:
+            log("配置加载失败: %r — 文件已损坏且无法备份, 已保留原文件不动; "
+                "本次用默认配置启动" % e)
+        return False
 
 
 def clear_console():
     """空台子:全部推子 1 秒同步拉底 + 全部取消静音,得到干净的空台。"""
     RAMP_STOP.set()
     RECALL_STOP.set()
-    SHOW_STOP.set()
+    _show_stop_current()
 
     def worker():
         RAMP_STOP.clear()
@@ -3128,22 +3460,40 @@ def _apply_fade(fade, ratio):
     for k, i, a, b in fade["starts"]:
         if _interrupted(k, i):
             continue
-        set_value(k, i, a + (b - a) * ratio, source="action")
+        # source="fade": 渐变插值。与 action 分开是为了桥接侧的"接管拦截"——
+        # 接管后积压的插值必须丢弃, 而显式动作 (set/mute/回归) 不受接管影响。
+        set_value(k, i, a + (b - a) * ratio, source="fade")
 
 
 def run_show(card):
     """启动卡片 (时间轴调度器): 无 at 的动作顺序排布, 有 at 的按偏移并行;
-    卡片 next 字段非空时执行完自动接续下一张 (防环, 链长上限 16)。"""
-    threading.Thread(target=_show_worker, args=(card,), daemon=True).start()
+    卡片 next 字段非空时执行完自动接续下一张 (防环, 链长上限 16)。
+
+    同一张卡已在运行 → 直接忽略 (连点保护): 否则双击会起两个 worker 同时驱动
+    同一张卡, 推子被写两遍、停止信号还会被后一个 worker 吃掉。
+    返回 True=已启动, False=忽略 (该卡正在运行)。
+    """
+    with SHOW_RUN_LOCK:
+        if SHOW_RUN["stop"] is not None and SHOW_RUN["card"] == card["id"]:
+            return False
+        old = SHOW_RUN["stop"]
+        SHOW_RUN["gen"] += 1
+        gen = SHOW_RUN["gen"]
+        ev = threading.Event()
+        SHOW_RUN["stop"] = ev
+        SHOW_RUN["card"] = card["id"]
+    if old is not None:
+        old.set()      # 旧代立刻收到停止信号; 它清不掉新代的 Event
+    threading.Thread(target=_show_worker, args=(card, ev, gen), daemon=True).start()
+    return True
 
 
-def _show_worker(first_card):
-    SHOW_STOP.clear()
+def _show_worker(first_card, run_ev, gen):
     snapshot_done = False
     seen = set()
     cur = first_card
     depth = 0
-    while cur is not None and not SHOW_STOP.is_set() and depth < 16:
+    while cur is not None and not run_ev.is_set() and depth < 16:
         if cur["id"] in seen:
             log("SHOW 卡片链检测到循环, 停止接续")
             break
@@ -3152,12 +3502,12 @@ def _show_worker(first_card):
         if not snapshot_done:
             # 一键撤销: 执行前自动保存台面快照 (整条链只存一个点, 撤销即回到链开始前)
             try:
-                save_snapshot("自动 · %s" % str(cur.get("name", "卡片"))[:20], auto=True)
+                snap, _saved = save_snapshot("自动 · %s" % str(cur.get("name", "卡片"))[:20], auto=True)
                 snapshot_done = True
             except Exception as e:
                 log("SHOW 自动撤销点保存失败: %r" % e)
-        _run_card_on_timeline(cur)
-        if SHOW_STOP.is_set():
+        _run_card_on_timeline(cur, run_ev, gen)
+        if run_ev.is_set():
             break
         nid = str(cur.get("next") or "")
         nxt = next((c for c in SHOW_CARDS if c["id"] == nid), None) if nid else None
@@ -3167,12 +3517,18 @@ def _show_worker(first_card):
         cur = nxt
     if depth >= 16:
         log("SHOW 卡片链超过 16 张, 停止接续")
-    SHOW_STATE["running"] = None
-    SHOW_STATE["progress"] = 1.0
-    SHOW_STATE["step"] = ""
+    if SHOW_RUN["gen"] == gen:
+        # 还是当前代才清理共享状态 —— 被新代顶掉的旧 worker 退场时不能擦新代的状态
+        with SHOW_RUN_LOCK:
+            if SHOW_RUN["gen"] == gen:
+                SHOW_RUN["stop"] = None
+                SHOW_RUN["card"] = None
+        SHOW_STATE["running"] = None
+        SHOW_STATE["progress"] = 1.0
+        SHOW_STATE["step"] = ""
 
 
-def _run_card_on_timeline(card):
+def _run_card_on_timeline(card, run_ev, gen):
     card_name = str(card.get("name", "卡片"))
 
     # All Live 自动混音演示: 推子随音乐节奏起伏 (电动推子玩具同款)
@@ -3185,7 +3541,7 @@ def _run_card_on_timeline(card):
         _register_fade(demo_targets, card_name)
         t0 = time.time()
         try:
-            while not SHOW_STOP.is_set():
+            while not run_ev.is_set():
                 t = time.time() - t0
                 if t >= duration:
                     break
@@ -3194,11 +3550,11 @@ def _run_card_on_timeline(card):
                     if _interrupted("ch_fader", i):
                         continue
                     v = base[i] + 0.20 * math.sin(t * 2.4 + i * 0.85) * math.sin(t * 0.7)
-                    set_value("ch_fader", i, v, source="action")
+                    set_value("ch_fader", i, v, source="fade")
                 SHOW_STATE["progress"] = t / duration
             for i in range(1, 9):
                 if not _interrupted("ch_fader", i):
-                    set_value("ch_fader", i, base[i], source="action")
+                    set_value("ch_fader", i, base[i], source="fade")
         finally:
             _unregister_fade(demo_targets)
         log("SHOW All Live 演示结束,推子已归位")
@@ -3234,7 +3590,7 @@ def _run_card_on_timeline(card):
     active = {}            # n -> {"targets":..., "starts":...} 进行中的渐变
     TICK = 0.05
     try:
-        while not SHOW_STOP.is_set():
+        while not run_ev.is_set():
             t = time.time() - t0
             for ev in timeline:
                 n, act = ev["n"], ev["act"]
@@ -3274,11 +3630,11 @@ def _run_card_on_timeline(card):
                 break
             SHOW_STATE["progress"] = min(1.0, t / total)
             time.sleep(TICK)
-        # 停止 (SHOW_STOP): 渐变就地冻结在当前值, 不写终值
+        # 停止 (run_ev): 渐变就地冻结在当前值, 不写终值
     finally:
         for tg in active.values():
             _unregister_fade(tg["targets"])
-        if SHOW_STATE["running"] == card["id"]:
+        if SHOW_RUN["gen"] == gen and SHOW_STATE["running"] == card["id"]:
             SHOW_STATE["running"] = None
             SHOW_STATE["progress"] = 1.0
             SHOW_STATE["step"] = ""
@@ -3655,6 +4011,21 @@ class WebHandler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass  # 静默 HTTP 访问日志
 
+    def _cfg_saved(self, what):
+        """落盘自定义配置; 失败就发 500 说清楚"改动只在内存里", 返回 False。
+
+        曾经的写法是失败只 log 一行、接口照样 ok:true —— 用户以为存住了,
+        重启就没, 而且没有任何提示 (持久化"假成功")。
+        """
+        if save_user_config():
+            return True
+        self._send(500, "application/json", json.dumps(
+            {"ok": False,
+             "error": "%s失败: 无法写入配置文件 (%s) — 改动只在内存中, 重启后会丢失。"
+                      "请检查所在目录是否可写、磁盘是否已满。" % (what, CONFIG_PATH)},
+            ensure_ascii=False).encode("utf-8"))
+        return False
+
     def _send(self, code, ctype, body):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
@@ -3856,6 +4227,8 @@ class WebHandler(BaseHTTPRequestHandler):
             if "ramp" in data:
                 KEY_CFG["ramp"] = min(max(_finite(data["ramp"], KEY_CFG["ramp"]), 0.0), 5.0)
             log("KEYCFG 步长 %.1f dB, 渐变 %.1f 秒" % (KEY_CFG["step_db"], KEY_CFG["ramp"]))
+            if not self._cfg_saved("控制键设置"):
+                return
             self._send(200, "application/json", b'{"ok":true}')
 
         elif path == "/api/fx":
@@ -3876,7 +4249,8 @@ class WebHandler(BaseHTTPRequestHandler):
                 self._send(400, "application/json",
                            json.dumps({"ok": False, "error": err}).encode("utf-8"))
                 return
-            save_user_config()
+            if not self._cfg_saved("效果槽保存"):
+                return
             self._send(200, "application/json",
                        json.dumps({"ok": True, "value": v}).encode("utf-8"))
 
@@ -3922,7 +4296,8 @@ class WebHandler(BaseHTTPRequestHandler):
                 if "dotted" in data:
                     FX_SYNC["dotted"] = bool(data["dotted"])
                 snapshot = dict(FX_SYNC)
-            save_user_config()
+            if not self._cfg_saved("混响同步设置"):
+                return
             log("REVERB 同步设置: %s · 联动组 %s · 跟随Tap %s · 时值 %s%s" % (
                 FX_MODE_LABEL.get(snapshot["mode"], snapshot["mode"]),
                 "/".join("FX%d" % s for s in snapshot["group"]) or "(空·全部混响槽)",
@@ -3963,7 +4338,8 @@ class WebHandler(BaseHTTPRequestHandler):
                            json.dumps({"ok": False, "error": "；".join(errs)}).encode("utf-8"))
                 return
             PORT_CFG["udp"], PORT_CFG["web"] = new_udp, new_web
-            save_user_config()
+            if not self._cfg_saved("端口设置"):
+                return
             pending = ports_pending_restart()
             log("PORT 端口设置: OSC/UDP %s · 网页 %s → %s"
                 % (eff_udp, (eff_web if eff_web > 0 else "已关闭"),
@@ -4029,7 +4405,8 @@ class WebHandler(BaseHTTPRequestHandler):
                 self._send(400, "text/plain; charset=utf-8", b"bad target")
                 return
             set_name(g, idx, str(data.get("name", "")))
-            save_user_config()
+            if not self._cfg_saved("名称保存"):
+                return
             self._send(200, "application/json", b'{"ok":true}')
 
         elif path == "/api/undo":
@@ -4038,7 +4415,7 @@ class WebHandler(BaseHTTPRequestHandler):
                 self._send(404, "application/json", b'{"ok":false,"error":"no undo point"}')
                 return
             snap = AUTO_SNAPS.pop()
-            SHOW_STOP.set()          # 正在跑的卡片先停
+            _show_stop_current()      # 正在跑的卡片先停
             start_recall(snap, 2.0)
             log("SHOW 撤销上一次执行: 回滚到 %s" % snap["name"])
             self._send(200, "application/json",
@@ -4047,9 +4424,7 @@ class WebHandler(BaseHTTPRequestHandler):
         elif path == "/api/show":
             sid = data.get("id")
             if sid is None:
-                SHOW_STOP.set()
-                SHOW_STATE["running"] = None
-                SHOW_STATE["step"] = ""
+                _show_stop_current()
                 log("SHOW 手动停止")
                 self._send(200, "application/json", b'{"ok":true,"stopped":true}')
                 return
@@ -4057,10 +4432,13 @@ class WebHandler(BaseHTTPRequestHandler):
             if not card:
                 self._send(404, "text/plain; charset=utf-8", b"no such card")
                 return
-            SHOW_STOP.set()      # 若有正在执行的卡片,先停掉
-            run_show(card)
-            log("SHOW 启动卡片: %s" % card["name"])
-            self._send(200, "application/json", b'{"ok":true}')
+            started = run_show(card)     # 内部带"停旧代 + 连点同一张卡忽略"
+            if started:
+                log("SHOW 启动卡片: %s" % card["name"])
+            else:
+                log("SHOW 忽略重复点击 — 「%s」已在运行" % card["name"])
+            self._send(200, "application/json",
+                       json.dumps({"ok": True, "already": not started}).encode("utf-8"))
 
         elif path == "/api/schedule":
             # 卡片定时触发: mode='delay' delay 秒后; mode='clock' time=HH:MM
@@ -4102,14 +4480,16 @@ class WebHandler(BaseHTTPRequestHandler):
                 bridge_stop()
                 if BRIDGE_TARGET:          # 用户主动断开 → 不再自动重连
                     BRIDGE_TARGET = ""
-                    save_user_config()
+                    if not self._cfg_saved("断开记忆"):
+                        return
                 self._send(200, "application/json", b'{"ok":true,"stopped":true}')
                 return
             ok, msg = bridge_start(addr)
             if ok:
                 ip, p = addr.rsplit(":", 1)
                 BRIDGE_TARGET = "%s:%d" % (ip, int(p))
-                save_user_config()
+                if not self._cfg_saved("记住真台地址"):
+                    return
                 log("BRIDGE 已记住真台地址 %s (下次启动自动重连)" % BRIDGE_TARGET)
             self._send(200 if ok else 400, "application/json",
                        json.dumps({"ok": ok, "msg": msg}).encode("utf-8"))
@@ -4180,7 +4560,8 @@ class WebHandler(BaseHTTPRequestHandler):
                         STATE.names[(g, int(i))] = str(v)
                     except (ValueError, TypeError):
                         pass
-            save_user_config()
+            if not self._cfg_saved("配置导入"):
+                return
             log("CONFIG 导入完成: %d 张卡片, %d 个控制键%s"
                 % (len(clean_cards), len(clean_keys),
                    ("，丢弃 %d 个非法动作" % import_dropped) if import_dropped else ""))
@@ -4215,13 +4596,15 @@ class WebHandler(BaseHTTPRequestHandler):
                 "kind": kind, "idx": idx,
                 "sign": -1 if int(data.get("sign", 1)) < 0 else 1,
             })
-            save_user_config()
+            if not self._cfg_saved("新增控制键"):
+                return
             log("KEY 新增控制键: %s" % QUICK_KEYS[-1]["name"])
             self._send(200, "application/json", b'{"ok":true}')
 
         elif path == "/api/keydel":
             QUICK_KEYS[:] = [k for k in QUICK_KEYS if k["id"] != data.get("id")]
-            save_user_config()
+            if not self._cfg_saved("删除控制键"):
+                return
             log("KEY 删除控制键: %s" % data.get("id"))
             self._send(200, "application/json", b'{"ok":true}')
 
@@ -4253,7 +4636,8 @@ class WebHandler(BaseHTTPRequestHandler):
             except (TypeError, ValueError):
                 sign = target["sign"]
             target["sign"] = -1 if sign < 0 else 1
-            save_user_config()
+            if not self._cfg_saved("编辑控制键"):
+                return
             log("KEY 编辑控制键: %s" % target["name"])
             self._send(200, "application/json", b'{"ok":true}')
 
@@ -4297,7 +4681,8 @@ class WebHandler(BaseHTTPRequestHandler):
             if "next" in card:      # 执行完自动接续的下一张卡片 (空=不接续)
                 nid = str(card.get("next") or "").strip()
                 target["next"] = nid if nid and any(c["id"] == nid for c in SHOW_CARDS) else ""
-            save_user_config()
+            if not self._cfg_saved("编辑卡片"):
+                return
             log("SHOW 编辑卡片: %s" % target["name"])
             self._send(200, "application/json", json.dumps(
                 {"ok": True, "dropped": dropped}).encode("utf-8"))
@@ -4309,7 +4694,8 @@ class WebHandler(BaseHTTPRequestHandler):
                 self._send(404, "application/json", b'{"ok":false,"error":"card not found"}')
                 return
             target["pin"] = 0 if target.get("pin") else 1
-            save_user_config()
+            if not self._cfg_saved("卡片置顶"):
+                return
             log("SHOW %s: %s" % ("置顶卡片" if target.get("pin") else "取消置顶", target["name"]))
             self._send(200, "application/json", b'{"ok":true}')
 
@@ -4343,7 +4729,8 @@ class WebHandler(BaseHTTPRequestHandler):
                 "pin": 1 if card.get("pin") else 0,
                 "next": "",
             })
-            save_user_config()
+            if not self._cfg_saved("新建卡片"):
+                return
             log("SHOW 新建卡片: %s (%d 个动作%s)"
                 % (SHOW_CARDS[-1]["name"], len(actions),
                    "，丢弃 %d 个: %s" % (len(dropped), "; ".join(dropped)) if dropped else ""))
@@ -4355,20 +4742,37 @@ class WebHandler(BaseHTTPRequestHandler):
             SHOW_CARDS[:] = [c for c in SHOW_CARDS if c["id"] != data.get("id")]
             for s in [x for x in list(SCHEDULES) if x["card_id"] == data.get("id")]:
                 cancel_schedule(s["sid"])
-            save_user_config()
+            if not self._cfg_saved("删除卡片"):
+                return
             log("SHOW 删除卡片: %s" % data.get("id"))
             self._send(200, "application/json", b'{"ok":true}')
 
         elif path == "/api/snapshot":
             act = data.get("action")
             if act == "save":
-                snap = save_snapshot(data.get("name"), scope=data.get("scope"))
+                try:
+                    snap, saved = save_snapshot(data.get("name"), scope=data.get("scope"))
+                except ValueError as e:
+                    # 非法范围 (一个组/一个参数都不合法, 编号全越界...) → 明确拒。
+                    # 曾经的写法是静默回落全量: "只想存 ch1-2" 变成存了 158 个值,
+                    # 回归时整台被换掉 —— 比报难查得多。
+                    self._send(400, "application/json", json.dumps(
+                        {"ok": False, "error": str(e)}, ensure_ascii=False).encode("utf-8"))
+                    return
                 if snap["count"] <= 0:
                     # 空范围 = 一条永远不会生效的预设，属于"假成功"，直接拒
                     SNAPSHOTS[:] = [s for s in SNAPSHOTS if s["id"] != snap["id"]]
                     self._send(400, "application/json",
                                json.dumps({"ok": False, "error": "范围里没有可保存的参数"},
                                           ensure_ascii=False).encode("utf-8"))
+                    return
+                if not saved:
+                    self._send(500, "application/json", json.dumps(
+                        {"ok": False,
+                         "error": "预设保存失败: 无法写入配置文件 (%s) — 预设只在内存中, "
+                                  "重启后会丢失。请检查所在目录是否可写、磁盘是否已满。"
+                                  % CONFIG_PATH},
+                        ensure_ascii=False).encode("utf-8"))
                     return
                 self._send(200, "application/json",
                            json.dumps({"ok": True, "id": snap["id"],
@@ -4394,11 +4798,13 @@ class WebHandler(BaseHTTPRequestHandler):
                                b'{"ok":false,"error":"bad id"}')
                     return
                 SNAPSHOTS[:] = [s for s in SNAPSHOTS if s["id"] != did]
+                # ⚠️ 删除也必须落盘: 曾经只改内存 → 接口返 ok 但重启后预设复活,
+                #    又是一次"假成功"。
+                if not self._cfg_saved("删除预设"):
+                    return
                 self._send(200, "application/json", b'{"ok":true}')
             elif act == "stop":
-                RECALL_STOP.set()
-                RECALL_STATE["running"] = None
-                log("SNAPSHOT 手动停止回归")
+                _recall_stop_current()
                 self._send(200, "application/json", b'{"ok":true}')
             else:
                 self._send(400, "text/plain; charset=utf-8", b"bad action")
@@ -5059,8 +5465,13 @@ function runShow(id){ fetch('/api/show',{method:'POST',headers:{'Content-Type':'
     body:JSON.stringify({id:id})}); }
 function stopShow(){ fetch('/api/show',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({id:null})}); }
+// ⚠️ 保存类接口失败时必须让用户看见: 后端对"落盘失败/非法输入"返回
+//    {"ok":false,"error":"..."} (HTTP 4xx/5xx), 曾经的 fire-and-forget 会把
+//    "没存上"表现成"存好了" —— 持久化假成功的最外一环。
 function api(path,obj){ fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify(obj)}); }
+    body:JSON.stringify(obj)}).then(r=>r.json().catch(()=>({}))).then(d=>{
+      if(d&&(d.error||d.ok===false)) showToast(d.error||'操作失败');
+    }).catch(()=>{}); }
 // ---- 台面预设：可选范围的保存 ----
 const PS_GROUPS=[['ch','输入通道'],['bus','Mix Bus'],['dca','DCA'],['auxin','Aux In'],
   ['usb','USB'],['fxret','FX 返回'],['mtx','Matrix'],['main','主输出'],
