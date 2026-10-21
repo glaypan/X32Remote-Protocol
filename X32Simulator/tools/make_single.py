@@ -106,8 +106,14 @@ def strip_module(src):
     out = []
     for ln in src.splitlines():
         if REL_IMPORT.match(ln):
-            if ln.rstrip().endswith("("):
-                raise SystemExit("!! 多行相对导入不支持, 请改成单行: %s" % ln.strip())
+            # 只剥**单行**导入。多行括注导入必须报错退出, 不能只剥第一行 ——
+            # 续行会以裸表达式留在文件里, 拼出来的单文件语法错误 (曾经的坑:
+            # 判断只认"行尾是 (", 而括号后换行的写法行尾是逗号, 于是漏判)。
+            body = ln.strip()
+            if "(" in body and ")" not in body:
+                raise SystemExit("!! 多行相对导入不支持, 请改成单行: %s" % body)
+            if body.count("(") != body.count(")"):
+                raise SystemExit("!! 相对导入括号不配对: %s" % body)
             continue
         out.append(ln)
     text = "\n".join(out)

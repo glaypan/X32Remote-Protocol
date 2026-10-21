@@ -10,7 +10,7 @@ from .consts import DEFAULT_NAMES, FADER_ADDR, FX_COUNT, KIND_LABEL, ON_ADDR, RE
 from .kinds import fx_par_kind, fx_par_num, kind_group
 from .logbus import EVENTS, EVT_SEQ, log
 from .osc import OscMsg, encode_message
-from .params import CH_EXTRA_ADDR, PARAM_SPECS, blank_row, param_coerce
+from .params import CH_EQ_ADDR, CH_EXTRA_ADDR, PARAM_SPECS, SEND_BUS, SEND_BY_SEG, blank_row, param_coerce, param_wire, send_pack, send_unpack  # noqa: E501
 from .profiles import addr_for_write, profile
 from .runtime import MAIN_SOCK
 from .util import _clamp01, _finite, _truthy
@@ -36,6 +36,11 @@ class MixerState:
         self.fxret = {i: blank_row("fxret") for i in range(1, 9)}  # 效果返回 FX Return 1-8
         self.mtx = {i: blank_row("mtx") for i in range(1, 7)}    # 矩阵输出 Matrix 1-6
         self.main = blank_row("main")
+        # 发送 (通道 → Bus): 二维目标, 键 = params.send_pack(ch, bus)。
+        # ⚠️ 故意**不进** snapshot_state —— 512 行 × 3 字段会把 /api/state 撑爆,
+        #    那笔 4G 流量账刚结清。界面按需取 /api/sends?ch=N。
+        self.send = {i: blank_row("send")
+                     for i in range(1, 32 * SEND_BUS + 1)}
         self.scene = 1
         # FX 机架 1-8: 混响器. par 存**原生单位**参数值 (时间=秒 / 预延迟=毫秒 / 阻尼=0..1),
         # 参数索引随算法变化, 映射表见 X32_FX_ALGOS / M32_FX_ALGOS (默认值需真机标定)
@@ -122,6 +127,35 @@ def match_address(pattern: str):
                 for i in sorted(STATE.ch):
                     if seg_match(segs[1], "%02d" % i):
                         results.append((sp.kind, i))
+        elif len(segs) == 5 and segs[0] == "ch" and segs[2] == "eq" \
+                and (segs[2], segs[4]) in CH_EQ_ADDR:
+            # 通道 EQ 段落: /ch/01/eq/3/g —— 段号写死在 spec 里 (每段一个 kind),
+            # 所以这里通配符只作用于通道号; 段号写 * 一次展开 4 段。
+            for sp in CH_EQ_ADDR[(segs[2], segs[4])]:
+                band = sp.osc.strip("/").split("/")[3]
+                if not seg_match(segs[3], band):
+                    continue
+                for i in sorted(STATE.ch):
+                    if seg_match(segs[1], "%02d" % i):
+                        results.append((sp.kind, i))
+        elif len(segs) == 5 and segs[0] == "ch" and segs[2] == "mix" \
+                and segs[4] in SEND_BY_SEG:
+            # 发送: /ch/01/mix/05/level —— 二维目标, idx = send_pack(通道, Bus)。
+            # 两个位置都支持通配符 (/ch/*/mix/*/level 一次 512 条)。
+            sp = SEND_BY_SEG[segs[4]]
+            # 取点只存在于奇数 Bus: 通配时展开奇数, 但允许用**偶数**地址查
+            # (真台界面上 Bus02 与 Bus01 是同一个取点, 用户按 02 查是合理的)。
+            odd_only = (sp.kind == "send_tap")
+            step = 2 if odd_only else 1
+            for ch in sorted(STATE.ch):
+                if not seg_match(segs[1], "%02d" % ch):
+                    continue
+                for bus in range(1, SEND_BUS + 1, step):
+                    hit = seg_match(segs[3], "%02d" % bus)
+                    if not hit and odd_only and bus + 1 <= SEND_BUS:
+                        hit = seg_match(segs[3], "%02d" % (bus + 1))
+                    if hit:
+                        results.append((sp.kind, send_pack(ch, bus)))
         elif len(segs) == 4 and segs[0] == "bus" and segs[2] == "mix":
             kind = {"fader": "bus_fader", "on": "bus_on"}.get(segs[3])
             if kind:
@@ -165,7 +199,17 @@ def match_address(pattern: str):
     return results
 
 
+def _send_norm(kind, idx):
+    """取点按成对 Bus 共享 → 读写都归一到奇数 Bus (与真台同一份真相)。"""
+    if kind == "send_tap":
+        ch, bus = send_unpack(idx)
+        if bus % 2 == 0:
+            return send_pack(ch, bus - 1)
+    return idx
+
+
 def get_value(kind, idx):
+    idx = _send_norm(kind, idx)
     with STATE.lock:
         # 表驱动: 推子/静音/12 个通道参数全部走登记表 (params.PARAM_SPECS)
         sp = PARAM_SPECS.get(kind)
@@ -198,6 +242,7 @@ def target_exists(kind, idx):
 
 
 def set_value(kind, idx, value, source="manual"):
+    idx = _send_norm(kind, idx)
     # 延迟导入: fx→state 是顶层依赖, state→fx 只在本函数用 —— 放这里打破环
     # (合成单文件形态下该行被剥离, 同一命名空间直接解析)。
     from .fx import _fx_time_fanout, fx_algo, fx_algos, fx_par_clamp
@@ -355,15 +400,18 @@ def value_reply(kind, idx):
 
     返回 None 表示**当前控台不支持该目标**（调用方须过滤掉，不能塞进 bundle）。
     """
+    idx = _send_norm(kind, idx)
     v = get_value(kind, idx)
     a = addr_for_write(kind, idx)
     if a is None or v is None:
         return None
     # 表驱动定参数类型: float 参数 (推子/增益/延时/频率/门限) 发浮点,
-    # 开关发 0/1, 枚举 (低切斜率) 发整数值 —— 与 ParamSpec.vtype 一致
+    # 开关发 0/1, 枚举发线上的那个值 —— 由 params.param_wire 统一换算。
+    # ⚠️ dyn/ratio 这类 **index 型枚举** 本地存 4.0(4:1)、线上要发 6,
+    #    曾经这里直接 int(v) → 4, 真台解析成 5:1 (第 5 档), 静默改值。
     sp = PARAM_SPECS.get(kind)
     if sp is not None:
-        return OscMsg(a, [float(v)] if sp.vtype == "float" else [int(v)])
+        return OscMsg(a, [param_wire(sp, v)])
     if kind == "ch_dca":
         return OscMsg(a, [int(v)])
     if kind in ("fx_type", "fx_name"):
@@ -450,7 +498,9 @@ def compute_levels():
                 db = STATE.fader_to_db(ch["fader"])
                 # 模拟动态信号: 正弦 + 伪随机起伏
                 wiggle = 4.0 * math.sin(t * 1.7 + i * 0.9) + 2.0 * math.sin(t * 4.3 + i * 2.3)
-                floats.append(max(-60.0, min(0.0, db + wiggle)))
+                # 0.1 dB 足够画表 (屏幕上一个像素约 0.5 dB)。保留全精度会让
+                # 每轮多传 350 B —— 4 Hz 下就是 5 MB/h, 换来的是看不见的精度。
+                floats.append(round(max(-60.0, min(0.0, db + wiggle)), 1))
     return floats
 NOTIFY_LAST = {}     # 手动变更推送节流: (kind, idx) -> [上次推送的值, 时间]
                      # ⚠️ 必须**连同值一起**判断"是否重复": 只看时间会把真台的面板干预挤掉。

@@ -10,7 +10,7 @@ from .consts import FADER_ADDR, ON_ADDR
 from .kinds import fx_par_kind, fx_par_num, kind_group
 from .logbus import EVENTS, EVT_SEQ, log
 from .osc import OscMsg, decode_packet, encode_bundle, encode_message
-from .params import PARAM_SPECS
+from .params import PARAM_SPECS, param_from_wire, param_wire
 from .profiles import addr_for_write, profile
 from .state import FADE_LOCK, FADE_ZONE, INTERRUPTS, WriteSink, get_value, match_address, set_value, target_label
 from .util import _truthy
@@ -37,20 +37,18 @@ def _bridge_forward(kind, idx, value, source="manual", force=False):
         elif kind in ("fx_type", "fx_name"):
             arg = str(value)[:12]
         elif sp is not None:
-            # 表驱动定线上类型 (与 state.value_reply 同一套规则):
+            # 表驱动定线上类型 (与 state.value_reply 同一套规则, 都走 param_wire):
             #   float → 浮点 (推子/增益/延时/频率/门限); int → 整数 (低切斜率);
             #   bool  → 0/1 (静音/延时/低切/插入/门开关)
+            #   index 型枚举 (dyn/ratio) → 0..11 的**索引**, 不是比值
             # ⚠️ 曾经这里是 `endswith("_fader") → float, 其余 _truthy` —— 新增的
             #    通道参数全是非 _fader 结尾, 会被 _truthy 压成 0/1 发给真台
             #    (trim 3.5 dB 变成 1), 于是"桥接转发"这一层整个失真。
-            if sp.vtype == "bool":
-                arg = _truthy(value)
-            else:
-                arg = float(value) if sp.vtype == "float" else int(value)
-                # 第二道闸: 万一将来哪条路径漏了 _finite, 宁可拒发也不把 NaN 发给真台
-                if not math.isfinite(arg):
-                    log("BRIDGE 拒发非有限值: %s %s = %r" % (kind, idx, value))
-                    return
+            arg = param_wire(sp, value)
+            # 第二道闸: 万一将来哪条路径漏了 _finite, 宁可拒发也不把 NaN 发给真台
+            if isinstance(arg, float) and not math.isfinite(arg):
+                log("BRIDGE 拒发非有限值: %s %s = %r" % (kind, idx, value))
+                return
         elif kind == "fx_mix" or fx_par_num(kind) is not None:
             arg = float(value)
             # 第二道闸: 万一将来哪条路径漏了 _finite, 宁可拒发也不把 NaN 发给真台
@@ -189,10 +187,17 @@ def _fwd_is_echo(key, value):
 
 
 def _bridge_apply_readback(kind, idx, value):
-    """真台回读: 回声(自己刚转发过的值)静默吸收; 台面上的手动变化按冲突策略处理。"""
+    """真台回读: 回声(自己刚转发过的值)静默吸收; 台面上的手动变化按冲突策略处理。
+
+    ⚠️ value 是**线上值**: dyn/ratio 这类 index 型枚举要换算成本地存的值再落库,
+    否则真台第 6 档 (4:1) 会被存成 "6:1"。回声比对仍用线上值 (FWD_RECENT 记的
+    也是线上值), 换算只在落库前一步做 —— 顺序别调, 调了回声就认不出来了。
+    """
     key = (kind, idx)
+    sp = PARAM_SPECS.get(kind)
+    local = param_from_wire(sp, value) if sp is not None else value
     if _fwd_is_echo(key, value):
-        set_value(kind, idx, value, source="sync")     # 自己写入的回声, 只对齐本地
+        set_value(kind, idx, local, source="sync")     # 自己写入的回声, 只对齐本地
         return
     # 真台端的变化: 渐变驱动中的通道 → 手动接管冲突; 其余静默同步
     with FADE_LOCK:
@@ -204,7 +209,7 @@ def _bridge_apply_readback(kind, idx, value):
             EVT_SEQ[0] += 1
             EVENTS.append({"id": EVT_SEQ[0], "time": time.strftime("%H:%M:%S"), "text": text})
             log("CONFLICT %s" % text)
-    set_value(kind, idx, value, source="sync")
+    set_value(kind, idx, local, source="sync")
 
 
 def _bridge_full_sync(sock):

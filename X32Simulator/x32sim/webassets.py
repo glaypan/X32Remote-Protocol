@@ -283,6 +283,20 @@ WEB_PAGE = r"""<!DOCTYPE html>
 .chp-row select{flex:1;max-width:130px}
 .chp-row.off{opacity:.5}
 .chp-row.off .chp-l{color:var(--sub)}
+
+/* ---- 通道参数面板: 分页与键盘精调 ---- */
+.chp-tabs{display:flex;gap:6px;margin:8px 0 2px}
+.chp-tabs button{flex:1;padding:8px 4px;border-radius:9px;font-size:13px;font-weight:700;
+  border:1px solid var(--line);background:var(--card2);color:var(--sub)}
+.chp-tabs button.on{background:rgba(255,180,84,.16);border-color:var(--accent);color:var(--accent)}
+.chp-tab{display:none}
+.chp-tab.on{display:block}
+/* 数值标签当输入入口: 白天也要看得出"这里能点"—— 加虚线下划线 */
+.chp-v{cursor:text;text-decoration:underline dotted rgba(160,170,190,.45);
+  text-underline-offset:3px}
+.chp-v input.chp-in{width:74px;padding:2px 4px;font-size:12px;text-align:right;
+  border-radius:6px;border:1px solid var(--accent);background:var(--card2);
+  color:var(--txt);font-variant-numeric:tabular-nums}
 </style>
 </head>
 <body>
@@ -565,7 +579,13 @@ WEB_PAGE = r"""<!DOCTYPE html>
   <div class="mdlg" role="dialog" aria-label="通道参数">
     <div class="mhd"><b id="chpTitle">通道参数</b>
       <button class="mclose" onclick="closeChParams()" aria-label="关闭">✕</button></div>
-    <div class="ds">增益 / 反相 / 延时 / 低切 / 插入 / 噪声门 · 拖动即写入台面（不是草稿）</div>
+    <div class="ds">前置 / 动态 / 均衡 / 发送 · 拖动即写入台面（不是草稿）· 点数值可键盘精调</div>
+    <div class="chp-tabs" id="chpTabBar">
+      <button type="button" data-tab="pre" onclick="chpTab('pre')">前置</button>
+      <button type="button" data-tab="dyn" onclick="chpTab('dyn')">动态</button>
+      <button type="button" data-tab="eq" onclick="chpTab('eq')">均衡</button>
+      <button type="button" data-tab="send" onclick="chpTab('send')">发送</button>
+    </div>
     <div id="chParamBody"></div>
   </div>
 </div>
@@ -705,10 +725,13 @@ function toggle(p,i,el){
 }
 // 写入节流: 拖动中 50ms 窗口合并, 多条走 /api/setbatch, 少请求量
 const pend={}; let pendT=null;
-function send(p,i,param,value){
-  const KMAP={c:'ch',b:'bus',d:'dca',m:'main',a:'auxin',u:'usb',x:'fxret',t:'mtx'};
+function send(p,i,param,value,bus){
+  const KMAP={c:'ch',b:'bus',d:'dca',m:'main',a:'auxin',u:'usb',x:'fxret',t:'mtx',S:'send'};
   const kind=KMAP[p]||'ch';
-  pend[kind+'|'+i+'|'+param]={kind:kind,idx:i,param:param,value:value};
+  const it={kind:kind,idx:i,param:param,value:value};
+  // 发送是二维目标: bus 一起进合并键, 否则 CH01→Bus1 和 CH01→Bus2 会互相覆盖
+  if(kind==='send') it.bus=bus|0;
+  pend[kind+'|'+i+'|'+(kind==='send'?(bus|0):'')+'|'+param]=it;
   if(!pendT) pendT=setTimeout(flushSend,50);
 }
 function flushSend(){
@@ -720,32 +743,98 @@ function flushSend(){
     {method:'POST',headers:{'Content-Type':'application/json'},
      body:JSON.stringify(arr.length===1?arr[0]:{sets:arr})});
 }
-// ---- 通道参数面板: 增益 / 反相 / 延时 / 低切 / 插入 / 噪声门 ----
+// ---- 通道参数面板: 前置 / 动态 / 均衡 / 发送 ----
 // 声明式控件表: f=字段名 必须与后端 params.py 的 ParamSpec 一致 (量程/档位也一致),
 // 改任一边都要同步改另一边 —— test_params.py 会把不一致打成红灯。
 // t: num=滑块+数值 / bool=两态按钮 / enum=下拉
+// 顺序必须与 CH_PARAM_SPECS 完全一致 (回归按序比对)。
+const EQ_TYPES=[[0,'LCut'],[1,'LShv'],[2,'PEQ'],[3,'VEQ'],[4,'HShv'],[5,'HCut']];
 const CH_PARAM_UI=[
-  {f:'trim',       l:'增益',     t:'num',  u:'dB',     lo:-18, hi:18,  step:0.25, dec:1, dv:0},
+  {f:'trim',       l:'增益',     t:'num',  u:'dB',     lo:-18, hi:18,  step:0.25, dec:2, dv:0},
   {f:'invert',     l:'反相',     t:'bool', lb:['正常','反相']},
   {f:'delay_on',   l:'延时',     t:'bool', lb:['关','开']},
   {f:'delay_ms',   l:'延时时间', t:'num',  u:'ms',     lo:0.3, hi:500, step:0.1,  dec:1, dv:0.3, dep:'delay_on'},
   {f:'hpf_on',     l:'低切',     t:'bool', lb:['关','开']},
   {f:'hpf_slope',  l:'低切斜率', t:'enum', u:'dB/oct', opts:[[12,'12'],[18,'18'],[24,'24']], dep:'hpf_on'},
-  {f:'hpf_f',      l:'低切频率', t:'num',  u:'Hz',     lo:20,  hi:400, step:1,    dec:0, dv:80, dep:'hpf_on'},
+  {f:'hpf_f',      l:'低切频率', t:'num',  u:'Hz',     lo:20,  hi:400, step:1,    dec:0, dv:80, dep:'hpf_on', lg:1},
   {f:'ins_on',     l:'插入',     t:'bool', lb:['关','开']},
   {f:'ins_pos',    l:'插入位置', t:'enum', opts:[[0,'PRE'],[1,'POST']], dep:'ins_on'},
   {f:'gate_on',    l:'噪声门',   t:'bool', lb:['关','开']},
   {f:'gate_thr',   l:'门限',     t:'num',  u:'dB',     lo:-80, hi:0,   step:0.5,  dec:1, dv:-40, dep:'gate_on'},
   {f:'gate_range', l:'门范围',   t:'num',  u:'dB',     lo:3,   hi:60,  step:1,    dec:0, dv:15, dep:'gate_on'},
+  // ---- 动态 (压缩/扩展) ----
+  {f:'dyn_on',     l:'压缩',     t:'bool', lb:['关','开']},
+  {f:'dyn_thr',    l:'压缩阈值', t:'num',  u:'dB',     lo:-80, hi:0,   step:0.5,  dec:1, dv:-20, dep:'dyn_on'},
+  {f:'dyn_ratio',  l:'压缩比',   t:'enum', opts:[[1.1,'1.1:1'],[1.3,'1.3:1'],[1.5,'1.5:1'],[2,'2:1'],[2.5,'2.5:1'],[3,'3:1'],[4,'4:1'],[5,'5:1'],[7,'7:1'],[10,'10:1'],[20,'20:1'],[100,'100:1']], dep:'dyn_on'},
+  {f:'dyn_knee',   l:'拐点',     t:'num',  u:'',       lo:0,   hi:5,   step:1,    dec:0, dv:2, dep:'dyn_on'},
+  {f:'dyn_mgain',  l:'补偿增益', t:'num',  u:'dB',     lo:0,   hi:24,  step:0.5,  dec:1, dv:0, dep:'dyn_on'},
+  {f:'dyn_attack', l:'启动时间', t:'num',  u:'ms',     lo:0,   hi:120, step:1,    dec:0, dv:10, dep:'dyn_on'},
+  {f:'dyn_release',l:'释放时间', t:'num',  u:'ms',     lo:5,   hi:4000,step:1,    dec:0, dv:200, dep:'dyn_on'},
+  {f:'dyn_mix',    l:'干湿比',   t:'num',  u:'%',      lo:0,   hi:100, step:5,    dec:0, dv:100, dep:'dyn_on'},
+  {f:'dyn_pos',    l:'压缩位置', t:'enum', opts:[[0,'PRE'],[1,'POST']], dep:'dyn_on'},
+  // ---- 均衡 4 段 ----
+  {f:'eq_on',      l:'均衡',     t:'bool', lb:['关','开']},
+  {f:'eq1_type',   l:'EQ1 类型', t:'enum', opts:EQ_TYPES, dep:'eq_on'},
+  {f:'eq1_f',      l:'EQ1 频率', t:'num',  u:'Hz',     lo:20,  hi:20000, step:1,  dec:0, dv:100, dep:'eq_on', lg:1},
+  {f:'eq1_g',      l:'EQ1 增益', t:'num',  u:'dB',     lo:-15, hi:15,  step:0.25, dec:2, dv:0, dep:'eq_on'},
+  {f:'eq1_q',      l:'EQ1 Q值',  t:'num',  u:'',       lo:0.3, hi:10,  step:0.01, dec:2, dv:2, dep:'eq_on'},
+  {f:'eq2_type',   l:'EQ2 类型', t:'enum', opts:EQ_TYPES, dep:'eq_on'},
+  {f:'eq2_f',      l:'EQ2 频率', t:'num',  u:'Hz',     lo:20,  hi:20000, step:1,  dec:0, dv:500, dep:'eq_on', lg:1},
+  {f:'eq2_g',      l:'EQ2 增益', t:'num',  u:'dB',     lo:-15, hi:15,  step:0.25, dec:2, dv:0, dep:'eq_on'},
+  {f:'eq2_q',      l:'EQ2 Q值',  t:'num',  u:'',       lo:0.3, hi:10,  step:0.01, dec:2, dv:2, dep:'eq_on'},
+  {f:'eq3_type',   l:'EQ3 类型', t:'enum', opts:EQ_TYPES, dep:'eq_on'},
+  {f:'eq3_f',      l:'EQ3 频率', t:'num',  u:'Hz',     lo:20,  hi:20000, step:1,  dec:0, dv:2000, dep:'eq_on', lg:1},
+  {f:'eq3_g',      l:'EQ3 增益', t:'num',  u:'dB',     lo:-15, hi:15,  step:0.25, dec:2, dv:0, dep:'eq_on'},
+  {f:'eq3_q',      l:'EQ3 Q值',  t:'num',  u:'',       lo:0.3, hi:10,  step:0.01, dec:2, dv:2, dep:'eq_on'},
+  {f:'eq4_type',   l:'EQ4 类型', t:'enum', opts:EQ_TYPES, dep:'eq_on'},
+  {f:'eq4_f',      l:'EQ4 频率', t:'num',  u:'Hz',     lo:20,  hi:20000, step:1,  dec:0, dv:8000, dep:'eq_on', lg:1},
+  {f:'eq4_g',      l:'EQ4 增益', t:'num',  u:'dB',     lo:-15, hi:15,  step:0.25, dec:2, dv:0, dep:'eq_on'},
+  {f:'eq4_q',      l:'EQ4 Q值',  t:'num',  u:'',       lo:0.3, hi:10,  step:0.01, dec:2, dv:2, dep:'eq_on'},
 ];
-function chpSpec(f){ for(const r of CH_PARAM_UI) if(r.f===f) return r; return null; }
-let chpIdx=0;
+// 发送 (二维: 通道 × Bus)。取值不走 /api/state, 单独 /api/sends?ch=N。
+// 电平在线上是 0..1, 界面上按 % 显示 —— pct:1 标记这一层换算只在 UI 发生。
+const SEND_UI=[
+  {f:'send_on',    l:'发送开关', t:'bool', lb:['关','开']},
+  {f:'send_level', l:'发送电平', t:'num',  u:'%', lo:0, hi:100, step:1, dec:0, dv:75, pct:1},
+  // 官方枚举 {<-EQ, EQ->, PRE, POST, GRP}; 真台按 1&2 / 3&4 成对共享
+  {f:'send_tap',   l:'发送取点', t:'enum', opts:[[0,'<-EQ'],[1,'EQ->'],[2,'PRE'],[3,'POST'],[4,'GRP']]},
+];
+const CH_TABS=[['pre','前置'],['dyn','动态'],['eq','均衡'],['send','发送']];
+function chpTabOf(f){
+  if(f.indexOf('send_')===0) return 'send';
+  if(f.indexOf('dyn_')===0) return 'dyn';
+  if(f.indexOf('eq')===0) return 'eq';
+  return 'pre';
+}
+function chpSpec(f){
+  for(const r of CH_PARAM_UI) if(r.f===f) return r;
+  for(const r of SEND_UI) if(r.f===f) return r;
+  return null;
+}
+let chpIdx=0, chpBus=1, chpSend={}, chpSendT=null, chpCurTab='pre';
+// 对数滑块: 位置 0..1000 ↔ 真实值 lo*(hi/lo)^(pos/1000)。
+// 频率类参数 (低切 / EQ 四段) 必须用它 —— 线性刻度下 20..20000 在手机上
+// 一像素跳几十 Hz, 想设 100 Hz 只能靠运气, 而 100 Hz 恰恰是最常用的点。
+const CHP_POS_MAX=1000;
+function chpPos(r,v){
+  const lo=Math.max(r.lo,1e-6), hi=r.hi;
+  const x=Math.min(Math.max(+v||lo,lo),hi);
+  return Math.round(Math.log(x/lo)/Math.log(hi/lo)*CHP_POS_MAX);
+}
+function chpVal(r,pos){
+  const lo=Math.max(r.lo,1e-6), hi=r.hi;
+  return lo*Math.pow(hi/lo,Math.min(Math.max(+pos||0,0),CHP_POS_MAX)/CHP_POS_MAX);
+}
 function chpFmt(r,v){
   const x=+v||0;
-  return (r.dec?x.toFixed(r.dec):String(Math.round(x)))+(r.u?(' '+r.u):'');
+  const txt=(r.dec?x.toFixed(r.dec):String(Math.round(x)));
+  return txt+(r.u?(' '+r.u):'');
 }
+// 数值标签做成可点: 手机上滑块只能"拖个大概", 要精确到 0.25dB 必须能敲键盘。
+// 点一下变成 number 输入框 (inputmode=decimal 直接弹数字键盘), 回车/失焦提交, Esc 取消。
 function chpRowHTML(r){
   const id='chp-'+r.f;
+  const o='ondblclick';
   if(r.t==='bool')
     return `<div class="chp-row" id="${id}-row"><span class="chp-l">${r.l}</span>`
       +`<button type="button" class="chp-tog" id="${id}" onclick="chpTog('${r.f}')">—</button>`
@@ -753,23 +842,64 @@ function chpRowHTML(r){
   if(r.t==='enum')
     return `<div class="chp-row" id="${id}-row"><span class="chp-l">${r.l}</span>`
       +`<select class="nkin" id="${id}" onchange="chpSet('${r.f}',this.value)">`
-      +r.opts.map(o=>`<option value="${o[0]}">${o[1]}</option>`).join('')+`</select>`
+      +r.opts.map(x=>`<option value="${x[0]}">${x[1]}</option>`).join('')+`</select>`
       +`<span class="chp-v">${r.u||''}</span></div>`;
   return `<div class="chp-row" id="${id}-row"><span class="chp-l">${r.l}</span>`
-    +`<input type="range" id="${id}" min="${r.lo}" max="${r.hi}" step="${r.step}"`
-    +` oninput="chpSlide('${r.f}',this)"><span class="chp-v" id="${id}-v"></span></div>`;
+    +`<input type="range" id="${id}" min="${r.lg?0:r.lo}" max="${r.lg?CHP_POS_MAX:r.hi}"`
+    +` step="${r.lg?1:r.step}"`
+    +` oninput="chpSlide('${r.f}',this)">`
+    +`<span class="chp-v" id="${id}-v" onclick="chpEdit('${r.f}')" title="点一下输入精确值"></span></div>`;
+}
+function chpBodyHTML(){
+  let h='';
+  CH_TABS.forEach(([k])=>{
+    const rows=(k==='send'?SEND_UI:CH_PARAM_UI.filter(r=>chpTabOf(r.f)===k));
+    h+=`<div class="chp-tab" data-tab="${k}">`
+      +(k==='send'?`<div class="chp-row"><span class="chp-l">Bus</span>`
+        +`<select class="nkin" id="chpBus" onchange="chpBusChg(this.value)">`
+        +Array.from({length:16},(_,i)=>`<option value="${i+1}">Bus ${String(i+1).padStart(2,'0')}</option>`).join('')
+        +`</select><span class="chp-v">16 路</span></div>`:'')
+      +rows.map(chpRowHTML).join('')+'</div>';
+  });
+  return h;
+}
+// 控台能力 (数字增益量程) 由服务端给: 旧固件 ±12, 新固件 ±18。
+// 前端表里写的是 18 (新固件的规格), 老固件下把滑块范围收窄, 免得拖到 18 被弹回。
+let CHP_TRIM=18;
+function chpLoadLimits(){
+  fetch('/api/info').then(r=>r.json()).then(d=>{
+    if(!d||!d.trimRange||d.trimRange===CHP_TRIM) return;
+    CHP_TRIM=+d.trimRange;
+    const el=document.getElementById('chp-trim');
+    if(el){ el.min=-CHP_TRIM; el.max=CHP_TRIM; }
+    const r=chpSpec('trim');
+    if(r){ r.lo=-CHP_TRIM; r.hi=CHP_TRIM; }
+  }).catch(()=>{});
 }
 function openChParams(i){
-  chpIdx=i;
+  chpIdx=i; chpCurTab='pre';
+  chpLoadLimits();
   const nm=nameOf('ch',i);
   $('#chpTitle').textContent='CH '+String(i).padStart(2,'0')+(nm?' · '+nm:'');
-  $('#chParamBody').innerHTML=CH_PARAM_UI.map(chpRowHTML).join('');
+  $('#chParamBody').innerHTML=chpBodyHTML();
+  chpTab('pre');
   $('#chParamModal').classList.add('on');
   document.body.style.overflow='hidden';
   chpSync();
 }
 function closeChParams(){
   $('#chParamModal').classList.remove('on'); document.body.style.overflow='';
+}
+function chpTab(k){
+  chpCurTab=k;
+  const body=$('#chParamBody'); if(!body) return;
+  body.querySelectorAll('.chp-tab').forEach(el=>{
+    el.classList.toggle('on', el.dataset.tab===k);
+  });
+  const bar=$('#chpTabBar');
+  if(bar) bar.querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.tab===k));
+  if(k==='send') chpLoadSends();
+  else chpSync();
 }
 // 状态回读: 只更新控件, 不重建 (拖动中不动滑块, 手机上会把手指下的位置拽回去)
 function chpSync(){
@@ -784,32 +914,113 @@ function chpSync(){
       el.textContent=on?r.lb[1]:r.lb[0];
       el.classList.toggle('on',on);
     } else if(r.t==='enum'){
-      if(document.activeElement!==el) el.value=String(v);
+      if(document.activeElement!==el) el.value=String(+v);
     } else if(v!==undefined&&v!==null){
-      if(document.activeElement!==el) el.value=v;
+      if(document.activeElement!==el) el.value=r.lg?chpPos(r,v):v;
       const lab=document.getElementById('chp-'+r.f+'-v');
-      if(lab) lab.textContent=chpFmt(r,v);
+      if(lab&&!lab.querySelector('input')) lab.textContent=chpFmt(r,v);
     }
     // 从属项 (延时时间/低切斜率…) 在主开关关闭时变淡 —— 仍可调, 只是提示"当前不生效"
     const wrap=document.getElementById('chp-'+r.f+'-row');
     if(wrap&&r.dep) wrap.classList.toggle('off',!row[r.dep]);
   });
 }
+function chpSendRow(){ return chpSend[String(chpBus)]||{level:0,on:0,tap:4}; }
+function chpLoadSends(){
+  if(!$('#chParamModal')||!$('#chParamModal').classList.contains('on')) return;
+  fetch('/api/sends?ch='+chpIdx).then(r=>r.json()).then(d=>{
+    chpSend=d.sends||{}; chpSyncSend();
+  }).catch(()=>{});
+}
+function chpSyncSend(){
+  const row=chpSendRow();
+  SEND_UI.forEach(r=>{
+    const el=document.getElementById('chp-'+r.f); if(!el) return;
+    let v=row[r.f==='send_level'?'level':(r.f==='send_on'?'on':'tap')];
+    if(r.pct) v=(+v||0)*100;
+    if(r.t==='bool'){
+      el.textContent=v?r.lb[1]:r.lb[0]; el.classList.toggle('on',!!v);
+    } else if(r.t==='enum'){
+      if(document.activeElement!==el) el.value=String(Math.round(+v||0));
+    } else {
+      if(document.activeElement!==el) el.value=v;
+      const lab=document.getElementById('chp-'+r.f+'-v');
+      if(lab&&!lab.querySelector('input')) lab.textContent=chpFmt(r,v);
+    }
+  });
+}
+function chpBusChg(v){ chpBus=+v||1; chpSyncSend(); }
+function chpIsSend(f){ return f.indexOf('send_')===0; }
+// 写库: 发送走 /api/setbatch 的 bus 字段, 其余按通道参数
+function chpWrite(f,v){
+  if(chpIsSend(f)){
+    send('S',chpIdx,f,v,chpBus);
+    const row=chpSend[String(chpBus)]||(chpSend[String(chpBus)]={level:0,on:0,tap:4});
+    const key=(f==='send_level'?'level':(f==='send_on'?'on':'tap'));
+    row[key]=v;
+    clearTimeout(chpSendT); chpSendT=setTimeout(chpLoadSends,500);
+  } else {
+    send('c',chpIdx,f,v);
+  }
+}
 function chpSlide(f,el){
   const r=chpSpec(f); if(!r) return;
+  const v=r.lg?chpVal(r,el.value):(+el.value), w=r.pct?v/100:v;
   const lab=document.getElementById('chp-'+f+'-v');
-  if(lab) lab.textContent=chpFmt(r,el.value);
-  send('c',chpIdx,f,+el.value);
+  if(lab&&!lab.querySelector('input')) lab.textContent=chpFmt(r,v);
+  chpWrite(f,w);
 }
-function chpSet(f,v){ send('c',chpIdx,f,+v); }
+function chpSet(f,v){
+  const r=chpSpec(f); if(!r) return;
+  const nv=(r.t==='enum'&&r.opts&&r.opts.some(o=>/^[A-Z]/.test(String(o[1]))))?+v:+v;
+  chpWrite(f,nv);
+}
 function chpTog(f){
+  if(chpIsSend(f)){
+    const cur=chpSendRow().on?1:0, nv=cur?0:1;
+    chpWrite(f,nv);
+    const r=chpSpec(f), el=document.getElementById('chp-'+f);
+    if(r&&el){ el.textContent=nv?r.lb[1]:r.lb[0]; el.classList.toggle('on',!!nv); }
+    return;
+  }
   if(!S||!S.ch) return;
   const row=S.ch[String(chpIdx)]; if(!row) return;
   const nv=row[f]?0:1;
-  send('c',chpIdx,f,nv);
+  chpWrite(f,nv);
   // 乐观切换: 写盘+轮询有 ~250ms 延迟, 不先动一下会觉得"点了没反应"
   const r=chpSpec(f), el=document.getElementById('chp-'+f);
   if(r&&el){ el.textContent=nv?r.lb[1]:r.lb[0]; el.classList.toggle('on',!!nv); }
+}
+// 键盘精调: 点数值 → 原地变输入框
+function chpEdit(f){
+  const r=chpSpec(f); if(!r||r.t!=='num') return;
+  const lab=document.getElementById('chp-'+f+'-v'); if(!lab) return;
+  if(lab.querySelector('input')) return;
+  const cur=chpIsSend(f)
+    ? (()=>{ const row=chpSendRow(); const v=row[f==='send_level'?'level':'on']||0; return r.pct?v*100:v; })()
+    : (()=>{ const row=(S&&S.ch)?S.ch[String(chpIdx)]:null; const v=row?row[f]:undefined; return (v===undefined||v===null)?(r.dv||0):v; })();
+  const step=r.lg?1:(r.dec?Math.max(r.step,Math.pow(10,-r.dec)):r.step);
+  lab.innerHTML=`<input class="chp-in" type="number" inputmode="decimal"`
+    +` min="${r.lo}" max="${r.hi}" step="${step}" value="${(+cur).toFixed(r.dec)}">`;
+  const inp=lab.querySelector('input');
+  let done=false;
+  const commit=(ok)=>{
+    if(done) return; done=true;
+    const v=parseFloat(inp.value);
+    lab.textContent=chpFmt(r, isNaN(v)?cur:(r.pct?Math.min(Math.max(v,0),100)/100:Math.min(Math.max(v,r.lo),r.hi))* (r.pct?100:1));
+    if(ok&&!isNaN(v)){
+      let w=r.pct?Math.min(Math.max(v,0),100)/100:Math.min(Math.max(v,r.lo),r.hi);
+      chpWrite(f,w);
+      const sl=document.getElementById('chp-'+f);
+      if(sl&&document.activeElement!==sl) sl.value=r.lg?chpPos(r,w):w;
+    }
+  };
+  inp.addEventListener('keydown',e=>{
+    if(e.key==='Enter'){ e.preventDefault(); commit(true); inp.blur(); }
+    else if(e.key==='Escape'){ e.preventDefault(); commit(false); inp.blur(); }
+  });
+  inp.addEventListener('blur',()=>commit(true));
+  inp.focus(); inp.select();
 }
 function runShow(id){ fetch('/api/show',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({id:id})}); }
@@ -826,7 +1037,8 @@ function api(path,obj){ fetch(path,{method:'POST',headers:{'Content-Type':'appli
 const PS_GROUPS=[['ch','输入通道'],['bus','Mix Bus'],['dca','DCA'],['auxin','Aux In'],
   ['usb','USB'],['fxret','FX 返回'],['mtx','Matrix'],['main','主输出'],
   ['fx','FX 机架'],['scene','场景号']];
-const PS_PARAMS=[['fader','推子'],['on','静音'],['name','名称'],['dca','DCA 归属']]
+const PS_PARAMS=[['fader','推子'],['on','静音'],['name','名称'],['dca','DCA 归属'],
+  ['send_level','发送电平'],['send_on','发送开关'],['send_tap','发送取点']]
   .concat(CH_PARAM_UI.map(r=>[r.f,r.l]));   // 12 个通道处理参数也能单独勾选存/回归
 const PS_CAP={ch:32,bus:16,dca:8,auxin:6,usb:2,fxret:8,mtx:6,main:1,fx:8,scene:1};
 const PS_PATH_GROUPS=['ch','bus','dca','auxin','usb','fxret','mtx','main'];
@@ -1155,11 +1367,13 @@ const CA_LABEL={mute:'静音通道',mute_bus:'静音 Bus',scene:'切场景',unmu
 // 分组是**语义**的,落到哪个地址由控台驱动决定 —— 所以同一张卡片能换控台使用。
 const ST_GROUPS=[['ch','输入通道',32],['bus','Bus 输出',16],['dca','DCA 编组',8],
   ['main','主输出',1],['auxin','Aux In',6],['usb','USB 返回',2],['fxret','FX 返回',8],
-  ['mtx','Matrix',6],['fx','FX 效果槽',8],['scene','场景',99]];
+  ['mtx','Matrix',6],['fx','FX 效果槽',8],['scene','场景',99],
+  ['send','发送 (通道→Bus)',32]];
 const ST_PARAMS={ch:['fader','on'].concat(CH_PARAM_UI.map(r=>r.f)),
   bus:['fader','on'],dca:['fader','on'],main:['fader','on'],
   auxin:['fader','on'],usb:['fader','on'],fxret:['fader','on'],mtx:['fader','on'],
-  fx:['time','predelay','damp','mix','on','type','name'],scene:['load']};
+  fx:['time','predelay','damp','mix','on','type','name'],scene:['load'],
+  send:['send_level','send_on','send_tap']};
 const ST_PLABEL={fader:'推子 %',on:'开关 (1开启/0静音)',mix:'混合比 (0-1)',
   time:'混响时间 (秒)',predelay:'预延迟 (毫秒)',damp:'阻尼 (0-1)',
   type:'算法 (HALL/PLATE/ROOM/…)',name:'名称 (文本)',load:'切场景'};
@@ -1227,6 +1441,7 @@ function setFormHTML(){
   return `<select id="stGroup" class="nkin" onchange="stGroupChg()">`
     + ST_GROUPS.map(x=>`<option value="${x[0]}">${x[1]}</option>`).join('') + `</select>`
     + `<input id="stId" type="number" value="1" min="1" class="nkin" style="width:78px" title="目标编号">`
+    + `<span id="stBusWrap"></span>`
     + `<select id="stParam" class="nkin" onchange="stParamChg()"></select>`
     + `<span id="stValWrap"></span>`
     + `<input id="stDur" type="number" value="0" min="0" step="0.5" class="nkin" style="width:104px"
@@ -1242,6 +1457,14 @@ function stGroupChg(){
   const cap=row[2]||32;
   if(g==='main'){ idEl.value=0; idEl.disabled=true; }
   else { idEl.disabled=false; idEl.max=cap; if(!+idEl.value||+idEl.value>cap) idEl.value=1; }
+  // 发送是二维目标: 编号是通道, 还要一个 Bus。不给这一栏, 用户只能写"第 5 个打包值",
+  // 那种数字对内没有任何意义。
+  const bw=$('#stBusWrap');
+  if(bw) bw.innerHTML=(g==='send')
+    ? `<select id="stBus" class="nkin" title="发往哪个 Bus">`
+      +Array.from({length:16},(_,i)=>`<option value="${i+1}">Bus ${String(i+1).padStart(2,'0')}</option>`).join('')
+      +`</select>`
+    : '';
   stParamChg();
 }
 function stParamChg(){
@@ -1344,8 +1567,22 @@ function learnSet(){
   const g=$('#stGroup').value, p=$('#stParam').value;
   const i=(g==='main')?0:(+($('#stId').value)||1);
   const sp=chpSpec(p);
+  if(g==='send'){
+    // 发送值不在 /api/state 里 (512 项会把状态包撑爆), 抓取时单独拉一次
+    const bus=+((($('#stBus')||{}).value)||1);
+    fetch('/api/sends?ch='+i).then(r=>r.json()).then(d=>{
+      const row=(d.sends||{})[String(bus)];
+      if(!row){ cardErr('读不到 CH'+i+' → Bus'+bus); return; }
+      const v=(p==='send_level')?row.level:(p==='send_on'?row.on:row.tap);
+      fillStVal(sp,p,v);
+    }).catch(()=>cardErr('读取发送值失败'));
+    return;
+  }
   const v=curValue(g,p,i);
   if(v===null){ cardErr('读不到「'+g+' '+i+'」的当前值（编号越界，或该参数尚未建模）'); return; }
+  fillStVal(sp,p,v);
+}
+function fillStVal(sp,p,v){
   if(p==='on'||p==='load'){
     const sel=$('#stValSel'); if(sel) sel.value=String(v?1:0);
     cardInfo('已抓取：'+(v?'开启':'静音'));
@@ -1363,8 +1600,9 @@ function learnSet(){
     cardInfo('已抓取名称：'+(v||'(空)'));
   } else {
     const el=$('#stValNum');
-    if(el) el.value=(p==='fader')?Math.round(v*100):v;
-    cardInfo('已抓取：'+((p==='fader')?Math.round(v*100)+'%':(sp?chpFmt(sp,v):v)));
+    const isPct=(p==='fader'||p==='send_level');
+    if(el) el.value=isPct?Math.round(v*100):v;
+    cardInfo('已抓取：'+(isPct?Math.round(v*100)+'%':(sp?chpFmt(sp,v):v)));
   }
 }
 function cardInfo(msg){
@@ -1398,6 +1636,8 @@ function addAct(){
     if(grp!=='main'&&grp!=='scene'&&i<1){ cardErr('请填写目标编号'); return; }
     if(grp==='scene'&&i<1){ cardErr('请填写场景号'); return; }
     a.target={group:grp,param:p,id:i};
+    // 发送: id 是通道, 再带上 Bus。后端按 send_pack(通道, Bus) 落地
+    if(grp==='send') a.target.bus=+((($('#stBus')||{}).value)||1);
     const sp=chpSpec(p);
     if(p==='on') a.value=(+($('#stValSel')?$('#stValSel').value:0))?1:0;
     else if(sp&&sp.t==='bool') a.value=(+($('#stValSel')?$('#stValSel').value:0))?1:0;
@@ -1407,7 +1647,7 @@ function addAct(){
     else if(p==='load') a.value=1;
     else {
       let v=+($('#stValNum')?$('#stValNum').value:0)||0;
-      if(p==='fader') v=pct(v);          // 表单里填百分比, 传 0..1
+      if(p==='fader'||p==='send_level') v=pct(v);   // 表单里填百分比, 传 0..1
       a.value=v;                          // 新通道参数吃原生单位 (dB/ms/Hz), 不做百分比换算
     }
     const d=+($('#stDur')?$('#stDur').value:0)||0;
@@ -1509,9 +1749,20 @@ function actTxt(a){
       if(p==='mix') return `FX${i} 混合比=${(+a.value||0).toFixed(2)}`;
       return `FX${i} ${(ST_PLABEL[p]||p)} = ${a.value}`;
     }
-    const lbl=(g2==='main')?'主输出':`${gname} ${String(i).padStart(2,'0')}`;
+    // 标签必须能区分"CH05 推子"和"CH05→Bus03 发送电平": 发送是二维目标,
+    // 只写通道号会出现两条一模一样的摘要, 用户没法核对卡片。
+    const lbl=(g2==='main')?'主输出':(g2==='send')
+      ? `CH${String(i).padStart(2,'0')}→Bus${String((a.target&&a.target.bus)||1).padStart(2,'0')}`
+      : `${gname} ${String(i).padStart(2,'0')}`;
     if(p==='on') return `${lbl} ${a.value?'开启':'静音'}`;
+    if(p==='send_on') return `${lbl} 发送${a.value?'开':'关'}`;
+    if(p==='send_level') return `${lbl} 电平=${Math.round((+a.value||0)*100)}%`;
+    if(p==='send_tap')
+      return `${lbl} 取点=${(['<-EQ','EQ->','PRE','POST','GRP'][+a.value||0])||''}`;
     const dd=(+a.duration>0)?` 经${a.duration}秒`:'';
+    const sp0=(p==='fader')?null:chpSpec(p);
+    if(sp0&&sp0.t!=='bool')
+      return `${lbl} ${sp0.l}=${(+a.value||0)}${sp0.u?(' '+sp0.u):''}`;
     return `${lbl} →${Math.round((+a.value||0)*100)}%${dd}`;
   }
   if(a.kind==='osc') return `⚠️ 原始 OSC ${a.address}${(a.args&&a.args.length)?' '+a.args.join(' '):''}`;
@@ -2301,14 +2552,20 @@ function poll(){
       S=d; $('#conn').style.background='#22c55e'; pollEvents(); render();
     }
   }).catch(()=>{ $('#conn').style.background='#ef4444'; $('#hdinfo').textContent='连接断开,重试中…'; })
-   .finally(()=>setTimeout(poll,250));
+   .finally(()=>setTimeout(poll,pollMs(250)));
 }
 
+// 页面不可见时降频: 手机揣兜里、切到别的 App、锁屏, 都是"看不见屏幕"。
+// 演出 4 小时里这类时间往往占七成, 而 4 Hz 的电平轮询是流量大头 ——
+// 藏起来就降到 2s 一次 (状态也一起降), 回到前台立刻恢复。
+const POLL_HIDDEN_MS=2000;
+function pollMs(active){ return document.hidden?POLL_HIDDEN_MS:active; }
 function pollMeters(){
   fetch('/api/meters').then(r=>r.json()).then(d=>{
     if(!S) return;
+    if(document.hidden) return;          // 藏起来就别画了, 省一次 DOM 重建
     S.meters=d.meters||S.meters; drawMeters();
-  }).catch(()=>{}).finally(()=>setTimeout(pollMeters,250));
+  }).catch(()=>{}).finally(()=>setTimeout(pollMeters,pollMs(250)));
 }
 // 局部刷新: 内容没变不重建 innerHTML (避免打断按钮交互/选中状态)
 function setHTML(id,html){

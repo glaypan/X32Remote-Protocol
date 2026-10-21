@@ -4,12 +4,12 @@
 import math
 
 from .bridge import BRIDGE, BRIDGE_SOCK
-from .consts import CURVES, FADE_ACT_KINDS, SAVE_MAX, SET_GROUPS, SET_PARAMS, SET_PARAM_LABEL
+from .consts import CURVES, FADE_ACT_KINDS, SAVE_MAX, SET_GROUPS, SET_KINDMAP, SET_PARAMS, SET_PARAM_LABEL
 from .fx import fx_algo
 from .kinds import fx_par_kind
 from .logbus import log
 from .osc import OscMsg, encode_message
-from .params import PARAM_SPECS, param_coerce, param_fmt
+from .params import PARAM_SPECS, SEND_BUS, param_coerce, param_fmt, send_pack
 from .presets import SNAPSHOTS, _recall_instant, find_snapshot, snap_fade_targets
 from .profiles import profile
 from .state import STATE, _interrupted, db_to_fader, get_value, match_address, set_value, target_exists, target_label
@@ -30,6 +30,15 @@ def set_target_id(target):
         return 1
 
 
+def send_bus_of(target):
+    """发送目标的 Bus 号 (1..16)。脏值一律回落到 1, 越界由执行期 target_exists 兜底。"""
+    try:
+        b = int(float((target or {}).get("bus", 1)))
+    except (TypeError, ValueError):
+        b = 1
+    return min(max(b, 1), SEND_BUS)
+
+
 def resolve_set_target(group, param, idx):
     """(group, param, idx) → 语义 kind; 组合不合法或不适用时返回 None。
 
@@ -43,6 +52,9 @@ def resolve_set_target(group, param, idx):
         return None
     if group == "scene":
         return "scene"                    # 场景是"动作"而非"值", 单独走
+    if group == "send":
+        # 发送的参数名**就是** kind (send_level/...), 不能再拼 "%s_%s"
+        return SET_KINDMAP.get("send", {}).get(param)
     if group == "fx":
         if param in ("type", "name", "on", "mix"):
             return "fx_" + param
@@ -66,6 +78,10 @@ def _exec_set(act):
             STATE.scene = n
         log("SHOW 切场景 %d" % n)
         return
+    if group == "send":
+        # 发送是二维目标: id 是通道, bus 是 Bus。打包成 STATE.send 的一维键,
+        # 之后的 addr/target_exists/set_value 都按一维走 (与 OSC 路径同一套)。
+        idx = send_pack(idx, send_bus_of(tg))
 
     kind = resolve_set_target(group, param, idx)
     if kind is None:
@@ -227,13 +243,17 @@ def _act_label(act):
                 return "FX%d %s→%.2f" % (i, SET_PARAM_LABEL.get(p, p),
                                          float(act.get("value", 0)))
             lbl = target_label(g, i)
+            if g == "send":
+                # 二维目标: 标签写成「通道→Bus5」, 否则日志里 512 个目标无法区分
+                lbl = "%s→Bus%02d" % (lbl, send_bus_of(tg))
             if p == "on":
                 return "%s %s" % (lbl, "开启" if act.get("value") else "静音")
             # 通道参数: 用登记表的标签/单位/档位显示 (曾经这里一律 "→%.0f%%",
             # 于是 trim 3.5 dB 在卡片进度条上显示成 "→4%")。
             # ⚠️ 只对**新增**参数生效: 推子/静音也在登记表里 (push=True),
             #    但它们有既有的百分比显示, 不能被这一支吃掉。
-            sp = PARAM_SPECS.get("%s_%s" % (g, p))
+            kk = SET_KINDMAP.get(g, {}).get(p)
+            sp = PARAM_SPECS.get(kk) if kk else None
             if sp is not None and not sp.push:
                 # param_fmt 按 vtype 分型: 开关→开/关 (插入位置→PRE/POST),
                 # 枚举→字面值, 浮点→带单位与符号
@@ -456,6 +476,10 @@ def _clean_set_action(a, num, why=None):
         idx = min(max(idx, 1), max(1, cap))
 
     out = {"kind": "set", "target": {"group": group, "param": param, "id": idx}}
+    if group == "send":
+        # 发送: target 多带一个 bus(1..16)。存的时候不打包 —— 打包是执行期的事,
+        # 卡片里留 (id=通道, bus=Bus) 才看得懂, 换控台也不会错位。
+        out["target"]["bus"] = send_bus_of(tg)
     if group == "fx" and param == "type":
         out["value"] = str(a.get("value", ""))[:8].upper()
     elif group == "fx" and param == "name":
@@ -468,11 +492,15 @@ def _clean_set_action(a, num, why=None):
         # 混响时间/预延迟/阻尼吃**原生单位**（秒/毫秒），范围交给 fx_par_clamp 按算法钳制
         out["value"] = num("value", 0.0, -1000.0, 20000.0)
     else:
-        # 通道参数 (增益/反相/延时/低切/插入/门): 按登记表的量程与档位清洗。
+        # 通道参数 (增益/反相/延时/低切/插入/门/动态/EQ) 与发送参数:
+        # 按登记表的量程与档位清洗。
         # ⚠️ 不能沿用上面 fader 的 [0,1] 钳制 —— trim 的量程是 -18..18 dB,
         #    硬钳成 0..1 会让"存 3.5 变成 1"（保存时静默改值，最难查的那类）。
         #    存进去的就是执行时将要应用的值（param_coerce 是幂等的）。
-        sp = PARAM_SPECS.get("%s_%s" % (group, param))
+        # 用 SET_KINDMAP 解析 kind: 通道参数是 "<group>_<field>", 发送是同名,
+        # 光靠字符串拼会在发送上得到 "send_send_level" 这种不存在的 kind。
+        kind = SET_KINDMAP.get(group, {}).get(param)
+        sp = PARAM_SPECS.get(kind) if kind else None
         if sp is not None:
             out["value"] = param_coerce(sp.kind, a.get("value", sp.default))
         else:

@@ -549,25 +549,32 @@ def curve_ratio(r: float, curve: str = "linear") -> float:
 
 边界（很重要）
 --------------
-本表只收**按路存储的标量参数**（推子/静音/新增的 12 个通道参数）。
+本表只收**按路存储的标量参数**（推子/静音/通道的 38 个参数 + 发送的 3 个）。
 以下三类**故意不入表**，继续走各自的显式分支：
   · 名称  —— 存在 STATE.names（(group, idx) 键），不在行字典里，且带持久化/日志
   · DCA 归属 —— 不是存储值，而是 dca_members 的位掩码投影（set 时要改成员表）
   · FX 机架 —— 参数号随算法变化，整槽存/整槽回归才有意义（见 consts.REVERB_DEFAULTS）
 把它们塞进这张表只会得到一堆永远为真的 if，不会得到任何复用。
 
+发送是唯一的**二维**参数（通道 × Bus）。它入表、但不进 STATE.ch 行 ——
+512 个 (通道,Bus) 目标单独放 STATE.send，键由 send_pack 打包; 也不进
+/api/state（会把 4G 流量账借回来），由 /api/sends?ch=N 按需取。
+
 地址与量程来源
 --------------
-新增 12 个通道参数的地址/类型/量程逐条对齐 **Behringer X32 Protocol Manual**
-（官方 OSC 表，M32 同协议）。两处手册之间有出入的地方按"取宽 + 注释"处理：
-  · preamp/trim：手册 [-12,12]（仅数字源），非官方表 [-18,18] → 取 [-18,18]
-  · delay/time：手册 linf [0.300, 500.000, 0.100] ms（下限不是 0！）
-  · preamp/hpf：手册 logf [20.000, 400.000, 101] Hz —— 真台是 101 个对数档位，
-    所以这里用 logsteps=101 量化，而不是连续浮点
-  · gate/thr [-80,0] / gate/range [3,60]（正值，表示衰减量）
-  · insert/pos enum {PRE,POST} → 线上传 0/1（同 config/color 的 enum 语义）
-  · preamp/hpslope enum {12,18,24} → 按字面值传（.scn 导出同款）；
-    万一真机回 0/1/2，nearest-snap 会落到 12/18/24，不会静默变 0
+全部通道参数逐条对齐 **Behringer X32 Protocol Manual**（官方 OSC 表，M32 同协议）
+与《Unofficial X32/M32 OSC Remote Protocol》v4.06。三处文档之间有出入：
+  · preamp/trim：官方 [-12,12] / 非官方 [-18,18] → 取 [-18,18]。
+    依据是社区实测：「固件 1.15 起卡输入的数字 trim 从 ±12 改为 ±18」
+    （soundforums X32 讨论），官方手册那一行是 2012 年的旧值。
+  · dyn/thr：官方 [-80,0,0.5] / 非官方 [-60,0,0.5] → 取宽 [-80,0]，
+    回读若被真台钳到 -60 说明该固件下限只有 -60（见 note）。
+  · delay/time：linf [0.300, 500.000, 0.100] ms（下限不是 0！）
+  · preamp/hpf：logf [20,400,101] Hz —— 101 个对数档位
+  · EQ: f logf[20,20000,201] / g linf[-15,15,0.25] / q logf[10,0.3,72]（**反向**）
+  · dyn/ratio 是**索引**枚举（线上 0..11），本地存比值 —— 见 param_wire/param_from_wire
+  · insert/pos、dyn/pos enum{PRE,POST} → 线上传 0/1
+  · 发送取点 /ch/NN/mix/NN/type enum int[0..5] {IN/LC,PreEQ,PostEQ,PreFader,PostFader,Sub}
 凡"出厂默认值"在公开资料里找不到的，一律在 note 里标注「需真机确认」——
 模拟器可以给一个合理值，但不能假装自己核对过。
 """
@@ -582,12 +589,22 @@ class ParamSpec:
     def __init__(self, kind, group, field, osc, vtype="float",
                  lo=0.0, hi=1.0, default=None, step=0.0, logsteps=0,
                  enum=None, label="", unit="", dec=2, labels=None,
-                 push=False, preset=True, note=""):
+                 push=False, preset=True, note="", nidx=1, dims=0,
+                 enum_wire="value", logdesc=False):
         self.kind = kind                  # 语义管道里的名字, 如 "ch_trim"
         self.group = group                # 台面分组 (STATE 的属性名), 如 "ch"
         self.field = field                # 行字典里的键, 如 "trim"
         self.osc = osc                    # OSC 地址模板; main 系列没有 %02d
         self.vtype = vtype                # "float" | "int" | "bool"
+        # nidx: idx 里打包了几个地址索引 (发送是 (通道, Bus) 二维 → 2)
+        # dims: 二阶维度的基数 (X32 是 16 个 Bus), 只在 nidx=2 时有意义
+        self.nidx = int(nidx)
+        self.dims = int(dims)
+        # enum_wire:
+        #   "value" —— 线上传枚举**字面值** (hpslope 传 12/18/24)
+        #   "index" —— 线上传枚举**下标** (dyn/ratio 传 0..11, 本地存 4.0=4:1)
+        # 这两种在真台上都真实存在, 混为一谈就会"本地 4.0 发给真台 4"→ 变成 5:1。
+        self.enum_wire = enum_wire
         self.lo = float(lo)
         self.hi = float(hi)
         if default is None:
@@ -597,6 +614,7 @@ class ParamSpec:
         self.default = int(default) if vtype in ("bool", "int") else float(default)
         self.step = float(step)           # 线性档位 (真台旋钮是"有级"的)
         self.logsteps = int(logsteps)     # 对数档位数 (手册里的 logf [lo,hi,N])
+        self.logdesc = bool(logdesc)      # True = 该对数表从 hi 递减到 lo (EQ 的 Q)
         self.enum = tuple(enum) if enum else None
         self.label = label or kind        # 界面/日志用名
         self.unit = unit                  # 显示单位
@@ -641,7 +659,7 @@ for _g in _LEGACY_GROUPS:
 _CH_EXTRA = (
     ParamSpec("ch_trim", "ch", "trim", "/ch/%02d/preamp/trim",
               vtype="float", lo=-18.0, hi=18.0, default=0.0, step=0.25,
-              label="增益", unit="dB", dec=1,
+              label="增益", unit="dB", dec=2,   # 档位 0.25 dB → 必须留两位
               note="手册 [-12,12](仅数字源)/非官方 [-18,18], 取宽; 步长 0.25 dB"),
     ParamSpec("ch_invert", "ch", "invert", "/ch/%02d/preamp/invert",
               vtype="bool", default=0, label="反相",
@@ -681,10 +699,138 @@ _CH_EXTRA = (
 )
 _SPECS.extend(_CH_EXTRA)
 
+# ---- 动态处理 (压缩/扩展) -------------------------------------------------
+# 地址/量程逐条取自 Behringer X32 Protocol Manual 与《Unofficial X32/M32 OSC
+# Remote Protocol》v4.06 —— 两者在 thr 上不一致 (官方 [-80,0] / 社区 [-60,0])，
+# 按"取宽 + 注释"处理：本地允许到 -80，真台若只认到 -60 会在回读时被拉回。
+#   ratio 线上是 **0..11 的索引**，不是比值本身 —— 这是本表里唯一的 index 型枚举。
+#   attack 官方文档写 linf[0,120,1] ms (社区同)；hold/release 是 101 点对数表，
+#   这里暂不建模 (只做演出最常用的 8 个旋钮)，见 note。
+_DYN = (
+    ParamSpec("ch_dyn_on", "ch", "dyn_on", "/ch/%02d/dyn/on",
+              vtype="bool", default=0, label="压缩"),
+    ParamSpec("ch_dyn_thr", "ch", "dyn_thr", "/ch/%02d/dyn/thr",
+              vtype="float", lo=-80.0, hi=0.0, default=-20.0, step=0.5,
+              label="压缩阈值", unit="dB", dec=1,
+              note="官方 [-80,0,0.5] / 社区 [-60,0,0.5] 不一致 → 取宽; "
+                   "回读若被真台钳到 -60 说明该固件下限更低"),
+    ParamSpec("ch_dyn_ratio", "ch", "dyn_ratio", "/ch/%02d/dyn/ratio",
+              vtype="int", lo=1.1, hi=100.0, default=4.0, dec=1, unit=":1",
+              enum=(1.1, 1.3, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 7.0, 10.0, 20.0, 100.0),
+              enum_wire="index", label="压缩比",
+              note="线上枚举 [0..11] → {1.1,1.3,1.5,2,2.5,3,4,5,7,10,20,100}; "
+                   "本地存**比值**(4.0=4:1), 出入线由 param_wire/param_from_wire 换算"),
+    ParamSpec("ch_dyn_knee", "ch", "dyn_knee", "/ch/%02d/dyn/knee",
+              vtype="float", lo=0.0, hi=5.0, default=2.0, step=1.0,
+              label="拐点", dec=0),
+    ParamSpec("ch_dyn_mgain", "ch", "dyn_mgain", "/ch/%02d/dyn/mgain",
+              vtype="float", lo=0.0, hi=24.0, default=0.0, step=0.5,
+              label="补偿增益", unit="dB", dec=1),
+    ParamSpec("ch_dyn_attack", "ch", "dyn_attack", "/ch/%02d/dyn/attack",
+              vtype="float", lo=0.0, hi=120.0, default=10.0, step=1.0,
+              label="启动时间", unit="ms", dec=0),
+    ParamSpec("ch_dyn_release", "ch", "dyn_release", "/ch/%02d/dyn/release",
+              vtype="float", lo=5.0, hi=4000.0, default=200.0, logsteps=101,
+              label="释放时间", unit="ms", dec=0,
+              note="手册 logf[5,4000,101] ms"),
+    ParamSpec("ch_dyn_mix", "ch", "dyn_mix", "/ch/%02d/dyn/mix",
+              vtype="float", lo=0.0, hi=100.0, default=100.0, step=5.0,
+              label="干湿比", unit="%", dec=0,
+              note="手册 linf[0,100,5] %, 100 = 全湿"),
+    ParamSpec("ch_dyn_pos", "ch", "dyn_pos", "/ch/%02d/dyn/pos",
+              vtype="bool", default=1, label="压缩位置", labels=("PRE", "POST"),
+              note="enum{PRE,POST} → 0/1 (相对 EQ)"),
+)
+_SPECS.extend(_DYN)
+
+# ---- 通道均衡: 4 段参量 ------------------------------------------------
+# 通道 EQ 是 4 段 (Bus/Matrix/Main 才是 6 段)，每段 4 个参数 = 16。
+# 频段号**写死在地址模板里** (每个 band 一个独立 kind) —— 这样 idx 仍然只是通道号,
+# 不需要在行字典里做二维打包, 预设/卡片/桥接全部沿用同一条路径。
+#   f: logf[20,20000,201] Hz  |  g: linf[-15,15,0.25] dB  |  q: logf[10,0.3,72] (反向)
+_EQ_TYPES = ("LCut", "LShv", "PEQ", "VEQ", "HShv", "HCut")
+_EQ_DEFAULT_F = (100.0, 500.0, 2000.0, 8000.0)      # 四段落的合理起点, 非手册值
+_EQ_DEFAULT_Q = (2.0, 2.0, 2.0, 2.0)
+_SPECS.append(ParamSpec("ch_eq_on", "ch", "eq_on", "/ch/%02d/eq/on",
+                        vtype="bool", default=0, label="均衡"))
+for _b in range(1, 5):
+    _SPECS.append(ParamSpec(
+        "ch_eq%d_type" % _b, "ch", "eq%d_type" % _b,
+        "/ch/%%02d/eq/%d/type" % _b,
+        vtype="int", lo=0.0, hi=5.0, default=2, dec=0, labels=_EQ_TYPES,
+        label="EQ%d 类型" % _b,
+        note="enum int[0..5] {LCut,LShv,PEQ,VEQ,HShv,HCut}; 索引即线上值"))
+    _SPECS.append(ParamSpec(
+        "ch_eq%d_f" % _b, "ch", "eq%d_f" % _b, "/ch/%%02d/eq/%d/f" % _b,
+        vtype="float", lo=20.0, hi=20000.0, default=_EQ_DEFAULT_F[_b - 1],
+        logsteps=201, label="EQ%d 频率" % _b, unit="Hz", dec=0,
+        note="手册 logf[20,20000,201] Hz"))
+    _SPECS.append(ParamSpec(
+        "ch_eq%d_g" % _b, "ch", "eq%d_g" % _b, "/ch/%%02d/eq/%d/g" % _b,
+        vtype="float", lo=-15.0, hi=15.0, default=0.0, step=0.25,
+        label="EQ%d 增益" % _b, unit="dB", dec=2,
+        note="手册 linf[-15,15,0.25] dB"))
+    _SPECS.append(ParamSpec(
+        "ch_eq%d_q" % _b, "ch", "eq%d_q" % _b, "/ch/%%02d/eq/%d/q" % _b,
+        vtype="float", lo=0.3, hi=10.0, default=_EQ_DEFAULT_Q[_b - 1],
+        logsteps=72, logdesc=True, label="EQ%d Q值" % _b, dec=2,
+        note="手册 logf[10,0.3,72] —— 表是**从 10 到 0.3 递减**的 (Q 越小频带越宽); "
+             "lo/hi 这里写自然上下界 0.3..10, 递减方向由 logdesc 表达"))
+
+# ---- 发送 (通道 → Mix Bus) ---------------------------------------------
+# ⚠️ 这是全表唯一的**二维**参数: 目标 = (通道, Bus)。128 个组合 × 3 个字段,
+#    若当成 512 个通道字段塞进 STATE.ch, /api/state 会直接涨 25KB (那笔流量账
+#    刚结清, 不能再借回来)。所以:
+#      · 单独一张 STATE.send 表, 键 = send_pack(ch, bus);
+#      · **不进 /api/state**, 由 /api/sends?ch=N 按需取 (见 httpapi)。
+#    tap 就是"推子前后/取点"本身: enum int[0..5] {IN/LC, PreEQ, PostEQ,
+#    PreFader, PostFader, Sub} —— HON wiki 与官方手册一致。
+SEND_BUS = 16
+
+
+def send_pack(ch, bus):
+    """(通道, Bus) → 一维键 (1..512)。用**通道主序**打包, 便于按通道整段遍历。"""
+    return (int(ch) - 1) * SEND_BUS + int(bus)
+
+
+def send_unpack(idx):
+    """send_pack 的逆运算。越界编号会给出 (0, …) 或 (>32, …), 由调用方判。"""
+    return (int(idx) - 1) // SEND_BUS + 1, (int(idx) - 1) % SEND_BUS + 1
+
+
+# 官方协议: /ch/../mix/01/type enum {<-EQ, EQ->, PRE, POST, GRP}
+# (实测固件按字面值发 0..4；线上是枚举索引)
+_SEND_TAP_LABELS = ("<-EQ", "EQ->", "PRE", "POST", "GRP")
+_SEND = (
+    ParamSpec("send_level", "send", "level", "/ch/%02d/mix/%02d/level",
+              vtype="float", lo=0.0, hi=1.0, default=0.0, dec=3,
+              label="发送电平", unit="%", nidx=2, dims=SEND_BUS,
+              note="level[0..1(+10dB), 161]; 出厂值需真机确认, 暂取 0(-∞)"),
+    ParamSpec("send_on", "send", "on", "/ch/%02d/mix/%02d/on",
+              vtype="bool", default=0, label="发送开关", nidx=2, dims=SEND_BUS,
+              note="出厂值需真机确认, 暂取关"),
+    ParamSpec("send_tap", "send", "tap", "/ch/%02d/mix/%02d/type",
+              vtype="int", lo=0.0, hi=4.0, default=3, dec=0,
+              labels=_SEND_TAP_LABELS, label="发送取点",
+              nidx=2, dims=SEND_BUS,
+              note="enum int[0..4] {<-EQ,EQ->,PRE,POST,GRP}; "
+                   "**只对奇数 Bus 定义** (协议表), 真台按 1&2 / 3&4 成对共享取点 → "
+                   "本地把偶数 Bus 统一落到奇数 Bus, 只留一份真相; "
+                   "出厂默认需真机确认, 暂取 POST"),
+)
+_SPECS.extend(_SEND)
+
 PARAM_SPECS = {sp.kind: sp for sp in _SPECS}
 
 # 新增的通道参数 (不含推子/静音) —— presets/前端面板/OSC 日志都遍历它
 CH_PARAM_SPECS = tuple(sp for sp in _SPECS if sp.group == "ch" and not sp.push)
+# 发送参数 (二维, 单独一张 STATE.send 表)
+SEND_PARAM_SPECS = tuple(sp for sp in _SPECS if sp.group == "send")
+# ⚠️ 键必须是 **URL 末段** 而不是字段名: 取点的地址是 /mix/%02d/**type**，
+#    字段名却叫 **tap** —— 用 field 做键的话，OSC 读 /ch/01/mix/03/type 会
+#    一条都匹配不上（静默返回空，不是报错，所以只能靠回归抓）。
+SEND_BY_SEG = {sp.osc.strip("/").split("/")[-1]: sp for sp in SEND_PARAM_SPECS}
+assert len(SEND_BY_SEG) == len(SEND_PARAM_SPECS), "发送参数地址末段撞名了"
 
 # 地址索引: (第3段, 第4段) → [spec, ...], 只收新增 kind。
 # 推子/静音的老地址模式在 state.match_address 里有专门分支 (行为逐字未动)，
@@ -696,12 +842,54 @@ for _sp in _SPECS:
     _parts = _sp.osc.strip("/").split("/")
     if len(_parts) == 4 and "%02d" in _parts[1]:
         CH_EXTRA_ADDR.setdefault((_parts[2], _parts[3]), []).append(_sp)
+# EQ 段落地址是 5 段 (/ch/01/eq/1/g): 单独一张按"第3段 + 末尾段"索引的表。
+# 用 (eq, g) 作键是安全的 —— 段号 1..4 已经在 kind/地址模板里固定,
+# 同一个 (第3段, 末段) 组合对应 4 个 band 的 4 个 spec, 由 match_address 展开。
+CH_EQ_ADDR = {}
+for _sp in _SPECS:
+    if _sp.group != "ch" or not _sp.kind.startswith("ch_eq"):
+        continue
+    _parts = _sp.osc.strip("/").split("/")
+    if len(_parts) == 5:
+        CH_EQ_ADDR.setdefault((_parts[2], _parts[4]), []).append(_sp)
+
+
+# 控台实际能接受的范围 (kind → (lo, hi))。由 app 在选好控台后写入,
+# 目前只有 trim: 手册 ±12 / 固件 1.15+ ±18。空表 = 全部用 spec 自带量程。
+_ACTIVE_LIMITS = {}
+
+
+def set_param_limits(limits):
+    """设置活动量程覆盖。传 None/{} 恢复成 spec 默认。"""
+    global _ACTIVE_LIMITS
+    _ACTIVE_LIMITS = dict(limits or {})
+
+
+def active_limits(kind):
+    return _ACTIVE_LIMITS.get(kind)
 
 
 def spec_addr(sp, idx):
-    """spec → 真实地址。main 系列模板里**没有 %02d**，直接 % 会抛 TypeError
-    (历史 bug, 见共享协议规范 §3.5 第 4 条)。"""
+    """spec → 真实地址。
+
+    三种模板:
+      · 无占位符        → main 系列, 直接返回 (历史 bug: `%` 会抛 TypeError)
+      · 一个 %02d       → 绝大多数参数, idx 就是路号
+      · 两个 %02d       → 发送, idx 是 send_pack 打包后的 (通道, Bus)
+    """
+    if sp.nidx >= 2:
+        ch, bus = send_unpack(idx)
+        # 取点在真台上按成对 Bus 共享 (1&2 / 3&4 …), 协议表只给奇数 Bus 地址。
+        # 偶数 Bus 统一落到它的奇数搭档 —— 否则本地写 Bus02、真台改的却是 Bus01,
+        # 界面与台面从此各说各话。
+        if sp.kind == "send_tap" and bus % 2 == 0:
+            bus -= 1
+        return sp.osc % (ch, bus)
     return sp.osc % idx if "%02d" in sp.osc else sp.osc
+
+
+def _nearest_enum(sp, v):
+    return min(sp.enum, key=lambda e: (abs(e - v), e))
 
 
 def _snap(sp, v):
@@ -711,16 +899,28 @@ def _snap(sp, v):
         # 最近的枚举成员。hpslope 手册记 enum{12,18,24}，按**字面值**传
         # （config/color 那种 {OFF,RD,...} 才是索引制）——万一真机按索引回
         # 0/1/2，会被吸附成 12/12/18：不精确，但不会静默变成 0。
-        return min(sp.enum, key=lambda e: (abs(e - v), e))
-    v = min(max(v, sp.lo), sp.hi)
+        # dyn/ratio 相反：线上是索引、本地存比值 (enum_wire="index")，吸附目标
+        # 仍是**比值**，索引换算在 param_wire 里做。
+        return _nearest_enum(sp, v)
+    lo, hi = sp.lo, sp.hi
+    lim = _ACTIVE_LIMITS.get(sp.kind)
+    if lim is not None:
+        lo, hi = max(lo, lim[0]), min(hi, lim[1])
+        if lo > hi:                 # 防御: 量程表写反了也不该把值锁死
+            lo, hi = hi, lo
+    v = min(max(v, min(lo, hi)), max(lo, hi))
     if sp.logsteps:
-        span = math.log(sp.hi / sp.lo)
-        i = int(round((sp.logsteps - 1) * math.log(max(v, sp.lo) / sp.lo) / span))
+        # 对数表: 默认从 lo 走到 hi; logdesc=True 时方向相反 (EQ 的 Q: 10 → 0.3)。
+        # 方向只影响**量化点的排列**, 不影响取值范围 —— lo/hi 永远是自然上下界,
+        # 这样前端滑块 (min<max) 与后端钳制用同一对数, 不用为"反向"各写一套。
+        a, b = (hi, lo) if sp.logdesc else (lo, hi)
+        span = math.log(b / a)
+        i = int(round((sp.logsteps - 1) * math.log(max(v, 1e-9) / a) / span))
         i = min(max(i, 0), sp.logsteps - 1)
-        return sp.lo * (sp.hi / sp.lo) ** (i / (sp.logsteps - 1))
+        return a * (b / a) ** (i / (sp.logsteps - 1))
     if sp.step:
         v = round(v / sp.step) * sp.step
-        return round(min(max(v, sp.lo), sp.hi), 6)   # 量化后再钳 (0.3 这种非整步长下限)
+        return round(min(max(v, lo), hi), 6)         # 量化后再钳 (0.3 这种非整步长下限)
     return v
 
 
@@ -732,6 +932,39 @@ def param_coerce(kind, value):
     return _snap(sp, _finite(value, sp.default))
 
 
+def param_wire(sp, v):
+    """本地存的值 → **线上**该发的值 (OSC 回包与桥接转发共用)。
+
+    只有 enum_wire="index" 需要换算: 本地 4.0 (4:1) → 线上 6。
+    其余按 vtype 定型 (float 发浮点 / bool 发 0-1 / int 发整数)。
+    """
+    if sp.vtype == "bool":
+        return 1 if _truthy(v) else 0
+    if sp.enum is not None and sp.enum_wire == "index":
+        return sp.enum.index(_nearest_enum(sp, _finite(v, sp.default)))
+    return float(v) if sp.vtype == "float" else int(round(float(v)))
+
+
+def param_from_wire(sp, v):
+    """**线上**来的值 → 本地存的值 (外部 OSC 写入与真台回读共用)。
+
+    真台的 dyn/ratio 收到的是索引 (0..11)，直接落库会把 6 存成 "6:1" ——
+    实际是 4:1。这一层换算只在入线处做一次，落库之后全项目都看到比值。
+    """
+    if sp.vtype == "bool":
+        return _truthy(v)
+    if sp.enum is not None and sp.enum_wire == "index":
+        try:
+            i = int(round(float(v)))
+        except (TypeError, ValueError):
+            return param_coerce(sp.kind, sp.default)
+        if 0 <= i < len(sp.enum):
+            return sp.enum[i]
+        # 超范围: 当作字面值处理 (有人直接发 4 表示 4:1), 由 _snap 吸附
+        return _snap(sp, _finite(v, sp.default))
+    return param_coerce(sp.kind, v)
+
+
 def param_fmt(sp, v):
     """日志/界面用的值文本（带单位与符号）。"""
     if sp.vtype == "bool":
@@ -739,15 +972,19 @@ def param_fmt(sp, v):
         if sp.labels:                 # 插入位置: PRE/POST 而不是"开/关"
             return sp.labels[i]
         return "开" if i else "关"
-    if sp.enum is not None:
-        return str(int(round(v)))
+    if sp.labels and sp.vtype == "int":
+        # 索引型枚举 (EQ 类型 / 发送取点): 显示名字比显示 0..5 有用得多
+        k = int(round(_finite(v, sp.default)))
+        return sp.labels[k] if 0 <= k < len(sp.labels) else str(k)
     try:
         x = float(v)
     except (TypeError, ValueError):
         return str(v)
     if sp.unit == "dB":
         return "%+.*f dB" % (sp.dec, x)
-    return "%.*f%s" % (sp.dec, x, (" " + sp.unit) if sp.unit else "")
+    # "%" ":1" 这类贴边单位不加空格 (75% / 4.0:1), 其余加
+    sep = sp.unit if sp.unit in ("%", "°", ":1") else ((" " + sp.unit) if sp.unit else "")
+    return "%.*f%s" % (sp.dec, x, sep)
 
 
 def blank_row(group):
@@ -832,6 +1069,11 @@ SET_KINDMAP = {"ch": {"fader": "ch_fader", "on": "ch_on"},
                "fxret": {"fader": "fxret_fader", "on": "fxret_on"},
                "mtx": {"fader": "mtx_fader", "on": "mtx_on"}}
 SET_KINDMAP["ch"].update({sp.field: sp.kind for sp in CH_PARAM_SPECS})
+# 发送是二维目标: 参数名与 kind 同名 (send_level/send_on/send_tap),
+# 调用方用 (group="send", param="send_level", idx=通道, bus=Bus) 寻址,
+# HTTP/动作层负责 send_pack 打包。**故意不用 level/on/tap 这种短名** ——
+# "on" 已经属于通道静音, 同名会让预设/卡片白名单串味。
+SET_KINDMAP["send"] = {sp.kind: sp.kind for sp in SEND_PARAM_SPECS}
 
 # 推子/静音的 OSC 地址模板: 由 params.PARAM_SPECS **推导** (单一事实来源,
 # 曾经这里是字面字典, 改一个地址要同时惦记 profiles.addr 里的另一份)。
@@ -843,6 +1085,7 @@ ON_ADDR = {sp.kind: sp.osc for sp in PARAM_SPECS.values()
            if sp.push and sp.kind.endswith("_on")}
 KIND_LABEL = {"ch": "通道", "bus": "输出Bus", "dca": "DCA", "main": "Main",
               "auxin": "AuxIn", "usb": "USB", "fxret": "FX返回", "mtx": "Matrix",
+              "send": "发送",
               "fx_par": "FX参数", "fx_type": "FX算法", "fx_name": "FX名称",
               "fx_on": "FX开关", "fx_mix": "FX混合比"}
 
@@ -864,6 +1107,9 @@ PRESET_GROUP_PARAMS = {
     "main": ("fader", "on", "name"),
     "fx": ("slot",),
     "scene": ("scene",),
+    # 发送: 范围里的"编号"指**通道号** (1-32), 抓取时按 16 个 Bus 展开。
+    # 512 个 (通道,Bus) 目标没法在界面上一个个勾, 用通道做单位才可用。
+    "send": ("send_level", "send_on", "send_tap"),
 }
 # 输入通道的参数白名单跟上登记表 (增益/反相/延时/低切/插入/门)
 PRESET_GROUP_PARAMS["ch"] = tuple(PRESET_GROUP_PARAMS["ch"]) + tuple(
@@ -871,9 +1117,11 @@ PRESET_GROUP_PARAMS["ch"] = tuple(PRESET_GROUP_PARAMS["ch"]) + tuple(
 PRESET_GROUP_LABEL = {"ch": "输入通道", "bus": "Mix Bus", "dca": "DCA",
                       "auxin": "Aux In", "usb": "USB", "fxret": "FX 返回",
                       "mtx": "Matrix", "main": "主输出", "fx": "FX 机架",
-                      "scene": "场景号"}
+                      "scene": "场景号", "send": "发送 (通道→Bus)"}
 PRESET_PARAM_LABEL = {"fader": "推子", "on": "静音", "name": "名称",
-                      "dca": "DCA 归属", "slot": "整槽", "scene": "当前场景"}
+                      "dca": "DCA 归属", "slot": "整槽", "scene": "当前场景",
+                      "send_level": "发送电平", "send_on": "发送开关",
+                      "send_tap": "发送取点"}
 PRESET_PARAM_LABEL.update({sp.field: sp.label for sp in CH_PARAM_SPECS})
 PRESET_DEFAULT_SCOPE = {
     "groups": ["ch", "bus", "dca", "auxin", "usb", "fxret", "mtx", "main"],
@@ -902,22 +1150,27 @@ FADE_ACT_KINDS = ("fade_all", "fade_odd_even", "fade_ch", "fade_bus",
 #    天然跨控台 —— 这不是额外做的适配，而是它本来就走在语义管道上。
 
 SET_GROUPS = ("ch", "bus", "dca", "main", "auxin", "usb", "fxret", "mtx",
-              "fx", "scene")
+              "fx", "scene", "send")
 SET_PARAMS = {
     "ch": ("fader", "on"), "bus": ("fader", "on"), "dca": ("fader", "on"),
     "main": ("fader", "on"), "auxin": ("fader", "on"), "usb": ("fader", "on"),
     "fxret": ("fader", "on"), "mtx": ("fader", "on"),
     "fx": ("type", "name", "on", "mix", "time", "predelay", "damp"),
     "scene": ("load",),
+    # 发送: 目标 = (id=通道, bus=Bus), 见 actions._clean_set_action
+    "send": ("send_level", "send_on", "send_tap"),
 }
 # 通用设置动作的通道参数白名单 (与 SET_KINDMAP["ch"] 同源)
 SET_PARAMS["ch"] = tuple(SET_PARAMS["ch"]) + tuple(sp.field for sp in CH_PARAM_SPECS)
 SET_GROUP_LABEL = {"ch": "通道", "bus": "Bus", "dca": "DCA", "main": "主输出",
                    "auxin": "AuxIn", "usb": "USB", "fxret": "FX返回",
-                   "mtx": "Matrix", "fx": "FX", "scene": "场景"}
+                   "mtx": "Matrix", "fx": "FX", "scene": "场景",
+                   "send": "发送"}
 SET_PARAM_LABEL = {"fader": "推子", "on": "开关", "type": "算法", "name": "名称",
                    "mix": "混合比", "time": "混响时间", "predelay": "预延迟",
-                   "damp": "阻尼", "load": "调用"}
+                   "damp": "阻尼", "load": "调用",
+                   "send_level": "发送电平", "send_on": "发送开关",
+                   "send_tap": "发送取点"}
 SET_PARAM_LABEL.update({sp.field: sp.label for sp in CH_PARAM_SPECS})
 
 
@@ -979,6 +1232,8 @@ class ConsoleProfile:
     caps = ()              # 支持的语义能力：UI 灰显 / 导入校验用
     fx_algos = {}          # 本控台的效果库（算法名 → {label,time,predelay,damp,tmin,tmax}）
                            # 空表 = 该控台效果库未标定 → 混响页禁用、写入被拒绝
+    param_limits = {}      # kind → (lo,hi): 控台实际接受的范围。空 = 用参数表量程。
+                           # 目前只有 trim 会因固件版本不同而变 (见 app --trim-range)
 
     def addr(self, kind, idx):
         """(kind, idx) → 真实地址；本控台不支持则返回 None。"""
@@ -1067,8 +1322,10 @@ class _StubProfile(ConsoleProfile):
         base += [g + "_fader" for g in ("auxin", "usb", "fxret", "mtx")]
         base += [g + "_on" for g in ("auxin", "usb", "fxret", "mtx")]
         base += ["ch_dca", "fx_type", "fx_on", "fx_mix", "fx_name", "fx_par_NN"]
-        # 通道参数 (增益/反相/延时/低切/插入/门): 从登记表推导, 新增即跟上
+        # 通道参数 (增益/反相/延时/低切/插入/门/动态/EQ): 从登记表推导, 新增即跟上
         base += [sp.kind for sp in CH_PARAM_SPECS]
+        # 发送 (通道→Bus): 二维地址, 同样从登记表推导
+        base += [sp.kind for sp in SEND_PARAM_SPECS]
         return base
 
 
@@ -1208,6 +1465,11 @@ class MixerState:
         self.fxret = {i: blank_row("fxret") for i in range(1, 9)}  # 效果返回 FX Return 1-8
         self.mtx = {i: blank_row("mtx") for i in range(1, 7)}    # 矩阵输出 Matrix 1-6
         self.main = blank_row("main")
+        # 发送 (通道 → Bus): 二维目标, 键 = params.send_pack(ch, bus)。
+        # ⚠️ 故意**不进** snapshot_state —— 512 行 × 3 字段会把 /api/state 撑爆,
+        #    那笔 4G 流量账刚结清。界面按需取 /api/sends?ch=N。
+        self.send = {i: blank_row("send")
+                     for i in range(1, 32 * SEND_BUS + 1)}
         self.scene = 1
         # FX 机架 1-8: 混响器. par 存**原生单位**参数值 (时间=秒 / 预延迟=毫秒 / 阻尼=0..1),
         # 参数索引随算法变化, 映射表见 X32_FX_ALGOS / M32_FX_ALGOS (默认值需真机标定)
@@ -1294,6 +1556,35 @@ def match_address(pattern: str):
                 for i in sorted(STATE.ch):
                     if seg_match(segs[1], "%02d" % i):
                         results.append((sp.kind, i))
+        elif len(segs) == 5 and segs[0] == "ch" and segs[2] == "eq" \
+                and (segs[2], segs[4]) in CH_EQ_ADDR:
+            # 通道 EQ 段落: /ch/01/eq/3/g —— 段号写死在 spec 里 (每段一个 kind),
+            # 所以这里通配符只作用于通道号; 段号写 * 一次展开 4 段。
+            for sp in CH_EQ_ADDR[(segs[2], segs[4])]:
+                band = sp.osc.strip("/").split("/")[3]
+                if not seg_match(segs[3], band):
+                    continue
+                for i in sorted(STATE.ch):
+                    if seg_match(segs[1], "%02d" % i):
+                        results.append((sp.kind, i))
+        elif len(segs) == 5 and segs[0] == "ch" and segs[2] == "mix" \
+                and segs[4] in SEND_BY_SEG:
+            # 发送: /ch/01/mix/05/level —— 二维目标, idx = send_pack(通道, Bus)。
+            # 两个位置都支持通配符 (/ch/*/mix/*/level 一次 512 条)。
+            sp = SEND_BY_SEG[segs[4]]
+            # 取点只存在于奇数 Bus: 通配时展开奇数, 但允许用**偶数**地址查
+            # (真台界面上 Bus02 与 Bus01 是同一个取点, 用户按 02 查是合理的)。
+            odd_only = (sp.kind == "send_tap")
+            step = 2 if odd_only else 1
+            for ch in sorted(STATE.ch):
+                if not seg_match(segs[1], "%02d" % ch):
+                    continue
+                for bus in range(1, SEND_BUS + 1, step):
+                    hit = seg_match(segs[3], "%02d" % bus)
+                    if not hit and odd_only and bus + 1 <= SEND_BUS:
+                        hit = seg_match(segs[3], "%02d" % (bus + 1))
+                    if hit:
+                        results.append((sp.kind, send_pack(ch, bus)))
         elif len(segs) == 4 and segs[0] == "bus" and segs[2] == "mix":
             kind = {"fader": "bus_fader", "on": "bus_on"}.get(segs[3])
             if kind:
@@ -1337,7 +1628,17 @@ def match_address(pattern: str):
     return results
 
 
+def _send_norm(kind, idx):
+    """取点按成对 Bus 共享 → 读写都归一到奇数 Bus (与真台同一份真相)。"""
+    if kind == "send_tap":
+        ch, bus = send_unpack(idx)
+        if bus % 2 == 0:
+            return send_pack(ch, bus - 1)
+    return idx
+
+
 def get_value(kind, idx):
+    idx = _send_norm(kind, idx)
     with STATE.lock:
         # 表驱动: 推子/静音/12 个通道参数全部走登记表 (params.PARAM_SPECS)
         sp = PARAM_SPECS.get(kind)
@@ -1370,6 +1671,7 @@ def target_exists(kind, idx):
 
 
 def set_value(kind, idx, value, source="manual"):
+    idx = _send_norm(kind, idx)
     # 延迟导入: fx→state 是顶层依赖, state→fx 只在本函数用 —— 放这里打破环
     # (合成单文件形态下该行被剥离, 同一命名空间直接解析)。
     # source="manual" (网页/控制键/外部 OSC 默认) 会触发冲突检测;
@@ -1525,15 +1827,18 @@ def value_reply(kind, idx):
 
     返回 None 表示**当前控台不支持该目标**（调用方须过滤掉，不能塞进 bundle）。
     """
+    idx = _send_norm(kind, idx)
     v = get_value(kind, idx)
     a = addr_for_write(kind, idx)
     if a is None or v is None:
         return None
     # 表驱动定参数类型: float 参数 (推子/增益/延时/频率/门限) 发浮点,
-    # 开关发 0/1, 枚举 (低切斜率) 发整数值 —— 与 ParamSpec.vtype 一致
+    # 开关发 0/1, 枚举发线上的那个值 —— 由 params.param_wire 统一换算。
+    # ⚠️ dyn/ratio 这类 **index 型枚举** 本地存 4.0(4:1)、线上要发 6,
+    #    曾经这里直接 int(v) → 4, 真台解析成 5:1 (第 5 档), 静默改值。
     sp = PARAM_SPECS.get(kind)
     if sp is not None:
-        return OscMsg(a, [float(v)] if sp.vtype == "float" else [int(v)])
+        return OscMsg(a, [param_wire(sp, v)])
     if kind == "ch_dca":
         return OscMsg(a, [int(v)])
     if kind in ("fx_type", "fx_name"):
@@ -1620,7 +1925,9 @@ def compute_levels():
                 db = STATE.fader_to_db(ch["fader"])
                 # 模拟动态信号: 正弦 + 伪随机起伏
                 wiggle = 4.0 * math.sin(t * 1.7 + i * 0.9) + 2.0 * math.sin(t * 4.3 + i * 2.3)
-                floats.append(max(-60.0, min(0.0, db + wiggle)))
+                # 0.1 dB 足够画表 (屏幕上一个像素约 0.5 dB)。保留全精度会让
+                # 每轮多传 350 B —— 4 Hz 下就是 5 MB/h, 换来的是看不见的精度。
+                floats.append(round(max(-60.0, min(0.0, db + wiggle)), 1))
     return floats
 NOTIFY_LAST = {}     # 手动变更推送节流: (kind, idx) -> [上次推送的值, 时间]
                      # ⚠️ 必须**连同值一起**判断"是否重复": 只看时间会把真台的面板干预挤掉。
@@ -1722,20 +2029,18 @@ def _bridge_forward(kind, idx, value, source="manual", force=False):
         elif kind in ("fx_type", "fx_name"):
             arg = str(value)[:12]
         elif sp is not None:
-            # 表驱动定线上类型 (与 state.value_reply 同一套规则):
+            # 表驱动定线上类型 (与 state.value_reply 同一套规则, 都走 param_wire):
             #   float → 浮点 (推子/增益/延时/频率/门限); int → 整数 (低切斜率);
             #   bool  → 0/1 (静音/延时/低切/插入/门开关)
+            #   index 型枚举 (dyn/ratio) → 0..11 的**索引**, 不是比值
             # ⚠️ 曾经这里是 `endswith("_fader") → float, 其余 _truthy` —— 新增的
             #    通道参数全是非 _fader 结尾, 会被 _truthy 压成 0/1 发给真台
             #    (trim 3.5 dB 变成 1), 于是"桥接转发"这一层整个失真。
-            if sp.vtype == "bool":
-                arg = _truthy(value)
-            else:
-                arg = float(value) if sp.vtype == "float" else int(value)
-                # 第二道闸: 万一将来哪条路径漏了 _finite, 宁可拒发也不把 NaN 发给真台
-                if not math.isfinite(arg):
-                    log("BRIDGE 拒发非有限值: %s %s = %r" % (kind, idx, value))
-                    return
+            arg = param_wire(sp, value)
+            # 第二道闸: 万一将来哪条路径漏了 _finite, 宁可拒发也不把 NaN 发给真台
+            if isinstance(arg, float) and not math.isfinite(arg):
+                log("BRIDGE 拒发非有限值: %s %s = %r" % (kind, idx, value))
+                return
         elif kind == "fx_mix" or fx_par_num(kind) is not None:
             arg = float(value)
             # 第二道闸: 万一将来哪条路径漏了 _finite, 宁可拒发也不把 NaN 发给真台
@@ -1874,10 +2179,17 @@ def _fwd_is_echo(key, value):
 
 
 def _bridge_apply_readback(kind, idx, value):
-    """真台回读: 回声(自己刚转发过的值)静默吸收; 台面上的手动变化按冲突策略处理。"""
+    """真台回读: 回声(自己刚转发过的值)静默吸收; 台面上的手动变化按冲突策略处理。
+
+    ⚠️ value 是**线上值**: dyn/ratio 这类 index 型枚举要换算成本地存的值再落库,
+    否则真台第 6 档 (4:1) 会被存成 "6:1"。回声比对仍用线上值 (FWD_RECENT 记的
+    也是线上值), 换算只在落库前一步做 —— 顺序别调, 调了回声就认不出来了。
+    """
     key = (kind, idx)
+    sp = PARAM_SPECS.get(kind)
+    local = param_from_wire(sp, value) if sp is not None else value
     if _fwd_is_echo(key, value):
-        set_value(kind, idx, value, source="sync")     # 自己写入的回声, 只对齐本地
+        set_value(kind, idx, local, source="sync")     # 自己写入的回声, 只对齐本地
         return
     # 真台端的变化: 渐变驱动中的通道 → 手动接管冲突; 其余静默同步
     with FADE_LOCK:
@@ -1889,7 +2201,7 @@ def _bridge_apply_readback(kind, idx, value):
             EVT_SEQ[0] += 1
             EVENTS.append({"id": EVT_SEQ[0], "time": time.strftime("%H:%M:%S"), "text": text})
             log("CONFLICT %s" % text)
-    set_value(kind, idx, value, source="sync")
+    set_value(kind, idx, local, source="sync")
 
 
 def _bridge_full_sync(sock):
@@ -2447,6 +2759,8 @@ def preset_group_cap(g):
         return 1
     if g == "fx":
         return FX_COUNT
+    if g == "send":
+        return 32            # 发送按**通道**计数, 抓取时每通道展开 16 个 Bus
     return NAME_COUNTS.get(g, 0)
 
 
@@ -2492,7 +2806,7 @@ def clean_preset_scope(scope):
     raw = scope.get("indices")
     if isinstance(raw, dict):
         for g, arr in raw.items():
-            if g not in groups or g not in NAME_COUNTS:
+            if g not in groups or (g not in NAME_COUNTS and g != "send"):
                 continue
             cap = preset_group_cap(g)
             picked = []
@@ -2546,6 +2860,23 @@ def _snap_group_items_locked(g, params, idxs):
             item["name"] = STATE.names.get(("main", 0), "")
         if item:
             bag["0"] = item
+        return bag
+    if g == "send":
+        # 发送: idxs 是**通道号**, 每个通道展开 16 个 Bus。
+        # 键用打包后的 send idx (与 STATE.send 一致), 项里用带前缀的参数名
+        # (send_level/send_on/send_tap) —— 短名 "on" 会与通道静音串味。
+        for ch in idxs:
+            for bus in range(1, SEND_BUS + 1):
+                idx = send_pack(ch, bus)
+                row = STATE.send.get(idx)
+                if row is None:
+                    continue
+                item = {}
+                for sp in SEND_PARAM_SPECS:
+                    if sp.kind in params:
+                        item[sp.kind] = row.get(sp.field, sp.default)
+                if item:
+                    bag[str(idx)] = item
         return bag
     store = getattr(STATE, g, {}) or {}
     for i in idxs:
@@ -2706,6 +3037,12 @@ def _recall_instant(snap):
                 for p, v in (item.get("par") or {}).items():
                     set_value("fx_par_%s" % p, i, v, source="action")
             continue
+        if g == "send":
+            # 键就是打包后的 (通道,Bus); 参数名 = kind, 直接走 set_value
+            for sp in SEND_PARAM_SPECS:
+                if sp.kind in item and target_exists(sp.kind, i):
+                    set_value(sp.kind, i, item[sp.kind], source="action")
+            continue
         if "on" in item:
             set_value("main_on" if g == "main" else g + "_on", i,
                       item.get("on", 1), source="action")
@@ -2863,6 +3200,15 @@ def set_target_id(target):
         return 1
 
 
+def send_bus_of(target):
+    """发送目标的 Bus 号 (1..16)。脏值一律回落到 1, 越界由执行期 target_exists 兜底。"""
+    try:
+        b = int(float((target or {}).get("bus", 1)))
+    except (TypeError, ValueError):
+        b = 1
+    return min(max(b, 1), SEND_BUS)
+
+
 def resolve_set_target(group, param, idx):
     """(group, param, idx) → 语义 kind; 组合不合法或不适用时返回 None。
 
@@ -2876,6 +3222,9 @@ def resolve_set_target(group, param, idx):
         return None
     if group == "scene":
         return "scene"                    # 场景是"动作"而非"值", 单独走
+    if group == "send":
+        # 发送的参数名**就是** kind (send_level/...), 不能再拼 "%s_%s"
+        return SET_KINDMAP.get("send", {}).get(param)
     if group == "fx":
         if param in ("type", "name", "on", "mix"):
             return "fx_" + param
@@ -2899,6 +3248,10 @@ def _exec_set(act):
             STATE.scene = n
         log("SHOW 切场景 %d" % n)
         return
+    if group == "send":
+        # 发送是二维目标: id 是通道, bus 是 Bus。打包成 STATE.send 的一维键,
+        # 之后的 addr/target_exists/set_value 都按一维走 (与 OSC 路径同一套)。
+        idx = send_pack(idx, send_bus_of(tg))
 
     kind = resolve_set_target(group, param, idx)
     if kind is None:
@@ -3060,13 +3413,17 @@ def _act_label(act):
                 return "FX%d %s→%.2f" % (i, SET_PARAM_LABEL.get(p, p),
                                          float(act.get("value", 0)))
             lbl = target_label(g, i)
+            if g == "send":
+                # 二维目标: 标签写成「通道→Bus5」, 否则日志里 512 个目标无法区分
+                lbl = "%s→Bus%02d" % (lbl, send_bus_of(tg))
             if p == "on":
                 return "%s %s" % (lbl, "开启" if act.get("value") else "静音")
             # 通道参数: 用登记表的标签/单位/档位显示 (曾经这里一律 "→%.0f%%",
             # 于是 trim 3.5 dB 在卡片进度条上显示成 "→4%")。
             # ⚠️ 只对**新增**参数生效: 推子/静音也在登记表里 (push=True),
             #    但它们有既有的百分比显示, 不能被这一支吃掉。
-            sp = PARAM_SPECS.get("%s_%s" % (g, p))
+            kk = SET_KINDMAP.get(g, {}).get(p)
+            sp = PARAM_SPECS.get(kk) if kk else None
             if sp is not None and not sp.push:
                 # param_fmt 按 vtype 分型: 开关→开/关 (插入位置→PRE/POST),
                 # 枚举→字面值, 浮点→带单位与符号
@@ -3289,6 +3646,10 @@ def _clean_set_action(a, num, why=None):
         idx = min(max(idx, 1), max(1, cap))
 
     out = {"kind": "set", "target": {"group": group, "param": param, "id": idx}}
+    if group == "send":
+        # 发送: target 多带一个 bus(1..16)。存的时候不打包 —— 打包是执行期的事,
+        # 卡片里留 (id=通道, bus=Bus) 才看得懂, 换控台也不会错位。
+        out["target"]["bus"] = send_bus_of(tg)
     if group == "fx" and param == "type":
         out["value"] = str(a.get("value", ""))[:8].upper()
     elif group == "fx" and param == "name":
@@ -3301,11 +3662,15 @@ def _clean_set_action(a, num, why=None):
         # 混响时间/预延迟/阻尼吃**原生单位**（秒/毫秒），范围交给 fx_par_clamp 按算法钳制
         out["value"] = num("value", 0.0, -1000.0, 20000.0)
     else:
-        # 通道参数 (增益/反相/延时/低切/插入/门): 按登记表的量程与档位清洗。
+        # 通道参数 (增益/反相/延时/低切/插入/门/动态/EQ) 与发送参数:
+        # 按登记表的量程与档位清洗。
         # ⚠️ 不能沿用上面 fader 的 [0,1] 钳制 —— trim 的量程是 -18..18 dB,
         #    硬钳成 0..1 会让"存 3.5 变成 1"（保存时静默改值，最难查的那类）。
         #    存进去的就是执行时将要应用的值（param_coerce 是幂等的）。
-        sp = PARAM_SPECS.get("%s_%s" % (group, param))
+        # 用 SET_KINDMAP 解析 kind: 通道参数是 "<group>_<field>", 发送是同名,
+        # 光靠字符串拼会在发送上得到 "send_send_level" 这种不存在的 kind。
+        kind = SET_KINDMAP.get(group, {}).get(param)
+        sp = PARAM_SPECS.get(kind) if kind else None
         if sp is not None:
             out["value"] = param_coerce(sp.kind, a.get("value", sp.default))
         else:
@@ -4421,16 +4786,23 @@ def handle(msg: OscMsg, addr, sock):
                 raw = float(raw)      # X32 有时用字符串传小数
             except ValueError:
                 pass                  # FX 类型/名称本来就是字符串("/fx/1/type HALL"), 原样往下传
+        sp0 = PARAM_SPECS.get(kind)
+        if sp0 is not None:
+            # 入线换算 (与回包/转发用的 param_wire 成对): dyn/ratio 线上是
+            # 0..11 的索引, 直接落库会把"第 6 档(4:1)"存成"6:1"。只在入线处做一次。
+            raw = param_from_wire(sp0, raw)
         set_value(kind, idx, raw)
         label = KIND_LABEL.get(kind_group(kind), kind)
         sp = PARAM_SPECS.get(kind)
         if sp is not None and not sp.push:
-            # 新增通道参数 (增益/反相/延时/低切/插入/门): 标签与单位取自登记表。
+            # 新增通道参数 (增益/反相/延时/低切/插入/门/动态/EQ): 标签与单位取自登记表。
             # 打的是**落库后**的值 (钳制/量化之后) 而不是原始入参 —— 曾经的
             # 通用分支会把 trim 打成 "fader=3.5 (11.1 dB)", 把 hpf_on 打成
             # "mute=开", 日志整个失去排查价值。
-            log("    SET %s %02d %s=%s" % (label, idx, sp.label,
-                                           param_fmt(sp, get_value(kind, idx))))
+            where = ("%02d→Bus%02d" % send_unpack(idx)) if sp.group == "send" \
+                else ("%02d" % idx)
+            log("    SET %s %s %s=%s" % (label, where, sp.label,
+                                         param_fmt(sp, get_value(kind, idx))))
         elif kind == "ch_dca":
             log("    SET %s %02d DCA掩码=%d" % (label, idx, int(raw) & 0xFF))
         elif kind == "fx_on":
@@ -4748,6 +5120,20 @@ WEB_PAGE = r"""<!DOCTYPE html>
 .chp-row select{flex:1;max-width:130px}
 .chp-row.off{opacity:.5}
 .chp-row.off .chp-l{color:var(--sub)}
+
+/* ---- 通道参数面板: 分页与键盘精调 ---- */
+.chp-tabs{display:flex;gap:6px;margin:8px 0 2px}
+.chp-tabs button{flex:1;padding:8px 4px;border-radius:9px;font-size:13px;font-weight:700;
+  border:1px solid var(--line);background:var(--card2);color:var(--sub)}
+.chp-tabs button.on{background:rgba(255,180,84,.16);border-color:var(--accent);color:var(--accent)}
+.chp-tab{display:none}
+.chp-tab.on{display:block}
+/* 数值标签当输入入口: 白天也要看得出"这里能点"—— 加虚线下划线 */
+.chp-v{cursor:text;text-decoration:underline dotted rgba(160,170,190,.45);
+  text-underline-offset:3px}
+.chp-v input.chp-in{width:74px;padding:2px 4px;font-size:12px;text-align:right;
+  border-radius:6px;border:1px solid var(--accent);background:var(--card2);
+  color:var(--txt);font-variant-numeric:tabular-nums}
 </style>
 </head>
 <body>
@@ -5030,7 +5416,13 @@ WEB_PAGE = r"""<!DOCTYPE html>
   <div class="mdlg" role="dialog" aria-label="通道参数">
     <div class="mhd"><b id="chpTitle">通道参数</b>
       <button class="mclose" onclick="closeChParams()" aria-label="关闭">✕</button></div>
-    <div class="ds">增益 / 反相 / 延时 / 低切 / 插入 / 噪声门 · 拖动即写入台面（不是草稿）</div>
+    <div class="ds">前置 / 动态 / 均衡 / 发送 · 拖动即写入台面（不是草稿）· 点数值可键盘精调</div>
+    <div class="chp-tabs" id="chpTabBar">
+      <button type="button" data-tab="pre" onclick="chpTab('pre')">前置</button>
+      <button type="button" data-tab="dyn" onclick="chpTab('dyn')">动态</button>
+      <button type="button" data-tab="eq" onclick="chpTab('eq')">均衡</button>
+      <button type="button" data-tab="send" onclick="chpTab('send')">发送</button>
+    </div>
     <div id="chParamBody"></div>
   </div>
 </div>
@@ -5170,10 +5562,13 @@ function toggle(p,i,el){
 }
 // 写入节流: 拖动中 50ms 窗口合并, 多条走 /api/setbatch, 少请求量
 const pend={}; let pendT=null;
-function send(p,i,param,value){
-  const KMAP={c:'ch',b:'bus',d:'dca',m:'main',a:'auxin',u:'usb',x:'fxret',t:'mtx'};
+function send(p,i,param,value,bus){
+  const KMAP={c:'ch',b:'bus',d:'dca',m:'main',a:'auxin',u:'usb',x:'fxret',t:'mtx',S:'send'};
   const kind=KMAP[p]||'ch';
-  pend[kind+'|'+i+'|'+param]={kind:kind,idx:i,param:param,value:value};
+  const it={kind:kind,idx:i,param:param,value:value};
+  // 发送是二维目标: bus 一起进合并键, 否则 CH01→Bus1 和 CH01→Bus2 会互相覆盖
+  if(kind==='send') it.bus=bus|0;
+  pend[kind+'|'+i+'|'+(kind==='send'?(bus|0):'')+'|'+param]=it;
   if(!pendT) pendT=setTimeout(flushSend,50);
 }
 function flushSend(){
@@ -5185,32 +5580,98 @@ function flushSend(){
     {method:'POST',headers:{'Content-Type':'application/json'},
      body:JSON.stringify(arr.length===1?arr[0]:{sets:arr})});
 }
-// ---- 通道参数面板: 增益 / 反相 / 延时 / 低切 / 插入 / 噪声门 ----
+// ---- 通道参数面板: 前置 / 动态 / 均衡 / 发送 ----
 // 声明式控件表: f=字段名 必须与后端 params.py 的 ParamSpec 一致 (量程/档位也一致),
 // 改任一边都要同步改另一边 —— test_params.py 会把不一致打成红灯。
 // t: num=滑块+数值 / bool=两态按钮 / enum=下拉
+// 顺序必须与 CH_PARAM_SPECS 完全一致 (回归按序比对)。
+const EQ_TYPES=[[0,'LCut'],[1,'LShv'],[2,'PEQ'],[3,'VEQ'],[4,'HShv'],[5,'HCut']];
 const CH_PARAM_UI=[
-  {f:'trim',       l:'增益',     t:'num',  u:'dB',     lo:-18, hi:18,  step:0.25, dec:1, dv:0},
+  {f:'trim',       l:'增益',     t:'num',  u:'dB',     lo:-18, hi:18,  step:0.25, dec:2, dv:0},
   {f:'invert',     l:'反相',     t:'bool', lb:['正常','反相']},
   {f:'delay_on',   l:'延时',     t:'bool', lb:['关','开']},
   {f:'delay_ms',   l:'延时时间', t:'num',  u:'ms',     lo:0.3, hi:500, step:0.1,  dec:1, dv:0.3, dep:'delay_on'},
   {f:'hpf_on',     l:'低切',     t:'bool', lb:['关','开']},
   {f:'hpf_slope',  l:'低切斜率', t:'enum', u:'dB/oct', opts:[[12,'12'],[18,'18'],[24,'24']], dep:'hpf_on'},
-  {f:'hpf_f',      l:'低切频率', t:'num',  u:'Hz',     lo:20,  hi:400, step:1,    dec:0, dv:80, dep:'hpf_on'},
+  {f:'hpf_f',      l:'低切频率', t:'num',  u:'Hz',     lo:20,  hi:400, step:1,    dec:0, dv:80, dep:'hpf_on', lg:1},
   {f:'ins_on',     l:'插入',     t:'bool', lb:['关','开']},
   {f:'ins_pos',    l:'插入位置', t:'enum', opts:[[0,'PRE'],[1,'POST']], dep:'ins_on'},
   {f:'gate_on',    l:'噪声门',   t:'bool', lb:['关','开']},
   {f:'gate_thr',   l:'门限',     t:'num',  u:'dB',     lo:-80, hi:0,   step:0.5,  dec:1, dv:-40, dep:'gate_on'},
   {f:'gate_range', l:'门范围',   t:'num',  u:'dB',     lo:3,   hi:60,  step:1,    dec:0, dv:15, dep:'gate_on'},
+  // ---- 动态 (压缩/扩展) ----
+  {f:'dyn_on',     l:'压缩',     t:'bool', lb:['关','开']},
+  {f:'dyn_thr',    l:'压缩阈值', t:'num',  u:'dB',     lo:-80, hi:0,   step:0.5,  dec:1, dv:-20, dep:'dyn_on'},
+  {f:'dyn_ratio',  l:'压缩比',   t:'enum', opts:[[1.1,'1.1:1'],[1.3,'1.3:1'],[1.5,'1.5:1'],[2,'2:1'],[2.5,'2.5:1'],[3,'3:1'],[4,'4:1'],[5,'5:1'],[7,'7:1'],[10,'10:1'],[20,'20:1'],[100,'100:1']], dep:'dyn_on'},
+  {f:'dyn_knee',   l:'拐点',     t:'num',  u:'',       lo:0,   hi:5,   step:1,    dec:0, dv:2, dep:'dyn_on'},
+  {f:'dyn_mgain',  l:'补偿增益', t:'num',  u:'dB',     lo:0,   hi:24,  step:0.5,  dec:1, dv:0, dep:'dyn_on'},
+  {f:'dyn_attack', l:'启动时间', t:'num',  u:'ms',     lo:0,   hi:120, step:1,    dec:0, dv:10, dep:'dyn_on'},
+  {f:'dyn_release',l:'释放时间', t:'num',  u:'ms',     lo:5,   hi:4000,step:1,    dec:0, dv:200, dep:'dyn_on'},
+  {f:'dyn_mix',    l:'干湿比',   t:'num',  u:'%',      lo:0,   hi:100, step:5,    dec:0, dv:100, dep:'dyn_on'},
+  {f:'dyn_pos',    l:'压缩位置', t:'enum', opts:[[0,'PRE'],[1,'POST']], dep:'dyn_on'},
+  // ---- 均衡 4 段 ----
+  {f:'eq_on',      l:'均衡',     t:'bool', lb:['关','开']},
+  {f:'eq1_type',   l:'EQ1 类型', t:'enum', opts:EQ_TYPES, dep:'eq_on'},
+  {f:'eq1_f',      l:'EQ1 频率', t:'num',  u:'Hz',     lo:20,  hi:20000, step:1,  dec:0, dv:100, dep:'eq_on', lg:1},
+  {f:'eq1_g',      l:'EQ1 增益', t:'num',  u:'dB',     lo:-15, hi:15,  step:0.25, dec:2, dv:0, dep:'eq_on'},
+  {f:'eq1_q',      l:'EQ1 Q值',  t:'num',  u:'',       lo:0.3, hi:10,  step:0.01, dec:2, dv:2, dep:'eq_on'},
+  {f:'eq2_type',   l:'EQ2 类型', t:'enum', opts:EQ_TYPES, dep:'eq_on'},
+  {f:'eq2_f',      l:'EQ2 频率', t:'num',  u:'Hz',     lo:20,  hi:20000, step:1,  dec:0, dv:500, dep:'eq_on', lg:1},
+  {f:'eq2_g',      l:'EQ2 增益', t:'num',  u:'dB',     lo:-15, hi:15,  step:0.25, dec:2, dv:0, dep:'eq_on'},
+  {f:'eq2_q',      l:'EQ2 Q值',  t:'num',  u:'',       lo:0.3, hi:10,  step:0.01, dec:2, dv:2, dep:'eq_on'},
+  {f:'eq3_type',   l:'EQ3 类型', t:'enum', opts:EQ_TYPES, dep:'eq_on'},
+  {f:'eq3_f',      l:'EQ3 频率', t:'num',  u:'Hz',     lo:20,  hi:20000, step:1,  dec:0, dv:2000, dep:'eq_on', lg:1},
+  {f:'eq3_g',      l:'EQ3 增益', t:'num',  u:'dB',     lo:-15, hi:15,  step:0.25, dec:2, dv:0, dep:'eq_on'},
+  {f:'eq3_q',      l:'EQ3 Q值',  t:'num',  u:'',       lo:0.3, hi:10,  step:0.01, dec:2, dv:2, dep:'eq_on'},
+  {f:'eq4_type',   l:'EQ4 类型', t:'enum', opts:EQ_TYPES, dep:'eq_on'},
+  {f:'eq4_f',      l:'EQ4 频率', t:'num',  u:'Hz',     lo:20,  hi:20000, step:1,  dec:0, dv:8000, dep:'eq_on', lg:1},
+  {f:'eq4_g',      l:'EQ4 增益', t:'num',  u:'dB',     lo:-15, hi:15,  step:0.25, dec:2, dv:0, dep:'eq_on'},
+  {f:'eq4_q',      l:'EQ4 Q值',  t:'num',  u:'',       lo:0.3, hi:10,  step:0.01, dec:2, dv:2, dep:'eq_on'},
 ];
-function chpSpec(f){ for(const r of CH_PARAM_UI) if(r.f===f) return r; return null; }
-let chpIdx=0;
+// 发送 (二维: 通道 × Bus)。取值不走 /api/state, 单独 /api/sends?ch=N。
+// 电平在线上是 0..1, 界面上按 % 显示 —— pct:1 标记这一层换算只在 UI 发生。
+const SEND_UI=[
+  {f:'send_on',    l:'发送开关', t:'bool', lb:['关','开']},
+  {f:'send_level', l:'发送电平', t:'num',  u:'%', lo:0, hi:100, step:1, dec:0, dv:75, pct:1},
+  // 官方枚举 {<-EQ, EQ->, PRE, POST, GRP}; 真台按 1&2 / 3&4 成对共享
+  {f:'send_tap',   l:'发送取点', t:'enum', opts:[[0,'<-EQ'],[1,'EQ->'],[2,'PRE'],[3,'POST'],[4,'GRP']]},
+];
+const CH_TABS=[['pre','前置'],['dyn','动态'],['eq','均衡'],['send','发送']];
+function chpTabOf(f){
+  if(f.indexOf('send_')===0) return 'send';
+  if(f.indexOf('dyn_')===0) return 'dyn';
+  if(f.indexOf('eq')===0) return 'eq';
+  return 'pre';
+}
+function chpSpec(f){
+  for(const r of CH_PARAM_UI) if(r.f===f) return r;
+  for(const r of SEND_UI) if(r.f===f) return r;
+  return null;
+}
+let chpIdx=0, chpBus=1, chpSend={}, chpSendT=null, chpCurTab='pre';
+// 对数滑块: 位置 0..1000 ↔ 真实值 lo*(hi/lo)^(pos/1000)。
+// 频率类参数 (低切 / EQ 四段) 必须用它 —— 线性刻度下 20..20000 在手机上
+// 一像素跳几十 Hz, 想设 100 Hz 只能靠运气, 而 100 Hz 恰恰是最常用的点。
+const CHP_POS_MAX=1000;
+function chpPos(r,v){
+  const lo=Math.max(r.lo,1e-6), hi=r.hi;
+  const x=Math.min(Math.max(+v||lo,lo),hi);
+  return Math.round(Math.log(x/lo)/Math.log(hi/lo)*CHP_POS_MAX);
+}
+function chpVal(r,pos){
+  const lo=Math.max(r.lo,1e-6), hi=r.hi;
+  return lo*Math.pow(hi/lo,Math.min(Math.max(+pos||0,0),CHP_POS_MAX)/CHP_POS_MAX);
+}
 function chpFmt(r,v){
   const x=+v||0;
-  return (r.dec?x.toFixed(r.dec):String(Math.round(x)))+(r.u?(' '+r.u):'');
+  const txt=(r.dec?x.toFixed(r.dec):String(Math.round(x)));
+  return txt+(r.u?(' '+r.u):'');
 }
+// 数值标签做成可点: 手机上滑块只能"拖个大概", 要精确到 0.25dB 必须能敲键盘。
+// 点一下变成 number 输入框 (inputmode=decimal 直接弹数字键盘), 回车/失焦提交, Esc 取消。
 function chpRowHTML(r){
   const id='chp-'+r.f;
+  const o='ondblclick';
   if(r.t==='bool')
     return `<div class="chp-row" id="${id}-row"><span class="chp-l">${r.l}</span>`
       +`<button type="button" class="chp-tog" id="${id}" onclick="chpTog('${r.f}')">—</button>`
@@ -5218,23 +5679,64 @@ function chpRowHTML(r){
   if(r.t==='enum')
     return `<div class="chp-row" id="${id}-row"><span class="chp-l">${r.l}</span>`
       +`<select class="nkin" id="${id}" onchange="chpSet('${r.f}',this.value)">`
-      +r.opts.map(o=>`<option value="${o[0]}">${o[1]}</option>`).join('')+`</select>`
+      +r.opts.map(x=>`<option value="${x[0]}">${x[1]}</option>`).join('')+`</select>`
       +`<span class="chp-v">${r.u||''}</span></div>`;
   return `<div class="chp-row" id="${id}-row"><span class="chp-l">${r.l}</span>`
-    +`<input type="range" id="${id}" min="${r.lo}" max="${r.hi}" step="${r.step}"`
-    +` oninput="chpSlide('${r.f}',this)"><span class="chp-v" id="${id}-v"></span></div>`;
+    +`<input type="range" id="${id}" min="${r.lg?0:r.lo}" max="${r.lg?CHP_POS_MAX:r.hi}"`
+    +` step="${r.lg?1:r.step}"`
+    +` oninput="chpSlide('${r.f}',this)">`
+    +`<span class="chp-v" id="${id}-v" onclick="chpEdit('${r.f}')" title="点一下输入精确值"></span></div>`;
+}
+function chpBodyHTML(){
+  let h='';
+  CH_TABS.forEach(([k])=>{
+    const rows=(k==='send'?SEND_UI:CH_PARAM_UI.filter(r=>chpTabOf(r.f)===k));
+    h+=`<div class="chp-tab" data-tab="${k}">`
+      +(k==='send'?`<div class="chp-row"><span class="chp-l">Bus</span>`
+        +`<select class="nkin" id="chpBus" onchange="chpBusChg(this.value)">`
+        +Array.from({length:16},(_,i)=>`<option value="${i+1}">Bus ${String(i+1).padStart(2,'0')}</option>`).join('')
+        +`</select><span class="chp-v">16 路</span></div>`:'')
+      +rows.map(chpRowHTML).join('')+'</div>';
+  });
+  return h;
+}
+// 控台能力 (数字增益量程) 由服务端给: 旧固件 ±12, 新固件 ±18。
+// 前端表里写的是 18 (新固件的规格), 老固件下把滑块范围收窄, 免得拖到 18 被弹回。
+let CHP_TRIM=18;
+function chpLoadLimits(){
+  fetch('/api/info').then(r=>r.json()).then(d=>{
+    if(!d||!d.trimRange||d.trimRange===CHP_TRIM) return;
+    CHP_TRIM=+d.trimRange;
+    const el=document.getElementById('chp-trim');
+    if(el){ el.min=-CHP_TRIM; el.max=CHP_TRIM; }
+    const r=chpSpec('trim');
+    if(r){ r.lo=-CHP_TRIM; r.hi=CHP_TRIM; }
+  }).catch(()=>{});
 }
 function openChParams(i){
-  chpIdx=i;
+  chpIdx=i; chpCurTab='pre';
+  chpLoadLimits();
   const nm=nameOf('ch',i);
   $('#chpTitle').textContent='CH '+String(i).padStart(2,'0')+(nm?' · '+nm:'');
-  $('#chParamBody').innerHTML=CH_PARAM_UI.map(chpRowHTML).join('');
+  $('#chParamBody').innerHTML=chpBodyHTML();
+  chpTab('pre');
   $('#chParamModal').classList.add('on');
   document.body.style.overflow='hidden';
   chpSync();
 }
 function closeChParams(){
   $('#chParamModal').classList.remove('on'); document.body.style.overflow='';
+}
+function chpTab(k){
+  chpCurTab=k;
+  const body=$('#chParamBody'); if(!body) return;
+  body.querySelectorAll('.chp-tab').forEach(el=>{
+    el.classList.toggle('on', el.dataset.tab===k);
+  });
+  const bar=$('#chpTabBar');
+  if(bar) bar.querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.tab===k));
+  if(k==='send') chpLoadSends();
+  else chpSync();
 }
 // 状态回读: 只更新控件, 不重建 (拖动中不动滑块, 手机上会把手指下的位置拽回去)
 function chpSync(){
@@ -5249,32 +5751,113 @@ function chpSync(){
       el.textContent=on?r.lb[1]:r.lb[0];
       el.classList.toggle('on',on);
     } else if(r.t==='enum'){
-      if(document.activeElement!==el) el.value=String(v);
+      if(document.activeElement!==el) el.value=String(+v);
     } else if(v!==undefined&&v!==null){
-      if(document.activeElement!==el) el.value=v;
+      if(document.activeElement!==el) el.value=r.lg?chpPos(r,v):v;
       const lab=document.getElementById('chp-'+r.f+'-v');
-      if(lab) lab.textContent=chpFmt(r,v);
+      if(lab&&!lab.querySelector('input')) lab.textContent=chpFmt(r,v);
     }
     // 从属项 (延时时间/低切斜率…) 在主开关关闭时变淡 —— 仍可调, 只是提示"当前不生效"
     const wrap=document.getElementById('chp-'+r.f+'-row');
     if(wrap&&r.dep) wrap.classList.toggle('off',!row[r.dep]);
   });
 }
+function chpSendRow(){ return chpSend[String(chpBus)]||{level:0,on:0,tap:4}; }
+function chpLoadSends(){
+  if(!$('#chParamModal')||!$('#chParamModal').classList.contains('on')) return;
+  fetch('/api/sends?ch='+chpIdx).then(r=>r.json()).then(d=>{
+    chpSend=d.sends||{}; chpSyncSend();
+  }).catch(()=>{});
+}
+function chpSyncSend(){
+  const row=chpSendRow();
+  SEND_UI.forEach(r=>{
+    const el=document.getElementById('chp-'+r.f); if(!el) return;
+    let v=row[r.f==='send_level'?'level':(r.f==='send_on'?'on':'tap')];
+    if(r.pct) v=(+v||0)*100;
+    if(r.t==='bool'){
+      el.textContent=v?r.lb[1]:r.lb[0]; el.classList.toggle('on',!!v);
+    } else if(r.t==='enum'){
+      if(document.activeElement!==el) el.value=String(Math.round(+v||0));
+    } else {
+      if(document.activeElement!==el) el.value=v;
+      const lab=document.getElementById('chp-'+r.f+'-v');
+      if(lab&&!lab.querySelector('input')) lab.textContent=chpFmt(r,v);
+    }
+  });
+}
+function chpBusChg(v){ chpBus=+v||1; chpSyncSend(); }
+function chpIsSend(f){ return f.indexOf('send_')===0; }
+// 写库: 发送走 /api/setbatch 的 bus 字段, 其余按通道参数
+function chpWrite(f,v){
+  if(chpIsSend(f)){
+    send('S',chpIdx,f,v,chpBus);
+    const row=chpSend[String(chpBus)]||(chpSend[String(chpBus)]={level:0,on:0,tap:4});
+    const key=(f==='send_level'?'level':(f==='send_on'?'on':'tap'));
+    row[key]=v;
+    clearTimeout(chpSendT); chpSendT=setTimeout(chpLoadSends,500);
+  } else {
+    send('c',chpIdx,f,v);
+  }
+}
 function chpSlide(f,el){
   const r=chpSpec(f); if(!r) return;
+  const v=r.lg?chpVal(r,el.value):(+el.value), w=r.pct?v/100:v;
   const lab=document.getElementById('chp-'+f+'-v');
-  if(lab) lab.textContent=chpFmt(r,el.value);
-  send('c',chpIdx,f,+el.value);
+  if(lab&&!lab.querySelector('input')) lab.textContent=chpFmt(r,v);
+  chpWrite(f,w);
 }
-function chpSet(f,v){ send('c',chpIdx,f,+v); }
+function chpSet(f,v){
+  const r=chpSpec(f); if(!r) return;
+  const nv=(r.t==='enum'&&r.opts&&r.opts.some(o=>/^[A-Z]/.test(String(o[1]))))?+v:+v;
+  chpWrite(f,nv);
+}
 function chpTog(f){
+  if(chpIsSend(f)){
+    const cur=chpSendRow().on?1:0, nv=cur?0:1;
+    chpWrite(f,nv);
+    const r=chpSpec(f), el=document.getElementById('chp-'+f);
+    if(r&&el){ el.textContent=nv?r.lb[1]:r.lb[0]; el.classList.toggle('on',!!nv); }
+    return;
+  }
   if(!S||!S.ch) return;
   const row=S.ch[String(chpIdx)]; if(!row) return;
   const nv=row[f]?0:1;
-  send('c',chpIdx,f,nv);
+  chpWrite(f,nv);
   // 乐观切换: 写盘+轮询有 ~250ms 延迟, 不先动一下会觉得"点了没反应"
   const r=chpSpec(f), el=document.getElementById('chp-'+f);
   if(r&&el){ el.textContent=nv?r.lb[1]:r.lb[0]; el.classList.toggle('on',!!nv); }
+}
+// 键盘精调: 点数值 → 原地变输入框
+function chpEdit(f){
+  const r=chpSpec(f); if(!r||r.t!=='num') return;
+  const lab=document.getElementById('chp-'+f+'-v'); if(!lab) return;
+  if(lab.querySelector('input')) return;
+  const cur=chpIsSend(f)
+    ? (()=>{ const row=chpSendRow(); const v=row[f==='send_level'?'level':'on']||0; return r.pct?v*100:v; })()
+    : (()=>{ const row=(S&&S.ch)?S.ch[String(chpIdx)]:null; const v=row?row[f]:undefined; return (v===undefined||v===null)?(r.dv||0):v; })();
+  const step=r.lg?1:(r.dec?Math.max(r.step,Math.pow(10,-r.dec)):r.step);
+  lab.innerHTML=`<input class="chp-in" type="number" inputmode="decimal"`
+    +` min="${r.lo}" max="${r.hi}" step="${step}" value="${(+cur).toFixed(r.dec)}">`;
+  const inp=lab.querySelector('input');
+  let done=false;
+  const commit=(ok)=>{
+    if(done) return; done=true;
+    const v=parseFloat(inp.value);
+    lab.textContent=chpFmt(r, isNaN(v)?cur:(r.pct?Math.min(Math.max(v,0),100)/100:Math.min(Math.max(v,r.lo),r.hi))* (r.pct?100:1));
+    if(ok&&!isNaN(v)){
+      let w=r.pct?Math.min(Math.max(v,0),100)/100:Math.min(Math.max(v,r.lo),r.hi);
+      chpWrite(f,w);
+      const sl=document.getElementById('chp-'+f);
+      if(sl&&document.activeElement!==sl) sl.value=r.lg?chpPos(r,w):w;
+    }
+  };
+  inp.addEventListener('keydown',e=>{
+    if(e.key==='Enter'){ e.preventDefault(); commit(true); inp.blur(); }
+    else if(e.key==='Escape'){ e.preventDefault(); commit(false); inp.blur(); }
+  });
+  inp.addEventListener('blur',()=>commit(true));
+  inp.focus(); inp.select();
 }
 function runShow(id){ fetch('/api/show',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({id:id})}); }
@@ -5291,7 +5874,8 @@ function api(path,obj){ fetch(path,{method:'POST',headers:{'Content-Type':'appli
 const PS_GROUPS=[['ch','输入通道'],['bus','Mix Bus'],['dca','DCA'],['auxin','Aux In'],
   ['usb','USB'],['fxret','FX 返回'],['mtx','Matrix'],['main','主输出'],
   ['fx','FX 机架'],['scene','场景号']];
-const PS_PARAMS=[['fader','推子'],['on','静音'],['name','名称'],['dca','DCA 归属']]
+const PS_PARAMS=[['fader','推子'],['on','静音'],['name','名称'],['dca','DCA 归属'],
+  ['send_level','发送电平'],['send_on','发送开关'],['send_tap','发送取点']]
   .concat(CH_PARAM_UI.map(r=>[r.f,r.l]));   // 12 个通道处理参数也能单独勾选存/回归
 const PS_CAP={ch:32,bus:16,dca:8,auxin:6,usb:2,fxret:8,mtx:6,main:1,fx:8,scene:1};
 const PS_PATH_GROUPS=['ch','bus','dca','auxin','usb','fxret','mtx','main'];
@@ -5620,11 +6204,13 @@ const CA_LABEL={mute:'静音通道',mute_bus:'静音 Bus',scene:'切场景',unmu
 // 分组是**语义**的,落到哪个地址由控台驱动决定 —— 所以同一张卡片能换控台使用。
 const ST_GROUPS=[['ch','输入通道',32],['bus','Bus 输出',16],['dca','DCA 编组',8],
   ['main','主输出',1],['auxin','Aux In',6],['usb','USB 返回',2],['fxret','FX 返回',8],
-  ['mtx','Matrix',6],['fx','FX 效果槽',8],['scene','场景',99]];
+  ['mtx','Matrix',6],['fx','FX 效果槽',8],['scene','场景',99],
+  ['send','发送 (通道→Bus)',32]];
 const ST_PARAMS={ch:['fader','on'].concat(CH_PARAM_UI.map(r=>r.f)),
   bus:['fader','on'],dca:['fader','on'],main:['fader','on'],
   auxin:['fader','on'],usb:['fader','on'],fxret:['fader','on'],mtx:['fader','on'],
-  fx:['time','predelay','damp','mix','on','type','name'],scene:['load']};
+  fx:['time','predelay','damp','mix','on','type','name'],scene:['load'],
+  send:['send_level','send_on','send_tap']};
 const ST_PLABEL={fader:'推子 %',on:'开关 (1开启/0静音)',mix:'混合比 (0-1)',
   time:'混响时间 (秒)',predelay:'预延迟 (毫秒)',damp:'阻尼 (0-1)',
   type:'算法 (HALL/PLATE/ROOM/…)',name:'名称 (文本)',load:'切场景'};
@@ -5692,6 +6278,7 @@ function setFormHTML(){
   return `<select id="stGroup" class="nkin" onchange="stGroupChg()">`
     + ST_GROUPS.map(x=>`<option value="${x[0]}">${x[1]}</option>`).join('') + `</select>`
     + `<input id="stId" type="number" value="1" min="1" class="nkin" style="width:78px" title="目标编号">`
+    + `<span id="stBusWrap"></span>`
     + `<select id="stParam" class="nkin" onchange="stParamChg()"></select>`
     + `<span id="stValWrap"></span>`
     + `<input id="stDur" type="number" value="0" min="0" step="0.5" class="nkin" style="width:104px"
@@ -5707,6 +6294,14 @@ function stGroupChg(){
   const cap=row[2]||32;
   if(g==='main'){ idEl.value=0; idEl.disabled=true; }
   else { idEl.disabled=false; idEl.max=cap; if(!+idEl.value||+idEl.value>cap) idEl.value=1; }
+  // 发送是二维目标: 编号是通道, 还要一个 Bus。不给这一栏, 用户只能写"第 5 个打包值",
+  // 那种数字对内没有任何意义。
+  const bw=$('#stBusWrap');
+  if(bw) bw.innerHTML=(g==='send')
+    ? `<select id="stBus" class="nkin" title="发往哪个 Bus">`
+      +Array.from({length:16},(_,i)=>`<option value="${i+1}">Bus ${String(i+1).padStart(2,'0')}</option>`).join('')
+      +`</select>`
+    : '';
   stParamChg();
 }
 function stParamChg(){
@@ -5809,8 +6404,22 @@ function learnSet(){
   const g=$('#stGroup').value, p=$('#stParam').value;
   const i=(g==='main')?0:(+($('#stId').value)||1);
   const sp=chpSpec(p);
+  if(g==='send'){
+    // 发送值不在 /api/state 里 (512 项会把状态包撑爆), 抓取时单独拉一次
+    const bus=+((($('#stBus')||{}).value)||1);
+    fetch('/api/sends?ch='+i).then(r=>r.json()).then(d=>{
+      const row=(d.sends||{})[String(bus)];
+      if(!row){ cardErr('读不到 CH'+i+' → Bus'+bus); return; }
+      const v=(p==='send_level')?row.level:(p==='send_on'?row.on:row.tap);
+      fillStVal(sp,p,v);
+    }).catch(()=>cardErr('读取发送值失败'));
+    return;
+  }
   const v=curValue(g,p,i);
   if(v===null){ cardErr('读不到「'+g+' '+i+'」的当前值（编号越界，或该参数尚未建模）'); return; }
+  fillStVal(sp,p,v);
+}
+function fillStVal(sp,p,v){
   if(p==='on'||p==='load'){
     const sel=$('#stValSel'); if(sel) sel.value=String(v?1:0);
     cardInfo('已抓取：'+(v?'开启':'静音'));
@@ -5828,8 +6437,9 @@ function learnSet(){
     cardInfo('已抓取名称：'+(v||'(空)'));
   } else {
     const el=$('#stValNum');
-    if(el) el.value=(p==='fader')?Math.round(v*100):v;
-    cardInfo('已抓取：'+((p==='fader')?Math.round(v*100)+'%':(sp?chpFmt(sp,v):v)));
+    const isPct=(p==='fader'||p==='send_level');
+    if(el) el.value=isPct?Math.round(v*100):v;
+    cardInfo('已抓取：'+(isPct?Math.round(v*100)+'%':(sp?chpFmt(sp,v):v)));
   }
 }
 function cardInfo(msg){
@@ -5863,6 +6473,8 @@ function addAct(){
     if(grp!=='main'&&grp!=='scene'&&i<1){ cardErr('请填写目标编号'); return; }
     if(grp==='scene'&&i<1){ cardErr('请填写场景号'); return; }
     a.target={group:grp,param:p,id:i};
+    // 发送: id 是通道, 再带上 Bus。后端按 send_pack(通道, Bus) 落地
+    if(grp==='send') a.target.bus=+((($('#stBus')||{}).value)||1);
     const sp=chpSpec(p);
     if(p==='on') a.value=(+($('#stValSel')?$('#stValSel').value:0))?1:0;
     else if(sp&&sp.t==='bool') a.value=(+($('#stValSel')?$('#stValSel').value:0))?1:0;
@@ -5872,7 +6484,7 @@ function addAct(){
     else if(p==='load') a.value=1;
     else {
       let v=+($('#stValNum')?$('#stValNum').value:0)||0;
-      if(p==='fader') v=pct(v);          // 表单里填百分比, 传 0..1
+      if(p==='fader'||p==='send_level') v=pct(v);   // 表单里填百分比, 传 0..1
       a.value=v;                          // 新通道参数吃原生单位 (dB/ms/Hz), 不做百分比换算
     }
     const d=+($('#stDur')?$('#stDur').value:0)||0;
@@ -5974,9 +6586,20 @@ function actTxt(a){
       if(p==='mix') return `FX${i} 混合比=${(+a.value||0).toFixed(2)}`;
       return `FX${i} ${(ST_PLABEL[p]||p)} = ${a.value}`;
     }
-    const lbl=(g2==='main')?'主输出':`${gname} ${String(i).padStart(2,'0')}`;
+    // 标签必须能区分"CH05 推子"和"CH05→Bus03 发送电平": 发送是二维目标,
+    // 只写通道号会出现两条一模一样的摘要, 用户没法核对卡片。
+    const lbl=(g2==='main')?'主输出':(g2==='send')
+      ? `CH${String(i).padStart(2,'0')}→Bus${String((a.target&&a.target.bus)||1).padStart(2,'0')}`
+      : `${gname} ${String(i).padStart(2,'0')}`;
     if(p==='on') return `${lbl} ${a.value?'开启':'静音'}`;
+    if(p==='send_on') return `${lbl} 发送${a.value?'开':'关'}`;
+    if(p==='send_level') return `${lbl} 电平=${Math.round((+a.value||0)*100)}%`;
+    if(p==='send_tap')
+      return `${lbl} 取点=${(['<-EQ','EQ->','PRE','POST','GRP'][+a.value||0])||''}`;
     const dd=(+a.duration>0)?` 经${a.duration}秒`:'';
+    const sp0=(p==='fader')?null:chpSpec(p);
+    if(sp0&&sp0.t!=='bool')
+      return `${lbl} ${sp0.l}=${(+a.value||0)}${sp0.u?(' '+sp0.u):''}`;
     return `${lbl} →${Math.round((+a.value||0)*100)}%${dd}`;
   }
   if(a.kind==='osc') return `⚠️ 原始 OSC ${a.address}${(a.args&&a.args.length)?' '+a.args.join(' '):''}`;
@@ -6766,14 +7389,20 @@ function poll(){
       S=d; $('#conn').style.background='#22c55e'; pollEvents(); render();
     }
   }).catch(()=>{ $('#conn').style.background='#ef4444'; $('#hdinfo').textContent='连接断开,重试中…'; })
-   .finally(()=>setTimeout(poll,250));
+   .finally(()=>setTimeout(poll,pollMs(250)));
 }
 
+// 页面不可见时降频: 手机揣兜里、切到别的 App、锁屏, 都是"看不见屏幕"。
+// 演出 4 小时里这类时间往往占七成, 而 4 Hz 的电平轮询是流量大头 ——
+// 藏起来就降到 2s 一次 (状态也一起降), 回到前台立刻恢复。
+const POLL_HIDDEN_MS=2000;
+function pollMs(active){ return document.hidden?POLL_HIDDEN_MS:active; }
 function pollMeters(){
   fetch('/api/meters').then(r=>r.json()).then(d=>{
     if(!S) return;
+    if(document.hidden) return;          // 藏起来就别画了, 省一次 DOM 重建
     S.meters=d.meters||S.meters; drawMeters();
-  }).catch(()=>{}).finally(()=>setTimeout(pollMeters,250));
+  }).catch(()=>{}).finally(()=>setTimeout(pollMeters,pollMs(250)));
 }
 // 局部刷新: 内容没变不重建 innerHTML (避免打断按钮交互/选中状态)
 function setHTML(id,html){
@@ -6832,19 +7461,36 @@ class WebHandler(BaseHTTPRequestHandler):
         return False
 
     def _send(self, code, ctype, body):
+        # 协商 gzip: 全量快照 43 KB, 压缩后约 5 KB —— 4G 上这是最直接的一笔。
+        # 只对 >512B 的响应压 (小包压了反而更大, 还多一次 CPU), 且尊重客户端声明。
+        enc = ""
+        if len(body) > 512 and "gzip" in (self.headers.get("Accept-Encoding") or ""):
+            try:
+                import gzip as _gzip
+                body = _gzip.compress(body, 6)
+                enc = "gzip"
+            except Exception:
+                enc = ""
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
-        # ⚠️ CSP: 本项目的 HTML 是内联 <script> + 内联 <style>，所以必须开
+        if enc:
+            self.send_header("Content-Encoding", enc)
+            # 同一 URL 对不支持的客户端要发明文, 缓存必须按这个头分桶
+            self.send_header("Vary", "Accept-Encoding")
+        # CSP 只对**文档**有意义。挂在每个 JSON 响应上纯属白背字节:
+        # 网页 250ms 轮询两个端点 → 8 次/秒 × 250 B ≈ 7 MB/h, 比响应体还贵。
+        # ⚠️ 本项目的 HTML 是内联 <script> + 内联 <style>, 所以必须开
         #    'unsafe-inline'（换成外部文件就能收得更紧）。加上 frame-ancestors /
         #    object-src / base-uri 堵住"外链页面 iframe 套本页"和"改 base 标签
         #    劫持相对路径"这两类常见利用。它与前端 esc() 是两道独立的闸。
-        self.send_header("Content-Security-Policy",
-                         "default-src 'self'; script-src 'self' 'unsafe-inline'; "
-                         "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
-                         "connect-src 'self'; frame-ancestors 'self'; "
-                         "object-src 'none'; base-uri 'self'")
+        if ctype.startswith("text/html"):
+            self.send_header("Content-Security-Policy",
+                             "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+                             "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+                             "connect-src 'self'; frame-ancestors 'self'; "
+                             "object-src 'none'; base-uri 'self'")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         try:
@@ -6877,6 +7523,26 @@ class WebHandler(BaseHTTPRequestHandler):
                 log("STATE 快照含非有限数 (%s)，已降级为空快照" % e)
                 body = b"{}"
             self._send(200, "application/json; charset=utf-8", body)
+        elif path == "/api/sends":
+            # 发送 (通道 → 16 个 Bus) 单独取: 512 行 × 3 字段放不进 /api/state,
+            # 那会把刚结清的 4G 流量账又借回来。界面点开"发送"页时才拉一次。
+            try:
+                qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                ch = int(qs.get("ch", ["1"])[0])
+            except (TypeError, ValueError):
+                ch = 1
+            ch = min(max(ch, 1), 32)
+            row = {}
+            for bus in range(1, SEND_BUS + 1):
+                i = send_pack(ch, bus)
+                row[str(bus)] = {
+                    "level": get_value("send_level", i),
+                    "on": int(get_value("send_on", i) or 0),
+                    "tap": int(get_value("send_tap", i) or 0),
+                }
+            self._send(200, "application/json; charset=utf-8",
+                       json.dumps({"ch": ch, "sends": row},
+                                  allow_nan=False).encode("utf-8"))
         elif path == "/api/meters":
             # 电平单独取: 它每 tick 都变, 不能进 /api/state 的内容指纹,
             # 否则"没变更"永远命中不了。旧 /api/state 仍带 meters (App 兼容)。
@@ -6884,9 +7550,13 @@ class WebHandler(BaseHTTPRequestHandler):
                        json.dumps({"meters": compute_levels()},
                                   allow_nan=False).encode("utf-8"))
         elif path == "/api/info":
+            # trimRange: 控台实际接受的数字增益量程 (12=旧固件 / 18=新固件)。
+            # 界面用它设滑块范围 —— 不让用户拖到 18 再被服务端弹回 12。
+            _lim = active_limits("ch_trim")
             self._send(200, "application/json; charset=utf-8", json.dumps({
                 "lanIp": LAN_IP[0], "udpPort": UDP_PORT[0], "webPort": WEB_PORT[0],
                 "lanUrl": "http://%s:%d" % (LAN_IP[0], WEB_PORT[0]),
+                "trimRange": abs(_lim[1]) if _lim else 18,
             }).encode("utf-8"))
         elif path == "/api/scan":
             # 局域网发现: 广播 /xinfo 找真台 (X32 官方发现指令), 无需手填 IP
@@ -6983,6 +7653,19 @@ class WebHandler(BaseHTTPRequestHandler):
                 self._send(400, "application/json",
                            b'{"ok":false,"error":"bad idx"}')
                 return
+            if grp == "send":
+                # 发送是二维目标: idx=通道, bus=Bus, 落库键 = send_pack。
+                # 不接受"直接传打包值"—— 512 这种数字对用户没有意义, 也容易越界。
+                try:
+                    bus = int(data.get("bus", 0))
+                except (TypeError, ValueError):
+                    bus = 0
+                if not (1 <= bus <= SEND_BUS and 1 <= idx <= 32):
+                    self._send(400, "application/json", json.dumps(
+                        {"ok": False, "error": "发送目标应为 通道 1-32 + Bus 1-%d"
+                                               % SEND_BUS}).encode("utf-8"))
+                    return
+                idx = send_pack(idx, bus)
             if not target_exists(k, idx):
                 self._send(400, "application/json",
                            json.dumps({"ok": False,
@@ -7022,6 +7705,14 @@ class WebHandler(BaseHTTPRequestHandler):
                     idx = int(it.get("idx", 0))
                 except (TypeError, ValueError):
                     continue
+                if it.get("kind") == "send":
+                    try:
+                        bus = int(it.get("bus", 0))
+                    except (TypeError, ValueError):
+                        continue
+                    if not (1 <= bus <= SEND_BUS and 1 <= idx <= 32):
+                        continue
+                    idx = send_pack(idx, bus)
                 if not target_exists(k, idx):
                     continue      # 越界条目直接跳过，applied 计数会反映出来
                 set_value(k, idx, it.get("value"))
@@ -7680,9 +8371,22 @@ def main():
     parser.add_argument("--bridge", default="", metavar="IP:PORT",
                         help="桥接真台: 写入转发+保活+回读 (联调可指向另一模拟器实例)")
     parser.add_argument("--config", default="", help="配置文件路径 (多实例联调时各自独立)")
+    # 数字增益量程: 手册写 [-12,12] (旧固件), 实测 1.15+ 是 [-18,18]。
+    # 默认 18 —— 若你的台子是老固件, 用 --trim-range 12 启动, 本地量程会同步
+    # 收到 ±12: 界面显示多少, 台子上就是多少, 不会出现"本地 15 / 真台 12"的静默差。
+    parser.add_argument("--trim-range", type=float, default=None, metavar="DB",
+                        help="数字增益量程 ±db (12=旧固件, 18=新固件; 默认按控台能力)")
     args = parser.parse_args()
 
     _register_sinks()          # 写出口就位后, 任何 set_value 都能被桥接看到
+    # 量程覆盖必须在 load_user_config 之前装好: 否则配置文件里的旧值会按宽量程
+    # 读进来, 之后第一次写入才收窄, 中间那段时间界面和台子是对不上的。
+    _lims = dict(getattr(profile(), "param_limits", {}) or {})
+    if args.trim_range:
+        _r = abs(float(args.trim_range))
+        _lims["ch_trim"] = (-_r, _r)
+        log("量程: 数字增益 ±%g dB (按固件能力收窄; 旧固件请用 12)" % _r)
+    set_param_limits(_lims)
     if args.config:
         CONFIG_PATH[0] = args.config
     load_user_config()

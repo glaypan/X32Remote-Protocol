@@ -2,7 +2,7 @@
 from .consts import FX_COUNT, M32_FX_ALGOS, X32_FX_ALGOS
 from .kinds import fx_par_num
 from .logbus import log
-from .params import CH_PARAM_SPECS, PARAM_SPECS, spec_addr
+from .params import CH_PARAM_SPECS, PARAM_SPECS, SEND_PARAM_SPECS, spec_addr
 # -*- coding: utf-8 -*-
 """x32sim/profiles — 控台驱动层: ConsoleProfile 与各控台地址表"""
 
@@ -48,6 +48,8 @@ class ConsoleProfile:
     caps = ()              # 支持的语义能力：UI 灰显 / 导入校验用
     fx_algos = {}          # 本控台的效果库（算法名 → {label,time,predelay,damp,tmin,tmax}）
                            # 空表 = 该控台效果库未标定 → 混响页禁用、写入被拒绝
+    param_limits = {}      # kind → (lo,hi): 控台实际接受的范围。空 = 用参数表量程。
+                           # 目前只有 trim 会因固件版本不同而变 (见 app --trim-range)
 
     def addr(self, kind, idx):
         """(kind, idx) → 真实地址；本控台不支持则返回 None。"""
@@ -136,8 +138,10 @@ class _StubProfile(ConsoleProfile):
         base += [g + "_fader" for g in ("auxin", "usb", "fxret", "mtx")]
         base += [g + "_on" for g in ("auxin", "usb", "fxret", "mtx")]
         base += ["ch_dca", "fx_type", "fx_on", "fx_mix", "fx_name", "fx_par_NN"]
-        # 通道参数 (增益/反相/延时/低切/插入/门): 从登记表推导, 新增即跟上
+        # 通道参数 (增益/反相/延时/低切/插入/门/动态/EQ): 从登记表推导, 新增即跟上
         base += [sp.kind for sp in CH_PARAM_SPECS]
+        # 发送 (通道→Bus): 二维地址, 同样从登记表推导
+        base += [sp.kind for sp in SEND_PARAM_SPECS]
         return base
 
 

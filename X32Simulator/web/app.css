@@ -239,3 +239,17 @@
 .chp-row select{flex:1;max-width:130px}
 .chp-row.off{opacity:.5}
 .chp-row.off .chp-l{color:var(--sub)}
+
+/* ---- 通道参数面板: 分页与键盘精调 ---- */
+.chp-tabs{display:flex;gap:6px;margin:8px 0 2px}
+.chp-tabs button{flex:1;padding:8px 4px;border-radius:9px;font-size:13px;font-weight:700;
+  border:1px solid var(--line);background:var(--card2);color:var(--sub)}
+.chp-tabs button.on{background:rgba(255,180,84,.16);border-color:var(--accent);color:var(--accent)}
+.chp-tab{display:none}
+.chp-tab.on{display:block}
+/* 数值标签当输入入口: 白天也要看得出"这里能点"—— 加虚线下划线 */
+.chp-v{cursor:text;text-decoration:underline dotted rgba(160,170,190,.45);
+  text-underline-offset:3px}
+.chp-v input.chp-in{width:74px;padding:2px 4px;font-size:12px;text-align:right;
+  border-radius:6px;border:1px solid var(--accent);background:var(--card2);
+  color:var(--txt);font-variant-numeric:tabular-nums}

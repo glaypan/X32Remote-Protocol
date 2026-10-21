@@ -8,7 +8,7 @@ import time
 from .bridge import _bridge_force_sync
 from .consts import FX_COUNT, NAME_COUNTS, PRESET_DEFAULT_SCOPE, PRESET_GROUP_LABEL, PRESET_GROUP_PARAMS, PRESET_PARAM_LABEL
 from .logbus import log
-from .params import CH_PARAM_SPECS
+from .params import CH_PARAM_SPECS, SEND_BUS, SEND_PARAM_SPECS, send_pack
 from .state import STATE, get_value, set_value, target_exists
 from .util import _clamp01, _finite
 
@@ -65,6 +65,8 @@ def preset_group_cap(g):
         return 1
     if g == "fx":
         return FX_COUNT
+    if g == "send":
+        return 32            # 发送按**通道**计数, 抓取时每通道展开 16 个 Bus
     return NAME_COUNTS.get(g, 0)
 
 
@@ -110,7 +112,7 @@ def clean_preset_scope(scope):
     raw = scope.get("indices")
     if isinstance(raw, dict):
         for g, arr in raw.items():
-            if g not in groups or g not in NAME_COUNTS:
+            if g not in groups or (g not in NAME_COUNTS and g != "send"):
                 continue
             cap = preset_group_cap(g)
             picked = []
@@ -164,6 +166,23 @@ def _snap_group_items_locked(g, params, idxs):
             item["name"] = STATE.names.get(("main", 0), "")
         if item:
             bag["0"] = item
+        return bag
+    if g == "send":
+        # 发送: idxs 是**通道号**, 每个通道展开 16 个 Bus。
+        # 键用打包后的 send idx (与 STATE.send 一致), 项里用带前缀的参数名
+        # (send_level/send_on/send_tap) —— 短名 "on" 会与通道静音串味。
+        for ch in idxs:
+            for bus in range(1, SEND_BUS + 1):
+                idx = send_pack(ch, bus)
+                row = STATE.send.get(idx)
+                if row is None:
+                    continue
+                item = {}
+                for sp in SEND_PARAM_SPECS:
+                    if sp.kind in params:
+                        item[sp.kind] = row.get(sp.field, sp.default)
+                if item:
+                    bag[str(idx)] = item
         return bag
     store = getattr(STATE, g, {}) or {}
     for i in idxs:
@@ -324,6 +343,12 @@ def _recall_instant(snap):
                     set_value("fx_mix", i, item.get("mix", 0.25), source="action")
                 for p, v in (item.get("par") or {}).items():
                     set_value("fx_par_%s" % p, i, v, source="action")
+            continue
+        if g == "send":
+            # 键就是打包后的 (通道,Bus); 参数名 = kind, 直接走 set_value
+            for sp in SEND_PARAM_SPECS:
+                if sp.kind in item and target_exists(sp.kind, i):
+                    set_value(sp.kind, i, item[sp.kind], source="action")
             continue
         if "on" in item:
             set_value("main_on" if g == "main" else g + "_on", i,

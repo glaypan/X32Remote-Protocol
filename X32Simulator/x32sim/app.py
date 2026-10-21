@@ -16,6 +16,8 @@ from .logbus import log
 from .osc import decode_packet
 from .oscsrv import handle
 from .persist import CONFIG_PATH, load_user_config
+from .params import set_param_limits
+from .profiles import profile
 from .runtime import DEF_WEB_PORT, ENV_WEB_PORT, LAN_IP, MAIN_SOCK, PORT_CFG, UDP_PORT, WEB_PORT, get_lan_ip, resolve_ports
 from .state import meter_streamer
 
@@ -59,9 +61,22 @@ def main():
     parser.add_argument("--bridge", default="", metavar="IP:PORT",
                         help="桥接真台: 写入转发+保活+回读 (联调可指向另一模拟器实例)")
     parser.add_argument("--config", default="", help="配置文件路径 (多实例联调时各自独立)")
+    # 数字增益量程: 手册写 [-12,12] (旧固件), 实测 1.15+ 是 [-18,18]。
+    # 默认 18 —— 若你的台子是老固件, 用 --trim-range 12 启动, 本地量程会同步
+    # 收到 ±12: 界面显示多少, 台子上就是多少, 不会出现"本地 15 / 真台 12"的静默差。
+    parser.add_argument("--trim-range", type=float, default=None, metavar="DB",
+                        help="数字增益量程 ±db (12=旧固件, 18=新固件; 默认按控台能力)")
     args = parser.parse_args()
 
     _register_sinks()          # 写出口就位后, 任何 set_value 都能被桥接看到
+    # 量程覆盖必须在 load_user_config 之前装好: 否则配置文件里的旧值会按宽量程
+    # 读进来, 之后第一次写入才收窄, 中间那段时间界面和台子是对不上的。
+    _lims = dict(getattr(profile(), "param_limits", {}) or {})
+    if args.trim_range:
+        _r = abs(float(args.trim_range))
+        _lims["ch_trim"] = (-_r, _r)
+        log("量程: 数字增益 ±%g dB (按固件能力收窄; 旧固件请用 12)" % _r)
+    set_param_limits(_lims)
     if args.config:
         CONFIG_PATH[0] = args.config
     load_user_config()

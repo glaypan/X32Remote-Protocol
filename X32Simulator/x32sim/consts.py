@@ -5,7 +5,7 @@
 # 以下代码自 x32_simulator.py 逐字搬运 (B1 模块化), 仅头部导入为本工具生成
 # ------------------------------------------------------------
 
-from .params import CH_PARAM_SPECS, PARAM_SPECS
+from .params import CH_PARAM_SPECS, PARAM_SPECS, SEND_PARAM_SPECS
 
 # ---------------------------------------------------------------- 混响 / FX 机架
 # X32 有 8 个 FX 槽. 混响类算法的参数**索引随算法变化**(官方文档里 Hall/Plate/Room/
@@ -76,6 +76,11 @@ SET_KINDMAP = {"ch": {"fader": "ch_fader", "on": "ch_on"},
                "fxret": {"fader": "fxret_fader", "on": "fxret_on"},
                "mtx": {"fader": "mtx_fader", "on": "mtx_on"}}
 SET_KINDMAP["ch"].update({sp.field: sp.kind for sp in CH_PARAM_SPECS})
+# 发送是二维目标: 参数名与 kind 同名 (send_level/send_on/send_tap),
+# 调用方用 (group="send", param="send_level", idx=通道, bus=Bus) 寻址,
+# HTTP/动作层负责 send_pack 打包。**故意不用 level/on/tap 这种短名** ——
+# "on" 已经属于通道静音, 同名会让预设/卡片白名单串味。
+SET_KINDMAP["send"] = {sp.kind: sp.kind for sp in SEND_PARAM_SPECS}
 
 # 推子/静音的 OSC 地址模板: 由 params.PARAM_SPECS **推导** (单一事实来源,
 # 曾经这里是字面字典, 改一个地址要同时惦记 profiles.addr 里的另一份)。
@@ -87,6 +92,7 @@ ON_ADDR = {sp.kind: sp.osc for sp in PARAM_SPECS.values()
            if sp.push and sp.kind.endswith("_on")}
 KIND_LABEL = {"ch": "通道", "bus": "输出Bus", "dca": "DCA", "main": "Main",
               "auxin": "AuxIn", "usb": "USB", "fxret": "FX返回", "mtx": "Matrix",
+              "send": "发送",
               "fx_par": "FX参数", "fx_type": "FX算法", "fx_name": "FX名称",
               "fx_on": "FX开关", "fx_mix": "FX混合比"}
 
@@ -108,6 +114,9 @@ PRESET_GROUP_PARAMS = {
     "main": ("fader", "on", "name"),
     "fx": ("slot",),
     "scene": ("scene",),
+    # 发送: 范围里的"编号"指**通道号** (1-32), 抓取时按 16 个 Bus 展开。
+    # 512 个 (通道,Bus) 目标没法在界面上一个个勾, 用通道做单位才可用。
+    "send": ("send_level", "send_on", "send_tap"),
 }
 # 输入通道的参数白名单跟上登记表 (增益/反相/延时/低切/插入/门)
 PRESET_GROUP_PARAMS["ch"] = tuple(PRESET_GROUP_PARAMS["ch"]) + tuple(
@@ -115,9 +124,11 @@ PRESET_GROUP_PARAMS["ch"] = tuple(PRESET_GROUP_PARAMS["ch"]) + tuple(
 PRESET_GROUP_LABEL = {"ch": "输入通道", "bus": "Mix Bus", "dca": "DCA",
                       "auxin": "Aux In", "usb": "USB", "fxret": "FX 返回",
                       "mtx": "Matrix", "main": "主输出", "fx": "FX 机架",
-                      "scene": "场景号"}
+                      "scene": "场景号", "send": "发送 (通道→Bus)"}
 PRESET_PARAM_LABEL = {"fader": "推子", "on": "静音", "name": "名称",
-                      "dca": "DCA 归属", "slot": "整槽", "scene": "当前场景"}
+                      "dca": "DCA 归属", "slot": "整槽", "scene": "当前场景",
+                      "send_level": "发送电平", "send_on": "发送开关",
+                      "send_tap": "发送取点"}
 PRESET_PARAM_LABEL.update({sp.field: sp.label for sp in CH_PARAM_SPECS})
 PRESET_DEFAULT_SCOPE = {
     "groups": ["ch", "bus", "dca", "auxin", "usb", "fxret", "mtx", "main"],
@@ -146,22 +157,27 @@ FADE_ACT_KINDS = ("fade_all", "fade_odd_even", "fade_ch", "fade_bus",
 #    天然跨控台 —— 这不是额外做的适配，而是它本来就走在语义管道上。
 
 SET_GROUPS = ("ch", "bus", "dca", "main", "auxin", "usb", "fxret", "mtx",
-              "fx", "scene")
+              "fx", "scene", "send")
 SET_PARAMS = {
     "ch": ("fader", "on"), "bus": ("fader", "on"), "dca": ("fader", "on"),
     "main": ("fader", "on"), "auxin": ("fader", "on"), "usb": ("fader", "on"),
     "fxret": ("fader", "on"), "mtx": ("fader", "on"),
     "fx": ("type", "name", "on", "mix", "time", "predelay", "damp"),
     "scene": ("load",),
+    # 发送: 目标 = (id=通道, bus=Bus), 见 actions._clean_set_action
+    "send": ("send_level", "send_on", "send_tap"),
 }
 # 通用设置动作的通道参数白名单 (与 SET_KINDMAP["ch"] 同源)
 SET_PARAMS["ch"] = tuple(SET_PARAMS["ch"]) + tuple(sp.field for sp in CH_PARAM_SPECS)
 SET_GROUP_LABEL = {"ch": "通道", "bus": "Bus", "dca": "DCA", "main": "主输出",
                    "auxin": "AuxIn", "usb": "USB", "fxret": "FX返回",
-                   "mtx": "Matrix", "fx": "FX", "scene": "场景"}
+                   "mtx": "Matrix", "fx": "FX", "scene": "场景",
+                   "send": "发送"}
 SET_PARAM_LABEL = {"fader": "推子", "on": "开关", "type": "算法", "name": "名称",
                    "mix": "混合比", "time": "混响时间", "predelay": "预延迟",
-                   "damp": "阻尼", "load": "调用"}
+                   "damp": "阻尼", "load": "调用",
+                   "send_level": "发送电平", "send_on": "发送开关",
+                   "send_tap": "发送取点"}
 SET_PARAM_LABEL.update({sp.field: sp.label for sp in CH_PARAM_SPECS})
 
 

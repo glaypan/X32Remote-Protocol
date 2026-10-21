@@ -44,14 +44,20 @@ _orig_save = _persist.save_user_config
 _persist.save_user_config = lambda: True
 
 from x32sim.actions import _clean_actions            # noqa: E402
-from x32sim.params import (CH_EXTRA_ADDR, CH_PARAM_SPECS, PARAM_SPECS,  # noqa: E402
-                           blank_row, param_coerce, spec_addr)
+from x32sim.params import (CH_EQ_ADDR, CH_EXTRA_ADDR, CH_PARAM_SPECS,  # noqa: E402
+                           PARAM_SPECS, SEND_PARAM_SPECS, blank_row,
+                           param_coerce, param_from_wire, param_wire, send_pack,
+                           send_unpack, spec_addr)
 from x32sim.presets import _recall_instant, _snap_group_items_locked  # noqa: E402
-from x32sim.state import STATE, match_address, set_value, value_reply  # noqa: E402
+from x32sim.state import STATE, get_value, match_address, set_value, value_reply  # noqa: E402
 
 print("== A1. 登记表自洽 ==")
-check("登记表 28 项 (16 既有 + 12 新)", len(PARAM_SPECS) == 28, str(len(PARAM_SPECS)))
-check("新增通道参数 12 项", len(CH_PARAM_SPECS) == 12, str(len(CH_PARAM_SPECS)))
+check("登记表 57 项 (16 既有 + 38 通道 + 3 发送)",
+      len(PARAM_SPECS) == 57, str(len(PARAM_SPECS)))
+check("通道参数 38 项 (12 前置/门 + 9 动态 + 17 均衡)",
+      len(CH_PARAM_SPECS) == 38, str(len(CH_PARAM_SPECS)))
+check("发送参数 3 项 (电平/开关/取点)",
+      len(SEND_PARAM_SPECS) == 3, str(len(SEND_PARAM_SPECS)))
 kinds = [sp.kind for sp in PARAM_SPECS.values()]
 check("kind 无重复", len(kinds) == len(set(kinds)))
 main_specs = [sp for sp in PARAM_SPECS.values() if sp.group == "main"]
@@ -61,14 +67,24 @@ check("spec_addr(main_fader,0) 直接给地址",
       spec_addr(PARAM_SPECS["main_fader"], 0))
 check("spec_addr(ch_trim,7) 补零",
       spec_addr(PARAM_SPECS["ch_trim"], 7) == "/ch/07/preamp/trim")
-ch_addrs = {(sp.osc % 1) for sp in CH_PARAM_SPECS}
-check("12 个新地址互不重复", len(ch_addrs) == 12, str(len(ch_addrs)))
-check("地址索引覆盖 12 个 (seg2,seg3)",
-      sum(len(v) for v in CH_EXTRA_ADDR.values()) == 12)
+ch_addrs = {spec_addr(sp, 1) for sp in CH_PARAM_SPECS}
+check("38 个通道参数地址互不重复", len(ch_addrs) == 38, str(len(ch_addrs)))
+# 4 段地址 (dyn/gate/preamp…) 走 CH_EXTRA_ADDR; EQ 段落是 5 段, 单独一张表
+check("4 段地址索引 22 项 (ch 表 38 项 - 16 个 EQ 段落)",
+      sum(len(v) for v in CH_EXTRA_ADDR.values()) == 22,
+      str(sum(len(v) for v in CH_EXTRA_ADDR.values())))
+check("EQ 5 段地址索引 16 项",
+      sum(len(v) for v in CH_EQ_ADDR.values()) == 16,
+      str(sum(len(v) for v in CH_EQ_ADDR.values())))
+check("发送地址是二维 (两个 %02d)",
+      all(sp.osc.count("%02d") == 2 for sp in SEND_PARAM_SPECS))
+check("send_pack/send_unpack 互逆",
+      all(send_unpack(send_pack(c, b)) == (c, b)
+          for c in (1, 7, 32) for b in (1, 9, 16)))
 
 print("== A2. 出厂行 (blank_row) ==")
 row = blank_row("ch")
-check("ch 行 14 个字段 (推子/静音 + 12 参数)", len(row) == 14, str(sorted(row)))
+check("ch 行 40 个字段 (推子/静音 + 38 参数)", len(row) == 40, str(len(row)))
 check("推子出厂 0.75 / 静音出厂 1", row["fader"] == 0.75 and row["on"] == 1)
 check("增益出厂 0 dB / 门限出厂 -40 dB / 门范围 15 dB",
       row["trim"] == 0.0 and row["gate_thr"] == -40.0 and row["gate_range"] == 15.0)
@@ -216,12 +232,19 @@ import re  # noqa: E402
 _js = open(os.path.join(BASE, "web", "app.js"), encoding="utf-8").read()
 _m = re.search(r"const CH_PARAM_UI=\[(.*?)\n\];", _js, re.S)
 _block = _m.group(1) if _m else ""
+# 下拉档位可能抽成具名常量 (EQ_TYPES)。不先内联, `opts:EQ_TYPES` 会被解析成
+# "没有档位", 于是下面的档位校验变成恒真的假绿。
+for _nm in set(re.findall(r"opts:([A-Z][A-Z0-9_]*)", _block)):
+    _cm = re.search(r"const " + _nm + r"=(\[.*?\]);", _js, re.S)
+    if _cm:
+        _block = _block.replace("opts:" + _nm, "opts:" + _cm.group(1))
 _entries = {}
 for _part in _block.split("{f:'")[1:]:
     _entries[_part.split("'", 1)[0]] = _part
-check("前端控件表解析到 12 项", len(_entries) == 12, str(sorted(_entries)))
+check("前端控件表解析到 %d 项" % len(CH_PARAM_SPECS),
+      len(_entries) == len(CH_PARAM_SPECS), str(sorted(_entries)))
 check("字段名与后端完全一致且同序",
-      re.findall(r"\{f:'([a-z_]+)'", _block) == [sp.field for sp in CH_PARAM_SPECS],
+      re.findall(r"\{f:'([a-z0-9_]+)'", _block) == [sp.field for sp in CH_PARAM_SPECS],
       str(list(_entries)))
 
 
@@ -249,12 +272,141 @@ for sp in CH_PARAM_SPECS:
         dv = _jnum("dv", part)
         check("前端 %s 默认值与后端一致 (%g)" % (sp.field, sp.default),
               dv is not None and abs(dv - sp.default) < 1e-9, str(dv))
+        # 显示精度: 两边必须一致, 且不能比档位粗 (step=0.25 配 dec=1 会把
+        # 3.75 dB 显示成 3.8, 键盘精调还会预填 3.8 —— 静默丢精度的典型)
+        dc = _jnum("dec", part)
+        check("前端 %s 显示精度与后端一致 (dec=%d)" % (sp.field, sp.dec),
+              dc is not None and int(dc) == int(sp.dec), str(dc))
+        if sp.step and sp.step < 1:
+            need = 0
+            while need < 6 and abs(round(sp.step * 10 ** need) - sp.step * 10 ** need) > 1e-9:
+                need += 1
+            check("后端 %s 的 dec 够表示 %.2f 的档位" % (sp.field, sp.step),
+                  sp.dec >= need, "dec=%d 但需要 %d 位" % (sp.dec, need))
+    elif sp.vtype == "int" and sp.labels:
+        # 索引型枚举 (EQ 类型 0..5): 后端存索引、带名字标签; 前端应是同序下拉
+        opts = [float(v) for v in re.findall(r"\[(-?[\d.]+),'", part)]
+        check("前端 %s 是 %d 档下拉 (索引型枚举)" % (sp.field, len(sp.labels)),
+              opts == [float(i) for i in range(len(sp.labels))],
+              "%s vs %d 档" % (opts, len(sp.labels)))
     else:
         # bool 型: 要么两态按钮, 要么 0/1 两档下拉 —— ins_pos 用 PRE/POST 下拉
         # 更可读 (后端仍按 bool 存 0/1), 所以两种形态都算对。
         two = ([float(v) for v in re.findall(r"\[(-?[\d.]+),'", part)] == [0.0, 1.0])
         check("前端 %s 是两态控件 (bool 或 0/1 枚举)" % sp.field,
               "t:'bool'" in part or two, part[:60])
+
+print("== A9. 二维发送 / 索引型枚举 / 反向对数 ==")
+# dyn/ratio: 线上是 0..11 的索引, 本地存比值。两个方向都必须对得上, 否则
+# "本地 4:1、真台 5:1"这种静默改值会一直藏着。
+_rs = PARAM_SPECS["ch_dyn_ratio"]
+check("ratio 本地 4.0 → 线上索引 6", param_wire(_rs, 4.0) == 6, str(param_wire(_rs, 4.0)))
+check("ratio 线上索引 6 → 本地 4.0", param_from_wire(_rs, 6) == 4.0,
+      str(param_from_wire(_rs, 6)))
+check("ratio 索引全部可往返",
+      all(param_wire(_rs, param_from_wire(_rs, i)) == i for i in range(12)))
+check("ratio 非枚举值按最近档吸附 (6.5 → 7.0)", param_coerce("ch_dyn_ratio", 6.5) == 7.0,
+      str(param_coerce("ch_dyn_ratio", 6.5)))
+check("ratio 平局取小的一侧 (6.0 → 5.0, 只要确定就行)",
+      param_coerce("ch_dyn_ratio", 6.0) == 5.0, str(param_coerce("ch_dyn_ratio", 6.0)))
+check("ratio 越界索引按字面值处理 (99 → 100)", param_from_wire(_rs, 99) == 100.0,
+      str(param_from_wire(_rs, 99)))
+check("hpslope 仍是字面值枚举 (不走索引)",
+      param_wire(PARAM_SPECS["ch_hpf_slope"], 18) == 18,
+      str(param_wire(PARAM_SPECS["ch_hpf_slope"], 18)))
+
+# EQ 的 Q 是 logf[10,0.3,72]: 递减表, 但 lo/hi 写自然上下界
+_q = PARAM_SPECS["ch_eq1_q"]
+check("EQ Q 量程是 0.3..10 (自然上下界)",
+      _q.lo == 0.3 and _q.hi == 10.0 and _q.logdesc, "%r %r" % (_q.lo, _q.hi))
+check("EQ Q 超上限钳到 10", param_coerce("ch_eq1_q", 50.0) == 10.0)
+check("EQ Q 超下限钳到 0.3", abs(param_coerce("ch_eq1_q", 0.01) - 0.3) < 1e-9)
+check("EQ Q 量化后可往返",
+      param_coerce("ch_eq1_q", param_coerce("ch_eq1_q", 2.0))
+      == param_coerce("ch_eq1_q", 2.0))
+check("EQ 频率按 201 对数档 (20k 往返不变)",
+      abs(param_coerce("ch_eq1_f", 20000.0) - 20000.0) < 1e-6)
+check("EQ 增益按 0.25 dB 档", param_coerce("ch_eq1_g", 3.3) == 3.25,
+      str(param_coerce("ch_eq1_g", 3.3)))
+check("EQ 类型索引 0..5, 越界钳住",
+      param_coerce("ch_eq1_type", -3) == 0 and param_coerce("ch_eq1_type", 9) == 5)
+
+# 二维地址: 通配符要能同时作用于两个位置
+check("单发送 /ch/01/mix/05/level → (send_level, pack(1,5))",
+      match_address("/ch/01/mix/05/level") == [("send_level", send_pack(1, 5))],
+      str(match_address("/ch/01/mix/05/level")))
+check("通道通配 /ch/*/mix/03/on → 32 条",
+      len(match_address("/ch/*/mix/03/on")) == 32)
+# ⚠️ 守护用例: 取点地址末段是 **type**, 字段名却叫 **tap**。曾按字段名建索引,
+#    于是 /ch/*/mix/*/type 一条都匹配不上 —— 不报错, 只回空包, 只能靠这里抓。
+# 取点只对**奇数** Bus 定义 (协议表), 32 通道 × 8 对 = 256
+check("双通配 /ch/*/mix/*/type → 256 条 (取点只在奇数 Bus)",
+      len(match_address("/ch/*/mix/*/type")) == 256,
+      str(len(match_address("/ch/*/mix/*/type"))))
+check("发送电平仍是 32×16 = 512 条",
+      len(match_address("/ch/*/mix/*/level")) == 512,
+      str(len(match_address("/ch/*/mix/*/level"))))
+check("取点单地址 → (send_tap, pack(2,11))",
+      match_address("/ch/02/mix/11/type") == [("send_tap", send_pack(2, 11))],
+      str(match_address("/ch/02/mix/11/type")))
+# 取点枚举按官方协议 {<-EQ, EQ->, PRE, POST, GRP} —— 5 档, 索引 0..4
+_tap = PARAM_SPECS["send_tap"]
+check("取点枚举 5 档且是官方标签",
+      _tap.labels == ("<-EQ", "EQ->", "PRE", "POST", "GRP") and _tap.hi == 4.0,
+      str(_tap.labels))
+check("取点越界按 4 (GRP) 钳", param_coerce("send_tap", 9) == 4,
+      str(param_coerce("send_tap", 9)))
+# 成对共享: Bus02 的取点就是 Bus01 的, 地址也落到 01
+check("Bus02 取点地址落到 Bus01 (成对共享)",
+      spec_addr(_tap, send_pack(3, 2)) == "/ch/03/mix/01/type",
+      spec_addr(_tap, send_pack(3, 2)))
+check("奇数 Bus 地址原样", spec_addr(_tap, send_pack(3, 5)) == "/ch/03/mix/05/type",
+      spec_addr(_tap, send_pack(3, 5)))
+set_value("send_tap", send_pack(4, 6), 2, source="action")
+check("写 Bus06 的取点 = 写 Bus05 (同一份真相)",
+      get_value("send_tap", send_pack(4, 6)) == 2
+      and get_value("send_tap", send_pack(4, 5)) == 2,
+      "%r %r" % (get_value("send_tap", send_pack(4, 6)),
+                 get_value("send_tap", send_pack(4, 5))))
+check("偶数 Bus 地址查询也能命中奇数那一格",
+      match_address("/ch/04/mix/06/type") == [("send_tap", send_pack(4, 5))],
+      str(match_address("/ch/04/mix/06/type")))
+
+check("发送地址补零且是二维",
+      spec_addr(PARAM_SPECS["send_level"], send_pack(3, 12)) == "/ch/03/mix/12/level",
+      spec_addr(PARAM_SPECS["send_level"], send_pack(3, 12)))
+check("旧行为未受影响: /ch/05/mix/fader 仍是通道推子",
+      match_address("/ch/05/mix/fader") == [("ch_fader", 5)])
+
+# 发送不进 /api/state (512 行会把状态包撑爆)
+from x32sim.snapshot import snapshot_state  # noqa: E402
+_sn = snapshot_state()
+check("快照里没有 send 段 (512 行不进热路径)", "send" not in _sn,
+      str([k for k in _sn if k == "send"]))
+check("快照 ch 行已带动态/均衡字段",
+      "dyn_thr" in _sn["ch"]["1"] and "eq3_q" in _sn["ch"]["1"])
+
+print("== A10. 控台量程覆盖 (trim ±12 / ±18) ==")
+# 手册写 [-12,12] (旧固件), 实测 1.15+ 是 [-18,18]。默认按 18, 老固件用
+# --trim-range 12 收窄。收窄必须在**写入层**生效 —— 否则界面 15 dB、真台 12 dB。
+from x32sim.params import active_limits, set_param_limits  # noqa: E402
+check("默认量程 ±18 (现代固件)", param_coerce("ch_trim", 15) == 15.0
+      and param_coerce("ch_trim", -15) == -15.0)
+set_param_limits({"ch_trim": (-12.0, 12.0)})
+check("收窄到 ±12 后越界值被钳", param_coerce("ch_trim", 15) == 12.0
+      and param_coerce("ch_trim", -15) == -12.0,
+      "%r %r" % (param_coerce("ch_trim", 15), param_coerce("ch_trim", -15)))
+check("收窄后仍按 0.25 dB 档量化", param_coerce("ch_trim", 3.3) == 3.25)
+check("收窄只作用于 trim, 不动别的参数",
+      param_coerce("ch_eq1_g", 12.0) == 12.0
+      and param_coerce("ch_dyn_mgain", 24.0) == 24.0)
+check("active_limits 如实反映当前量程", active_limits("ch_trim") == (-12.0, 12.0))
+# 状态层也走同一套: 写 15 落库就是 12, 界面不会显示台子做不到的值
+set_value("ch_trim", 2, 15.0, source="action")
+check("状态层同样被收窄 (写 15 落 12)", get_value("ch_trim", 2) == 12.0,
+      str(get_value("ch_trim", 2)))
+set_param_limits({})
+check("恢复默认后重新接受 15", param_coerce("ch_trim", 15) == 15.0)
 
 _persist.save_user_config = _orig_save
 
@@ -294,6 +446,14 @@ def post(path, data):
 
 def state():
     return json.loads(urllib.request.urlopen(WEB + "/api/state", timeout=8).read())
+
+
+def get_json(path):
+    """GET 一个小端点 (/api/sends 这类不进 /api/state 的按需数据)。"""
+    try:
+        return json.loads(urllib.request.urlopen(WEB + path, timeout=8).read())
+    except urllib.error.HTTPError as e:
+        return {"http": e.code}
 
 
 def osc_get(addr):
@@ -423,7 +583,7 @@ check("回归低切频率回预设值 (~200, 101 对数档)",
 print("== B8. /api/state 形状 ==")
 s = state()
 row = s["ch"]["1"]
-check("ch 行 14 个字段", len(row) == 14, str(sorted(row)))
+check("ch 行 40 个字段", len(row) == 40, str(len(row)))
 check("on 是 int / fader 是 float (JSON 形状未变)",
       isinstance(row["on"], int) and not isinstance(row["on"], bool)
       and isinstance(row["fader"], float))
@@ -431,6 +591,105 @@ check("trim 是 float / 斜率是 int",
       isinstance(row["trim"], float) and isinstance(row["hpf_slope"], int))
 check("bus 行仍只有 2 个字段", len(s["bus"]["1"]) == 2, str(sorted(s["bus"]["1"])))
 check("main 行只有推子/静音 (无 %02d 那套)", len(s["main"]) == 2, str(sorted(s["main"])))
+
+print("== B8b. 动态 / 均衡 / 发送 (端到端) ==")
+# 动态: ratio 线上是索引 —— 这是本轮最容易"看起来对、实际错一档"的地方
+rpc("/ch/04/dyn/ratio", 6)
+got = osc_get("/ch/04/dyn/ratio")
+check("dyn/ratio 线上发 6 时回包也是 6 (索引不跑偏)", got == 6, str(got))
+st = state()
+check("dyn/ratio 本地存比值 4.0", abs(st["ch"]["4"]["dyn_ratio"] - 4.0) < 1e-9,
+      str(st["ch"]["4"].get("dyn_ratio")))
+r = post("/api/set", {"kind": "ch", "param": "dyn_ratio", "idx": 4, "value": 7.0})
+st = state()
+check("API 写 7.0 (比值) 后本地是 7.0",
+      r.get("ok") and abs(st["ch"]["4"]["dyn_ratio"] - 7.0) < 1e-9,
+      str(st["ch"]["4"].get("dyn_ratio")))
+check("API 写 7.0 后线上是索引 8", osc_get("/ch/04/dyn/ratio") == 8,
+      str(osc_get("/ch/04/dyn/ratio")))
+
+rpc("/ch/04/dyn/thr", -18.3)
+st = state()
+check("dyn/thr 按 0.5 dB 档量化 (-18.3→-18.5)",
+      abs(st["ch"]["4"]["dyn_thr"] + 18.5) < 1e-9, str(st["ch"]["4"].get("dyn_thr")))
+rpc("/ch/04/dyn/on", 1)
+check("dyn_on 开关写入", state()["ch"]["4"]["dyn_on"] == 1)
+
+# 均衡: 5 段地址 + 反向 Q
+rpc("/ch/04/eq/2/g", 3.3)
+check("EQ 段落增益按 0.25 dB 档", abs(state()["ch"]["4"]["eq2_g"] - 3.25) < 1e-9,
+      str(state()["ch"]["4"].get("eq2_g")))
+check("EQ 段落增益回包地址正确", osc_get("/ch/04/eq/2/g") is not None)
+rpc("/ch/04/eq/3/f", 1000)
+f3 = state()["ch"]["4"]["eq3_f"]
+check("EQ 频率 1k 附近 (对数档)", abs(f3 - 1000) / 1000 < 0.05, str(f3))
+rpc("/ch/04/eq/1/q", 0.5)
+q1 = state()["ch"]["4"]["eq1_q"]
+check("EQ Q 0.5 附近 (递减对数表)", abs(q1 - 0.5) < 0.06, str(q1))
+rpc("/ch/04/eq/on", 1)
+check("EQ 总开关", state()["ch"]["4"]["eq_on"] == 1)
+
+# 发送: 二维目标, 走 POST 的 bus 字段 + 独立 GET
+r = post("/api/set", {"kind": "send", "param": "send_level", "idx": 6, "bus": 3,
+                      "value": 0.42})
+check("API 写发送电平 CH06→Bus03", r.get("ok"), str(r))
+r = post("/api/set", {"kind": "send", "param": "send_on", "idx": 6, "bus": 3, "value": 1})
+check("API 写发送开关", r.get("ok"), str(r))
+r = post("/api/set", {"kind": "send", "param": "send_tap", "idx": 6, "bus": 3, "value": 2})
+check("API 写发送取点", r.get("ok"), str(r))
+r = post("/api/set", {"kind": "send", "param": "send_level", "idx": 6, "bus": 99,
+                      "value": 0.5})
+check("Bus 越界给 400 而不是静默跳过", r.get("ok") is False, str(r))
+sd = get_json("/api/sends?ch=6")
+row3 = ((sd.get("sends") or {}).get("3") or {})
+check("GET /api/sends 回 CH06→Bus03 的三个值",
+      abs((row3.get("level") or 0) - 0.42) < 1e-9 and row3.get("on") == 1
+      and row3.get("tap") == 2, str(row3))
+check("GET /api/sends 回满 16 个 Bus", len(sd.get("sends") or {}) == 16,
+      str(len(sd.get("sends") or {})))
+check("OSC 5 段地址与 API 写的是同一个格",
+      osc_get("/ch/06/mix/03/level") is not None
+      and abs(osc_get("/ch/06/mix/03/level") - 0.42) < 1e-4,   # 线上 float32
+      str(osc_get("/ch/06/mix/03/level")))
+check("OSC 读发送取点: type 地址就是 tap 那一格",
+      osc_get("/ch/06/mix/03/type") == 2, str(osc_get("/ch/06/mix/03/type")))
+rpc("/ch/06/mix/04/level", 0.25)
+sd = get_json("/api/sends?ch=6")
+check("OSC 写 CH06→Bus04 后 API 能看到",
+      abs(((sd.get("sends") or {}).get("4") or {}).get("level", 0) - 0.25) < 1e-9,
+      str((sd.get("sends") or {}).get("4")))
+
+# 卡片: 发送目标带 bus
+r = post("/api/cardadd", {"card": {"name": "ZZ发送卡", "actions": [
+    {"kind": "set", "target": {"group": "send", "param": "send_level",
+                               "id": 7, "bus": 5}, "value": 0.66}]}})
+cid2 = r.get("id")
+card2 = next((c for c in state()["cards"] if c.get("id") == cid2), None)
+tg = ((card2 or {}).get("actions") or [{}])[0].get("target") or {}
+check("卡片保留 (id=通道, bus=Bus) 而不是打包值",
+      tg.get("id") == 7 and tg.get("bus") == 5 and abs(
+          ((card2 or {}).get("actions") or [{}])[0].get("value", 0) - 0.66) < 1e-9,
+      str(tg))
+post("/api/show", {"id": cid2})
+time.sleep(0.4)
+sd = get_json("/api/sends?ch=7")
+check("执行后 CH07→Bus05 电平 0.66",
+      abs(((sd.get("sends") or {}).get("5") or {}).get("level", 0) - 0.66) < 1e-9,
+      str((sd.get("sends") or {}).get("5")))
+
+# 预设: 发送按通道抓取, 只还原范围内的
+r = post("/api/snapshot", {"action": "save", "name": "ZZ发送预设",
+                           "scope": {"groups": ["send"], "params": ["send_level"],
+                                     "indices": {"send": [6]}}})
+sid = r.get("id")
+check("发送预设按通道展开 16 个 Bus", r.get("ok") and r.get("count") == 16, str(r))
+post("/api/set", {"kind": "send", "param": "send_level", "idx": 6, "bus": 3, "value": 0.9})
+r = post("/api/snapshot", {"action": "recall", "id": sid, "seconds": 0.4})
+time.sleep(0.8)
+sd = get_json("/api/sends?ch=6")
+check("回归把发送电平还原成 0.42",
+      abs(((sd.get("sends") or {}).get("3") or {}).get("level", 0) - 0.42) < 1e-9,
+      str((sd.get("sends") or {}).get("3")))
 
 print("== B9. 旧行为未回归 ==")
 rpc("/main/st/mix/fader", 0.8, reply=False)
@@ -448,10 +707,13 @@ check("ch09 静音 int 回包", got == 0 and isinstance(got, int), str(got))
 rpc("/ch/09/mix/on", 1, reply=False)
 
 # ---------- 清理 ----------
-for nm in ("ZZ参数卡",):
-    c = next((c for c in state()["cards"] if c["name"] == nm), None)
-    if c:
-        post("/api/carddel", {"id": c["id"]})
+# 按前缀清, 别写死名单: 上轮残留 + 本轮新增都得走同一条路径, 否则重跑一次
+# 就多一张僵尸卡, "清理完成"永远红。
+for _ in range(20):
+    c = next((c for c in state()["cards"] if c["name"].startswith("ZZ")), None)
+    if not c:
+        break
+    post("/api/carddel", {"id": c["id"]})
 for sp in [x for x in state()["snapshots"] if x["name"].startswith("ZZ")]:
     post("/api/snapshot", {"action": "delete", "id": sp["id"]})
 left = [c["name"] for c in state()["cards"] if c["name"].startswith("ZZ")]

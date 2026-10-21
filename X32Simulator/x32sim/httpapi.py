@@ -12,7 +12,7 @@ from .cards import SHOW_CARDS
 from .consts import FX_COUNT, NAME_COUNTS, NOTE_BEATS, SET_KINDMAP
 from .fx import FX_MODE_LABEL, FX_SYNC, FX_SYNC_LOCK, fx_set_param, fx_tap_apply, tap_register, tap_reset
 from .logbus import EVENTS, EVT_SEQ, log
-from .params import PARAM_SPECS
+from .params import PARAM_SPECS, SEND_BUS, send_pack, active_limits
 from .persist import CONFIG_PATH, ID_SEQ, clear_console, next_id, recall_last, save_user_config
 from .presets import AUTO_SNAPS, SNAPSHOTS, _recall_stop_current, preset_scope_text, recall_snapshot, save_snapshot, start_recall
 from .profiles import profile, set_profile
@@ -20,7 +20,7 @@ from .quickkeys import KEY_CFG, QUICK_KEYS, apply_key
 from .runtime import DEF_UDP_PORT, DEF_WEB_PORT, ENV_WEB_PORT, LAN_IP, PORT_CFG, UDP_PORT, WEB_PORT, ports_pending_restart, valid_port
 from .scan import scan_consoles
 from .snapshot import snapshot_state_safe
-from .state import STATE, compute_levels, set_name, set_value, target_exists
+from .state import STATE, compute_levels, get_value, set_name, set_value, target_exists
 from .timeline import SCHEDULES, _show_stop_current, cancel_schedule, run_show, schedule_card
 from .util import _finite
 from .webassets import PWA_ICON, PWA_MANIFEST, PWA_SERVICE_WORKER, WEB_PAGE
@@ -51,19 +51,36 @@ class WebHandler(BaseHTTPRequestHandler):
         return False
 
     def _send(self, code, ctype, body):
+        # 协商 gzip: 全量快照 43 KB, 压缩后约 5 KB —— 4G 上这是最直接的一笔。
+        # 只对 >512B 的响应压 (小包压了反而更大, 还多一次 CPU), 且尊重客户端声明。
+        enc = ""
+        if len(body) > 512 and "gzip" in (self.headers.get("Accept-Encoding") or ""):
+            try:
+                import gzip as _gzip
+                body = _gzip.compress(body, 6)
+                enc = "gzip"
+            except Exception:
+                enc = ""
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
-        # ⚠️ CSP: 本项目的 HTML 是内联 <script> + 内联 <style>，所以必须开
+        if enc:
+            self.send_header("Content-Encoding", enc)
+            # 同一 URL 对不支持的客户端要发明文, 缓存必须按这个头分桶
+            self.send_header("Vary", "Accept-Encoding")
+        # CSP 只对**文档**有意义。挂在每个 JSON 响应上纯属白背字节:
+        # 网页 250ms 轮询两个端点 → 8 次/秒 × 250 B ≈ 7 MB/h, 比响应体还贵。
+        # ⚠️ 本项目的 HTML 是内联 <script> + 内联 <style>, 所以必须开
         #    'unsafe-inline'（换成外部文件就能收得更紧）。加上 frame-ancestors /
         #    object-src / base-uri 堵住"外链页面 iframe 套本页"和"改 base 标签
         #    劫持相对路径"这两类常见利用。它与前端 esc() 是两道独立的闸。
-        self.send_header("Content-Security-Policy",
-                         "default-src 'self'; script-src 'self' 'unsafe-inline'; "
-                         "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
-                         "connect-src 'self'; frame-ancestors 'self'; "
-                         "object-src 'none'; base-uri 'self'")
+        if ctype.startswith("text/html"):
+            self.send_header("Content-Security-Policy",
+                             "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+                             "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+                             "connect-src 'self'; frame-ancestors 'self'; "
+                             "object-src 'none'; base-uri 'self'")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         try:
@@ -96,6 +113,26 @@ class WebHandler(BaseHTTPRequestHandler):
                 log("STATE 快照含非有限数 (%s)，已降级为空快照" % e)
                 body = b"{}"
             self._send(200, "application/json; charset=utf-8", body)
+        elif path == "/api/sends":
+            # 发送 (通道 → 16 个 Bus) 单独取: 512 行 × 3 字段放不进 /api/state,
+            # 那会把刚结清的 4G 流量账又借回来。界面点开"发送"页时才拉一次。
+            try:
+                qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                ch = int(qs.get("ch", ["1"])[0])
+            except (TypeError, ValueError):
+                ch = 1
+            ch = min(max(ch, 1), 32)
+            row = {}
+            for bus in range(1, SEND_BUS + 1):
+                i = send_pack(ch, bus)
+                row[str(bus)] = {
+                    "level": get_value("send_level", i),
+                    "on": int(get_value("send_on", i) or 0),
+                    "tap": int(get_value("send_tap", i) or 0),
+                }
+            self._send(200, "application/json; charset=utf-8",
+                       json.dumps({"ch": ch, "sends": row},
+                                  allow_nan=False).encode("utf-8"))
         elif path == "/api/meters":
             # 电平单独取: 它每 tick 都变, 不能进 /api/state 的内容指纹,
             # 否则"没变更"永远命中不了。旧 /api/state 仍带 meters (App 兼容)。
@@ -103,9 +140,13 @@ class WebHandler(BaseHTTPRequestHandler):
                        json.dumps({"meters": compute_levels()},
                                   allow_nan=False).encode("utf-8"))
         elif path == "/api/info":
+            # trimRange: 控台实际接受的数字增益量程 (12=旧固件 / 18=新固件)。
+            # 界面用它设滑块范围 —— 不让用户拖到 18 再被服务端弹回 12。
+            _lim = active_limits("ch_trim")
             self._send(200, "application/json; charset=utf-8", json.dumps({
                 "lanIp": LAN_IP[0], "udpPort": UDP_PORT[0], "webPort": WEB_PORT[0],
                 "lanUrl": "http://%s:%d" % (LAN_IP[0], WEB_PORT[0]),
+                "trimRange": abs(_lim[1]) if _lim else 18,
             }).encode("utf-8"))
         elif path == "/api/scan":
             # 局域网发现: 广播 /xinfo 找真台 (X32 官方发现指令), 无需手填 IP
@@ -202,6 +243,19 @@ class WebHandler(BaseHTTPRequestHandler):
                 self._send(400, "application/json",
                            b'{"ok":false,"error":"bad idx"}')
                 return
+            if grp == "send":
+                # 发送是二维目标: idx=通道, bus=Bus, 落库键 = send_pack。
+                # 不接受"直接传打包值"—— 512 这种数字对用户没有意义, 也容易越界。
+                try:
+                    bus = int(data.get("bus", 0))
+                except (TypeError, ValueError):
+                    bus = 0
+                if not (1 <= bus <= SEND_BUS and 1 <= idx <= 32):
+                    self._send(400, "application/json", json.dumps(
+                        {"ok": False, "error": "发送目标应为 通道 1-32 + Bus 1-%d"
+                                               % SEND_BUS}).encode("utf-8"))
+                    return
+                idx = send_pack(idx, bus)
             if not target_exists(k, idx):
                 self._send(400, "application/json",
                            json.dumps({"ok": False,
@@ -241,6 +295,14 @@ class WebHandler(BaseHTTPRequestHandler):
                     idx = int(it.get("idx", 0))
                 except (TypeError, ValueError):
                     continue
+                if it.get("kind") == "send":
+                    try:
+                        bus = int(it.get("bus", 0))
+                    except (TypeError, ValueError):
+                        continue
+                    if not (1 <= bus <= SEND_BUS and 1 <= idx <= 32):
+                        continue
+                    idx = send_pack(idx, bus)
                 if not target_exists(k, idx):
                     continue      # 越界条目直接跳过，applied 计数会反映出来
                 set_value(k, idx, it.get("value"))
