@@ -12,7 +12,7 @@ from .cards import SHOW_CARDS
 from .consts import FX_COUNT, NAME_COUNTS, NOTE_BEATS, SET_KINDMAP
 from .fx import FX_MODE_LABEL, FX_SYNC, FX_SYNC_LOCK, fx_set_param, fx_tap_apply, tap_register, tap_reset
 from .logbus import EVENTS, EVT_SEQ, log
-from .params import PARAM_SPECS, SEND_BUS, send_pack, active_limits
+from .params import PARAM_SPECS, SEND_BUS, send_pack, active_limits, unverified_kinds
 from .persist import CONFIG_PATH, ID_SEQ, clear_console, next_id, recall_last, save_user_config
 from .presets import AUTO_SNAPS, SNAPSHOTS, _recall_stop_current, preset_scope_text, recall_snapshot, save_snapshot, start_recall
 from .profiles import profile, set_profile
@@ -20,7 +20,7 @@ from .quickkeys import KEY_CFG, QUICK_KEYS, apply_key
 from .runtime import DEF_UDP_PORT, DEF_WEB_PORT, ENV_WEB_PORT, LAN_IP, PORT_CFG, UDP_PORT, WEB_PORT, ports_pending_restart, valid_port
 from .scan import scan_consoles
 from .snapshot import snapshot_state_safe
-from .state import STATE, compute_levels, get_value, set_name, set_value, target_exists
+from .state import STATE, XREMOTE_SNAPSHOT, compute_levels, get_value, set_name, set_value, target_exists
 from .timeline import SCHEDULES, _show_stop_current, cancel_schedule, run_show, schedule_card
 from .util import _finite
 from .webassets import PWA_ICON, PWA_MANIFEST, PWA_SERVICE_WORKER, WEB_PAGE
@@ -143,10 +143,17 @@ class WebHandler(BaseHTTPRequestHandler):
             # trimRange: 控台实际接受的数字增益量程 (12=旧固件 / 18=新固件)。
             # 界面用它设滑块范围 —— 不让用户拖到 18 再被服务端弹回 12。
             _lim = active_limits("ch_trim")
+            # calibration.unverified: 出厂值是**推断值**的参数清单。
+            # 不把假设当事实 —— 界面可以据此显示"未标定"角标, 核对工具据此逐条比对。
+            # 只回 kind 列表 (不回 note), 否则 /api/info 会被 26 条注释撑到 5KB。
+            _unv = [sp.kind for sp in unverified_kinds()]
             self._send(200, "application/json; charset=utf-8", json.dumps({
                 "lanIp": LAN_IP[0], "udpPort": UDP_PORT[0], "webPort": WEB_PORT[0],
                 "lanUrl": "http://%s:%d" % (LAN_IP[0], WEB_PORT[0]),
                 "trimRange": abs(_lim[1]) if _lim else 18,
+                "xremoteSnapshot": bool(XREMOTE_SNAPSHOT[0]),
+                "tapWire": PARAM_SPECS["send_tap"].enum_wire,
+                "calibration": {"count": len(_unv), "unverified": _unv},
             }).encode("utf-8"))
         elif path == "/api/scan":
             # 局域网发现: 广播 /xinfo 找真台 (X32 官方发现指令), 无需手填 IP

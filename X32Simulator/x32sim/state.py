@@ -9,8 +9,8 @@ import time
 from .consts import DEFAULT_NAMES, FADER_ADDR, FX_COUNT, KIND_LABEL, ON_ADDR, REVERB_DEFAULTS
 from .kinds import fx_par_kind, fx_par_num, kind_group
 from .logbus import EVENTS, EVT_SEQ, log
-from .osc import OscMsg, encode_message
-from .params import CH_EQ_ADDR, CH_EXTRA_ADDR, PARAM_SPECS, SEND_BUS, SEND_BY_SEG, blank_row, param_coerce, param_wire, send_pack, send_unpack  # noqa: E501
+from .osc import OscMsg, encode_bundle, encode_message
+from .params import CH_DEEP_ADDR, CH_EQ_ADDR, CH_EXTRA_ADDR, PARAM_SPECS, SEND_BUS, SEND_BY_SEG, blank_row, level_db, level_from_db, param_coerce, param_wire, send_pack, send_unpack  # noqa: E501
 from .profiles import addr_for_write, profile
 from .runtime import MAIN_SOCK
 from .util import _clamp01, _finite, _truthy
@@ -61,26 +61,15 @@ class MixerState:
         self.names = dict(DEFAULT_NAMES)
 
     def fader_to_db(self, f: float) -> float:
-        if f <= 0.0:
-            return -90.0
-        if f >= 0.75:
-            return (f - 0.75) / 0.25 * 10.0
-        # 历史 bug：此处曾有 `if f <= 0.001: return -90.0`，把 -57.5dB 以下的整段
-        # 塌陷成 -∞，导致 -60dB 无法往返（Android/Kotlin 端曾忠实照搬同一 bug）。
-        # 改为对下限做 clamp，保住低段分辨率。
-        return max(-90.0, 20.0 * math.log10(f / 0.75))
+        # 曲线定义搬到 params.level_db: 协议 4 段伪对数 (0.75→0dB, 0.5→-10,
+        # 0.25→-30, 0.0625→-60)。这里只做入口转发, 保证"界面 / 卡片 rel_db /
+        # DCA 级联 / 电平模拟"四处的 dB 全部同源。
+        return level_db(f)
 
 
 def db_to_fader(db: float) -> float:
-    """fader_to_db 的逆运算:-90..+10 dB → 0..1 推子行程"""
-    db = min(max(db, -90.0), 10.0)
-    if db <= -89.5:
-        return 0.0
-    if db >= 10.0:
-        return 1.0
-    if db >= 0.0:
-        return 0.75 + db / 10.0 * 0.25
-    return 0.75 * (10.0 ** (db / 20.0))
+    """fader_to_db 的逆运算:-90..+10 dB → 0..1 推子行程 (同一 4 段曲线)。"""
+    return level_from_db(db)
 
 STATE = MixerState()
 METER_SUBSCRIBERS = {}      # {(ip, port): 最后活跃时间}; /meters /subscribe /xremote 续期, 30 秒超时清理
@@ -156,6 +145,15 @@ def match_address(pattern: str):
                         hit = seg_match(segs[3], "%02d" % (bus + 1))
                     if hit:
                         results.append((sp.kind, send_pack(ch, bus)))
+        elif len(segs) == 5 and segs[0] == "ch" \
+                and (segs[2], segs[3], segs[4]) in CH_DEEP_ADDR:
+            # 侧链滤波器: /ch/01/gate/filter/on、/ch/01/dyn/filter/f …
+            # 与 EQ 同为五段但结构不同 (EQ 是 /eq/<段号>/<参数>), 用独立的表,
+            # 免得 /dyn/filter/f 被当成"EQ 第 4 段"去查而静默无回包。
+            for sp in CH_DEEP_ADDR[(segs[2], segs[3], segs[4])]:
+                for i in sorted(STATE.ch):
+                    if seg_match(segs[1], "%02d" % i):
+                        results.append((sp.kind, i))
         elif len(segs) == 4 and segs[0] == "bus" and segs[2] == "mix":
             kind = {"fader": "bus_fader", "on": "bus_on"}.get(segs[3])
             if kind:
@@ -424,11 +422,109 @@ def value_reply(kind, idx):
 PUSH_CACHE = {}      # (kind, idx) -> 上次推送的值; 状态变化推给订阅者 (真台 /xremote 行为)
 PUSH_KINDS = (list(FADER_ADDR.keys()) + list(ON_ADDR.keys()))
 
+# 每个订阅者"已经推过哪些键"。
+# 为什么不能只用 PUSH_CACHE（全局）: 它是"上次推给**任何**订阅者"的值。
+# 第二个客户端连上来时缓存已经填满、值也没变 → 它一个包都收不到，界面全 0；
+# 客户端 A 断开期间发生的变化，A 重连后同样补不回来。真台 /xremote 本来也
+# 只推变化（不做初始全量），所以这不算协议不一致，但**作为模拟器**，
+# 让新订阅者能自己对齐状态是刚需 —— 见 XREMOTE_SNAPSHOT 与 /subscribe。
+SUB_SEEN = {}        # addr -> set((kind, idx))
+XREMOTE_SNAPSHOT = [False]   # /xremote 首帧是否补一次全量（非真台行为，默认关）
+
+# /subscribe 的按地址周期订阅: addr -> {pattern: {rate, due, expire}}
+# 协议语义（Unofficial v4.06 / 官方 /subscribe）: 客户端说"我关心这个地址、
+# 按这个倍数回报"，服务端在 10 秒内周期性回值；rate 的单位是 50ms 的倍数。
+PATTERN_SUBS = {}
+PATTERN_LOCK = threading.Lock()
+SUB_TIMEOUT = 10.0
+
+
+def subscribe_client(addr):
+    """登记一个订阅者（/xremote、/subscribe、/meters 都走这里）。
+
+    返回 True 表示这是**首次**出现的来源 —— 调用方可以据此决定要不要补快照。
+    ⚠️ 以前三处各自 `METER_SUBSCRIBERS[addr] = time.time()`，SUB_SEEN 就没人建，
+       新订阅者第一次遍历时拿不到 seen 集合（表现为"有时补、有时不补"）。
+    """
+    with METER_LOCK:
+        first = addr not in METER_SUBSCRIBERS
+        METER_SUBSCRIBERS[addr] = time.time()
+        if first:
+            SUB_SEEN[addr] = set()
+        return first
+
+
+def unsubscribe_client(addr):
+    with METER_LOCK:
+        METER_SUBSCRIBERS.pop(addr, None)
+        SUB_SEEN.pop(addr, None)
+    with PATTERN_LOCK:
+        PATTERN_SUBS.pop(addr, None)
+
+
+def subscribe_pattern(addr, pattern, rate=1):
+    """按地址周期订阅（协议 /subscribe）。rate 单位 = 50ms 的倍数。"""
+    try:
+        rate = max(1, min(int(rate), 200))
+    except (TypeError, ValueError):
+        rate = 1
+    now = time.time()
+    with PATTERN_LOCK:
+        d = PATTERN_SUBS.setdefault(addr, {})
+        # due=now → 订阅后的第一轮立刻回一帧当前值，这正是"新客户端拿到初始值"
+        # 的标准做法（真台也是这样：/subscribe 之后马上就能收到当前值）。
+        d[pattern] = {"rate": rate * 0.05, "due": now, "expire": now + SUB_TIMEOUT}
+    return rate
+
+
+def unsubscribe_pattern(addr, pattern=None):
+    with PATTERN_LOCK:
+        if pattern is None:
+            PATTERN_SUBS.pop(addr, None)
+        else:
+            PATTERN_SUBS.get(addr, {}).pop(pattern, None)
+
+
+def _service_pattern_subs(sock):
+    """按 due 时间把订阅地址的当前值回给订阅者（10 秒无续期自动过期）。"""
+    now = time.time()
+    with PATTERN_LOCK:
+        due = []
+        for a, d in list(PATTERN_SUBS.items()):
+            for p, st in list(d.items()):
+                if now > st["expire"]:
+                    d.pop(p, None)
+                    continue
+                if now >= st["due"]:
+                    st["due"] = now + st["rate"]
+                    due.append((a, p))
+            if not d:
+                PATTERN_SUBS.pop(a, None)
+    for a, p in due:
+        matches = match_address(p)
+        replies = [r for r in (value_reply(k, i) for k, i in matches) if r is not None]
+        if not replies:
+            continue
+        try:
+            pkt = encode_message(replies[0]) if len(replies) == 1 \
+                else encode_bundle(replies)
+            sock.sendto(pkt, a)
+        except OSError:
+            pass
+
 
 def _push_state_diffs(sock, subscribers):
-    """每次 tick 对比缓存, 把发生变化的推子/静音推给订阅者 (模拟真台变更推送)。"""
+    """每次 tick 对比缓存, 把发生变化的推子/静音推给订阅者 (模拟真台变更推送)。
+
+    ⚠️ 两个易错点（都踩过）:
+      1. `PUSH_CACHE` 必须在**所有**订阅者都发完之后再更新。写在循环里的话，
+         第一个订阅者发完就把缓存改了，后面的订阅者算出来"没变化"→ 漏发。
+      2. 新订阅者（SUB_SEEN 里没有这个键）在 XREMOTE_SNAPSHOT 开启时要补一帧，
+         否则它只能等下一次真实变化 —— 界面在很长一段时间里是空的。
+    """
     sent = 0
     counts = profile().counts
+    snapshot = XREMOTE_SNAPSHOT[0]
     for kind in PUSH_KINDS:
         ids = [0] if kind.startswith("main_") else \
             range(1, counts.get(kind_group(kind), 0) + 1)
@@ -438,34 +534,58 @@ def _push_state_diffs(sock, subscribers):
                 continue
             key = (kind, i)
             old = PUSH_CACHE.get(key)
-            if old is not None and abs(old - v) < 1e-4:
-                continue
-            PUSH_CACHE[key] = v
-            reply = value_reply(kind, i)
-            if reply is None:      # 当前控台没有这个目标的地址 → 不推送
-                continue
-            pkt = encode_message(reply)
+            changed = old is None or abs(old - v) >= 1e-4
+            pkt = None
             for s in subscribers:
+                seen = SUB_SEEN.get(s)
+                if seen is None:
+                    seen = SUB_SEEN[s] = set()
+                if not changed and not (snapshot and key not in seen):
+                    continue
+                if pkt is None:
+                    reply = value_reply(kind, i)
+                    if reply is None:      # 当前控台没有这个目标的地址 → 不推送
+                        break
+                    pkt = encode_message(reply)
                 try:
                     sock.sendto(pkt, s)
                     sent += 1
                 except OSError:
                     pass
+                seen.add(key)
+            if changed:
+                PUSH_CACHE[key] = v
     return sent
 
 
 def meter_streamer(sock):
-    """每 150ms 向所有订阅者推送 /meters/1 blob + 台面变更推送; 30 秒无续期的订阅者自动剔除。"""
+    """50ms 基准循环: 电平与变更推送仍按 150ms (3 tick), /subscribe 按各自 rate。
+
+    为什么拆成 50ms 基准: /subscribe 的 rate 单位就是 50ms 的倍数, 用 150ms 的
+    循环去服务它, rate=1 只能做到 6.7 Hz, 与协议的 20 Hz 差三倍。
+    """
+    tick = 0
     while True:
-        time.sleep(0.15)
+        time.sleep(0.05)
+        tick += 1
         now = time.time()
         with METER_LOCK:
             stale = [s for s, ts in METER_SUBSCRIBERS.items() if now - ts > 30.0]
             for s in stale:
                 METER_SUBSCRIBERS.pop(s, None)
+                SUB_SEEN.pop(s, None)
             if stale:
                 log("METER 清理失活订阅者: %d 个" % len(stale))
             subscribers = list(METER_SUBSCRIBERS)
+        for s in stale:
+            with PATTERN_LOCK:
+                PATTERN_SUBS.pop(s, None)
+        try:
+            _service_pattern_subs(sock)
+        except Exception as e:
+            log("按地址订阅推送出错: %r" % e)
+        if tick % 3:            # 以下保持 150ms 一轮
+            continue
         if not subscribers:
             continue
         floats = compute_levels()

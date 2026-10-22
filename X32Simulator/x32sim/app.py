@@ -16,7 +16,7 @@ from .logbus import log
 from .osc import decode_packet
 from .oscsrv import handle
 from .persist import CONFIG_PATH, load_user_config
-from .params import set_param_limits
+from .params import set_enum_wire, set_param_limits
 from .profiles import profile
 from .runtime import DEF_WEB_PORT, ENV_WEB_PORT, LAN_IP, MAIN_SOCK, PORT_CFG, UDP_PORT, WEB_PORT, get_lan_ip, resolve_ports
 from .state import meter_streamer
@@ -66,7 +66,24 @@ def main():
     # 收到 ±12: 界面显示多少, 台子上就是多少, 不会出现"本地 15 / 真台 12"的静默差。
     parser.add_argument("--trim-range", type=float, default=None, metavar="DB",
                         help="数字增益量程 ±db (12=旧固件, 18=新固件; 默认按控台能力)")
+    # 真台 /xremote 只推变化, 不推初始全量；需要初始值的客户端应自己 GET 或 /subscribe。
+    # 这个开关是**非标准增强**, 默认关: 打开后新订阅者第一轮能收到当前全台快照,
+    # 便于自研客户端联调, 但不要依赖它 —— 上真台没有这个行为。
+    parser.add_argument("--xremote-snapshot", action="store_true",
+                        help="新订阅者首帧补一次全量 (非真台行为, 默认关)")
+    # 发送取点 (enum) 的线上形式。协议规定枚举可以用整数索引或名字符串发送,
+    # 真台两种都收; 回包形式随固件而异。默认索引; 若真台回字符串读不回来, 用 label。
+    parser.add_argument("--tap-wire", choices=("index", "label"), default="index",
+                        help="发送取点线上形式: index=整数(默认) / label=字符串")
     args = parser.parse_args()
+
+    if args.xremote_snapshot:
+        from .state import XREMOTE_SNAPSHOT
+        XREMOTE_SNAPSHOT[0] = True
+        log("订阅: 新订阅者首帧补全量 (非真台行为, 仅调试用)")
+    if args.tap_wire != "index":
+        _chg = set_enum_wire({"send_tap": args.tap_wire})
+        log("枚举线上形式: %s (真台若回字符串, 用这个对齐)" % (", ".join(_chg) or "无"))
 
     _register_sinks()          # 写出口就位后, 任何 set_value 都能被桥接看到
     # 量程覆盖必须在 load_user_config 之前装好: 否则配置文件里的旧值会按宽量程

@@ -56,7 +56,8 @@ class ParamSpec:
                  lo=0.0, hi=1.0, default=None, step=0.0, logsteps=0,
                  enum=None, label="", unit="", dec=2, labels=None,
                  push=False, preset=True, note="", nidx=1, dims=0,
-                 enum_wire="value", logdesc=False):
+                 enum_wire="value", logdesc=False, linsteps=0,
+                 unverified=False):
         self.kind = kind                  # 语义管道里的名字, 如 "ch_trim"
         self.group = group                # 台面分组 (STATE 的属性名), 如 "ch"
         self.field = field                # 行字典里的键, 如 "trim"
@@ -81,6 +82,16 @@ class ParamSpec:
         self.step = float(step)           # 线性档位 (真台旋钮是"有级"的)
         self.logsteps = int(logsteps)     # 对数档位数 (手册里的 logf [lo,hi,N])
         self.logdesc = bool(logdesc)      # True = 该对数表从 hi 递减到 lo (EQ 的 Q)
+        # linsteps: **线性等分档位数** (协议第三列的数字)。
+        #   · level 类型 161 档 → 值域按 f=k/160 等分 (k=0..160), 不是"等 dB";
+        #   · fader 类型 1024 档 → f=k/1023。
+        # 与 step 的区别: step 是"步进量", linsteps 是"点数", 后者才能避免
+        # 0.1 这类步长在浮点下的累积偏差 (161 档时 1/160 无法用十进制 step 表达)。
+        self.linsteps = int(linsteps)
+        # unverified: 出厂值/默认值是**推断值**, 公开资料里查不到, 尚未在真台核对。
+        # 单独一个布尔而不是靠 note 里写"需真机确认"—— 注释不会进接口, 前端和
+        # 核对工具都看不见; 布尔会进 /api/info, 让"假设"这件事在界面上可见。
+        self.unverified = bool(unverified)
         self.enum = tuple(enum) if enum else None
         self.label = label or kind        # 界面/日志用名
         self.unit = unit                  # 显示单位
@@ -122,6 +133,30 @@ for _g in _LEGACY_GROUPS:
 
 # ---- 新增: 输入通道 1-32 的参数 (官方 X32 Protocol Manual) ----------------
 # 按信号流顺序排：增益 → 反相 → 延时 → 低切 → 插入 → 门
+
+# 侧链源 (keysrc) 在协议里是 **int [0..64]**, 不是 enum:
+#   {OFF, In01..32, Aux1..6, USB L, USB R, Fx1L..Fx4R, Bus01..16}
+# 0 + 32 + 6 + 2 + 8 + 16 = 65 → 0..64。顺序即索引，官方表逐项一致。
+# ⚠️ 正因为它是 int 而不是 enum，真台**只接受整数**（不接受字符串 "Bus05"），
+#    所以这里只用 labels 做显示，不把 enum_wire 设成 label。
+_KEYS = (("OFF",)
+         + tuple("In%02d" % i for i in range(1, 33))
+         + tuple("Aux%d" % i for i in range(1, 7))
+         + ("USB L", "USB R")
+         + tuple("Fx%d%s" % (i, s) for i in range(1, 5) for s in ("L", "R"))
+         + tuple("Bus%02d" % i for i in range(1, 17)))
+assert len(_KEYS) == 65, "keysrc 枚举长度应为 65 (0..64), 实际 %d" % len(_KEYS)
+
+# 侧链滤波器类型: enum int[0..8]。前 4 档是固定斜率的高低通，后 5 档是
+# 「Keysolo (Solo/Q)」模式下的 Q 值。名称按官方表原样保留。
+_FILTER_TYPES = ("LC6", "LC12", "HC6", "HC12", "1.0", "2.0", "3.0", "5.0", "10.0")
+
+# 插入点目标: enum int[0..22] {OFF, FX1L..FX8R, AUX1..6}
+_INS_TARGETS = (("OFF",)
+                + tuple("FX%d%s" % (i, s) for i in range(1, 9) for s in ("L", "R"))
+                + tuple("AUX%d" % i for i in range(1, 7)))
+assert len(_INS_TARGETS) == 23, "insert/sel 枚举长度应为 23 (0..22), 实际 %d" % len(_INS_TARGETS)
+
 _CH_EXTRA = (
     ParamSpec("ch_trim", "ch", "trim", "/ch/%02d/preamp/trim",
               vtype="float", lo=-18.0, hi=18.0, default=0.0, step=0.25,
@@ -140,41 +175,115 @@ _CH_EXTRA = (
               vtype="bool", default=0, label="低切"),
     ParamSpec("ch_hpf_slope", "ch", "hpf_slope", "/ch/%02d/preamp/hpslope",
               vtype="int", lo=12, hi=24, default=12, enum=(12, 18, 24),
-              label="低切斜率", unit="dB/oct", dec=0,
+              label="低切斜率", unit="dB/oct", dec=0, unverified=True,
               note="手册 enum{12,18,24} 按字面值; 出厂默认需真机确认"),
     ParamSpec("ch_hpf_f", "ch", "hpf_f", "/ch/%02d/preamp/hpf",
               vtype="float", lo=20.0, hi=400.0, default=80.0, logsteps=101,
-              label="低切频率", unit="Hz", dec=0,
+              label="低切频率", unit="Hz", dec=0, unverified=True,
               note="手册 logf[20,400,101] Hz; 出厂默认频率需真机确认, "
                    "暂取人声常用 80 Hz"),
     ParamSpec("ch_ins_on", "ch", "ins_on", "/ch/%02d/insert/on",
               vtype="bool", default=0, label="插入"),
     ParamSpec("ch_ins_pos", "ch", "ins_pos", "/ch/%02d/insert/pos",
               vtype="bool", default=0, label="插入位置", labels=("PRE", "POST"),
+              unverified=True,
               note="enum{PRE,POST} → 0/1; 出厂位置需真机确认, 暂取 PRE"),
+    ParamSpec("ch_ins_sel", "ch", "ins_sel", "/ch/%02d/insert/sel",
+              vtype="int", lo=0, hi=22, default=0, dec=0, labels=_INS_TARGETS,
+              label="插入目标", preset=True, unverified=True,
+              note="enum int[0..22] {OFF, FX1L..FX8R, AUX1..6}; "
+                   "这是**插入点接到哪里** (与 ins_pos 的 PRE/POST 是两个维度); "
+                   "出厂值需真机确认, 暂取 OFF"),
     ParamSpec("ch_gate_on", "ch", "gate_on", "/ch/%02d/gate/on",
               vtype="bool", default=0, label="噪声门"),
     ParamSpec("ch_gate_thr", "ch", "gate_thr", "/ch/%02d/gate/thr",
               vtype="float", lo=-80.0, hi=0.0, default=-40.0, step=0.5,
-              label="门限", unit="dB", dec=1,
+              label="门限", unit="dB", dec=1, unverified=True,
               note="手册 linf[-80,0,0.5] dB; 出厂阈值需真机确认, 暂取 -40 dB"),
     ParamSpec("ch_gate_range", "ch", "gate_range", "/ch/%02d/gate/range",
               vtype="float", lo=3.0, hi=60.0, default=15.0, step=1.0,
-              label="门范围", unit="dB", dec=0,
+              label="门范围", unit="dB", dec=0, unverified=True,
               note="手册 linf[3,60,1] dB(正值=衰减量); 出厂值需真机确认"),
 )
 _SPECS.extend(_CH_EXTRA)
+
+# ---- 噪声门: 补齐剩下的 8 个旋钮 ----------------------------------------
+# 官方表 (通道 gate 组):
+#   mode    enum int[0..4] {EXP2, EXP3, EXP4, GATE, DUCK}
+#   attack  linf[0, 120, 1] ms
+#   hold    logf[0.02, 2000, 101] ms
+#   release logf[5, 4000, 101] ms
+#   keysrc  int[0..64]  (侧链源, 见 _KEYS)
+#   filter/on | filter/type | filter/f   (侧链滤波器: 5 段地址)
+# ⚠️ filter/* 是**五段地址** (/ch/01/gate/filter/on)，与 EQ 的
+#    /ch/01/eq/1/g 同深度，因此单独建 CH_DEEP_ADDR 表，不能塞进 CH_EXTRA_ADDR
+#    (那张表只认四段)。
+_GATE = (
+    ParamSpec("ch_gate_mode", "ch", "gate_mode", "/ch/%02d/gate/mode",
+              vtype="int", lo=0, hi=4, default=3, dec=0,
+              labels=("EXP2", "EXP3", "EXP4", "GATE", "DUCK"),
+              label="门类型", unverified=True,
+              note="enum int[0..4]; 索引即线上值; 出厂模式需真机确认, 暂取 GATE"),
+    ParamSpec("ch_gate_attack", "ch", "gate_attack", "/ch/%02d/gate/attack",
+              vtype="float", lo=0.0, hi=120.0, default=10.0, step=1.0,
+              label="门启动", unit="ms", dec=0, unverified=True,
+              note="linf[0,120,1] ms; 出厂值需真机确认, 暂取 10 ms"),
+    ParamSpec("ch_gate_hold", "ch", "gate_hold", "/ch/%02d/gate/hold",
+              vtype="float", lo=0.02, hi=2000.0, default=20.0, logsteps=101,
+              label="门保持", unit="ms", dec=1, unverified=True,
+              note="logf[0.02,2000,101] ms; 出厂值需真机确认, 暂取 20 ms"),
+    ParamSpec("ch_gate_release", "ch", "gate_release", "/ch/%02d/gate/release",
+              vtype="float", lo=5.0, hi=4000.0, default=200.0, logsteps=101,
+              label="门释放", unit="ms", dec=0, unverified=True,
+              note="logf[5,4000,101] ms; 出厂值需真机确认, 暂取 200 ms"),
+    ParamSpec("ch_gate_keysrc", "ch", "gate_keysrc", "/ch/%02d/gate/keysrc",
+              vtype="int", lo=0, hi=64, default=0, dec=0, labels=_KEYS,
+              label="门侧链源", unverified=True,
+              note="int[0..64] {OFF,In01..32,Aux1..6,USB L/R,Fx1L..Fx4R,Bus01..16}; "
+                   "**不是 enum** —— 真台只吃整数, 所以 labels 仅用于显示; "
+                   "出厂值需真机确认"),
+    ParamSpec("ch_gate_filter_on", "ch", "gate_filter_on",
+              "/ch/%02d/gate/filter/on",
+              vtype="bool", default=0, label="门侧链滤波", unverified=True,
+              note="出厂值需真机确认, 暂取关"),
+    ParamSpec("ch_gate_filter_type", "ch", "gate_filter_type",
+              "/ch/%02d/gate/filter/type",
+              vtype="int", lo=0, hi=8, default=0, dec=0, labels=_FILTER_TYPES,
+              label="门滤波类型", unverified=True,
+              note="enum int[0..8] {LC6,LC12,HC6,HC12,1.0,2.0,3.0,5.0,10.0}; "
+                   "后 5 档是 Keysolo(Solo/Q) 的 Q 值"),
+    ParamSpec("ch_gate_filter_f", "ch", "gate_filter_f",
+              "/ch/%02d/gate/filter/f",
+              vtype="float", lo=20.0, hi=20000.0, default=1000.0, logsteps=201,
+              label="门滤波频率", unit="Hz", dec=0, unverified=True,
+              note="logf[20,20000,201] Hz; 出厂值需真机确认, 暂取 1 kHz"),
+)
+_SPECS.extend(_GATE)
 
 # ---- 动态处理 (压缩/扩展) -------------------------------------------------
 # 地址/量程逐条取自 Behringer X32 Protocol Manual 与《Unofficial X32/M32 OSC
 # Remote Protocol》v4.06 —— 两者在 thr 上不一致 (官方 [-80,0] / 社区 [-60,0])，
 # 按"取宽 + 注释"处理：本地允许到 -80，真台若只认到 -60 会在回读时被拉回。
 #   ratio 线上是 **0..11 的索引**，不是比值本身 —— 这是本表里唯一的 index 型枚举。
-#   attack 官方文档写 linf[0,120,1] ms (社区同)；hold/release 是 101 点对数表，
-#   这里暂不建模 (只做演出最常用的 8 个旋钮)，见 note。
+#   hold 是 logf[0.02,2000,101]；keysrc 是 int[0..64]，与 gate 同表；
+#   filter/type 是 enum int[0..8]，filter/f 是 logf[20,20000,201]。
+# 排列顺序 = 协议表的顺序 (on→mode→det→env→thr→ratio→knee→mgain→attack→
+# hold→release→pos→keysrc→mix→auto→filter)，前端控件表按同一顺序展开。
 _DYN = (
     ParamSpec("ch_dyn_on", "ch", "dyn_on", "/ch/%02d/dyn/on",
               vtype="bool", default=0, label="压缩"),
+    ParamSpec("ch_dyn_mode", "ch", "dyn_mode", "/ch/%02d/dyn/mode",
+              vtype="int", lo=0, hi=1, default=0, dec=0, labels=("COMP", "EXP"),
+              label="动态类型", unverified=True,
+              note="enum int[0..1] {COMP,EXP}; 出厂值需真机确认, 暂取 COMP"),
+    ParamSpec("ch_dyn_det", "ch", "dyn_det", "/ch/%02d/dyn/det",
+              vtype="int", lo=0, hi=1, default=0, dec=0, labels=("PEAK", "RMS"),
+              label="检波方式", unverified=True,
+              note="enum int[0..1] {PEAK,RMS}; 出厂值需真机确认, 暂取 PEAK"),
+    ParamSpec("ch_dyn_env", "ch", "dyn_env", "/ch/%02d/dyn/env",
+              vtype="int", lo=0, hi=1, default=0, dec=0, labels=("LIN", "LOG"),
+              label="包络", unverified=True,
+              note="enum int[0..1] {LIN,LOG}; 出厂值需真机确认, 暂取 LIN"),
     ParamSpec("ch_dyn_thr", "ch", "dyn_thr", "/ch/%02d/dyn/thr",
               vtype="float", lo=-80.0, hi=0.0, default=-20.0, step=0.5,
               label="压缩阈值", unit="dB", dec=1,
@@ -195,17 +304,43 @@ _DYN = (
     ParamSpec("ch_dyn_attack", "ch", "dyn_attack", "/ch/%02d/dyn/attack",
               vtype="float", lo=0.0, hi=120.0, default=10.0, step=1.0,
               label="启动时间", unit="ms", dec=0),
+    ParamSpec("ch_dyn_hold", "ch", "dyn_hold", "/ch/%02d/dyn/hold",
+              vtype="float", lo=0.02, hi=2000.0, default=20.0, logsteps=101,
+              label="保持时间", unit="ms", dec=1, unverified=True,
+              note="logf[0.02,2000,101] ms; 出厂值需真机确认, 暂取 20 ms"),
     ParamSpec("ch_dyn_release", "ch", "dyn_release", "/ch/%02d/dyn/release",
               vtype="float", lo=5.0, hi=4000.0, default=200.0, logsteps=101,
               label="释放时间", unit="ms", dec=0,
               note="手册 logf[5,4000,101] ms"),
+    ParamSpec("ch_dyn_pos", "ch", "dyn_pos", "/ch/%02d/dyn/pos",
+              vtype="bool", default=1, label="压缩位置", labels=("PRE", "POST"),
+              note="enum{PRE,POST} → 0/1 (相对 EQ)"),
+    ParamSpec("ch_dyn_keysrc", "ch", "dyn_keysrc", "/ch/%02d/dyn/keysrc",
+              vtype="int", lo=0, hi=64, default=0, dec=0, labels=_KEYS,
+              label="压缩侧链源", unverified=True,
+              note="int[0..64] {OFF,In01..32,Aux1..6,USB L/R,Fx1L..Fx4R,Bus01..16}; "
+                   "**不是 enum**, 真台只吃整数; 出厂值需真机确认"),
     ParamSpec("ch_dyn_mix", "ch", "dyn_mix", "/ch/%02d/dyn/mix",
               vtype="float", lo=0.0, hi=100.0, default=100.0, step=5.0,
               label="干湿比", unit="%", dec=0,
               note="手册 linf[0,100,5] %, 100 = 全湿"),
-    ParamSpec("ch_dyn_pos", "ch", "dyn_pos", "/ch/%02d/dyn/pos",
-              vtype="bool", default=1, label="压缩位置", labels=("PRE", "POST"),
-              note="enum{PRE,POST} → 0/1 (相对 EQ)"),
+    ParamSpec("ch_dyn_auto", "ch", "dyn_auto", "/ch/%02d/dyn/auto",
+              vtype="bool", default=0, label="自动增益", unverified=True,
+              note="enum{OFF,ON}; 自动补偿增益; 出厂值需真机确认, 暂取关"),
+    ParamSpec("ch_dyn_filter_on", "ch", "dyn_filter_on",
+              "/ch/%02d/dyn/filter/on",
+              vtype="bool", default=0, label="压缩侧链滤波", unverified=True,
+              note="出厂值需真机确认, 暂取关"),
+    ParamSpec("ch_dyn_filter_type", "ch", "dyn_filter_type",
+              "/ch/%02d/dyn/filter/type",
+              vtype="int", lo=0, hi=8, default=0, dec=0, labels=_FILTER_TYPES,
+              label="侧链滤波类型", unverified=True,
+              note="enum int[0..8] {LC6,LC12,HC6,HC12,1.0,2.0,3.0,5.0,10.0}"),
+    ParamSpec("ch_dyn_filter_f", "ch", "dyn_filter_f",
+              "/ch/%02d/dyn/filter/f",
+              vtype="float", lo=20.0, hi=20000.0, default=1000.0, logsteps=201,
+              label="侧链滤波频率", unit="Hz", dec=0, unverified=True,
+              note="logf[20,20000,201] Hz; 出厂值需真机确认, 暂取 1 kHz"),
 )
 _SPECS.extend(_DYN)
 
@@ -270,18 +405,23 @@ _SEND_TAP_LABELS = ("<-EQ", "EQ->", "PRE", "POST", "GRP")
 _SEND = (
     ParamSpec("send_level", "send", "level", "/ch/%02d/mix/%02d/level",
               vtype="float", lo=0.0, hi=1.0, default=0.0, dec=3,
-              label="发送电平", unit="%", nidx=2, dims=SEND_BUS,
-              note="level[0..1(+10dB), 161]; 出厂值需真机确认, 暂取 0(-∞)"),
+              linsteps=161, label="发送电平", unit="%", nidx=2, dims=SEND_BUS,
+              unverified=True,
+              note="协议类型 **level**: [0..1(+10dB), 161 档] —— 161 个点就是 "
+                   "f=k/160 (k=0..160) 的等分, 不是等 dB; dB 换算见 level_db()。"
+                   "出厂值需真机确认, 暂取 0(-∞)"),
     ParamSpec("send_on", "send", "on", "/ch/%02d/mix/%02d/on",
               vtype="bool", default=0, label="发送开关", nidx=2, dims=SEND_BUS,
+              unverified=True,
               note="出厂值需真机确认, 暂取关"),
     ParamSpec("send_tap", "send", "tap", "/ch/%02d/mix/%02d/type",
               vtype="int", lo=0.0, hi=4.0, default=3, dec=0,
               labels=_SEND_TAP_LABELS, label="发送取点",
-              nidx=2, dims=SEND_BUS,
+              nidx=2, dims=SEND_BUS, unverified=True,
               note="enum int[0..4] {<-EQ,EQ->,PRE,POST,GRP}; "
                    "**只对奇数 Bus 定义** (协议表), 真台按 1&2 / 3&4 成对共享取点 → "
                    "本地把偶数 Bus 统一落到奇数 Bus, 只留一份真相; "
+                   "线上用整数索引 (真台也接受字符串, 见 --tap-wire); "
                    "出厂默认需真机确认, 暂取 POST"),
 )
 _SPECS.extend(_SEND)
@@ -319,6 +459,18 @@ for _sp in _SPECS:
     if len(_parts) == 5:
         CH_EQ_ADDR.setdefault((_parts[2], _parts[4]), []).append(_sp)
 
+# 五段深层地址 (非 EQ): /ch/01/gate/filter/on、/ch/01/dyn/filter/f …
+# 用 (第3段, 第4段, 第5段) 做键, 与 EQ 的 (第3段, 末段) 分开 ——
+# 两张表混用会让 /ch/01/dyn/filter/f 被当成 EQ 段号去查, 静默无回包。
+# ⚠️ 排除 eq: 它已经有自己的表, 重复登记会让 match_address 返回两份结果。
+CH_DEEP_ADDR = {}
+for _sp in _SPECS:
+    if _sp.group != "ch" or _sp.push or _sp.kind.startswith("ch_eq"):
+        continue
+    _parts = _sp.osc.strip("/").split("/")
+    if len(_parts) == 5 and "%02d" in _parts[1]:
+        CH_DEEP_ADDR.setdefault((_parts[2], _parts[3], _parts[4]), []).append(_sp)
+
 
 # 控台实际能接受的范围 (kind → (lo, hi))。由 app 在选好控台后写入,
 # 目前只有 trim: 手册 ±12 / 固件 1.15+ ±18。空表 = 全部用 spec 自带量程。
@@ -333,6 +485,30 @@ def set_param_limits(limits):
 
 def active_limits(kind):
     return _ACTIVE_LIMITS.get(kind)
+
+
+def set_enum_wire(overrides):
+    """运行时切换枚举的线上形式 (kind → "value"/"index"/"label")。
+
+    存在的理由: 真台对**枚举字符串**的接受度是明确的 (合法 OSC), 但**回包**形式
+    随固件不同, 而这一点在没有真机时无法确认。与其猜一个全局默认, 不如:
+      · 默认按 spec 声明 (索引);
+      · 用一个独立的启动开关 `--tap-wire label` 切换;
+      · 两种形式都由回归覆盖 —— 万一真台回字符串, 改一个参数就能对上。
+    """
+    changed = []
+    for kind, style in (overrides or {}).items():
+        sp = PARAM_SPECS.get(kind)
+        if sp is None or style not in ("value", "index", "label"):
+            continue
+        sp.enum_wire = style
+        changed.append("%s=%s" % (kind, style))
+    return changed
+
+
+def unverified_kinds():
+    """出厂值是推断值、尚未真机核对的参数清单 (给 /api/info 与核对工具用)。"""
+    return [sp for sp in _SPECS if sp.unverified]
 
 
 def spec_addr(sp, idx):
@@ -356,6 +532,51 @@ def spec_addr(sp, idx):
 
 def _nearest_enum(sp, v):
     return min(sp.enum, key=lambda e: (abs(e - v), e))
+
+
+# ---------------------------------------------------------------- level 曲线
+# 协议里 `level` 类型 (推子 / 发送电平 / 主输出…) 不是等 dB, 而是 **4 段伪对数**:
+#   f >= 0.5        → dB = 40f  - 30
+#   0.25 <= f < 0.5 → dB = 80f  - 50
+#   0.0625<= f <0.25→ dB = 160f - 70
+#   f < 0.0625      → dB = 480f - 90
+# 锚点: 0.75→0 dB, 0.5→-10, 0.25→-30, 0.0625→-60, 1→+10, 0→-∞。
+# ⚠️ 本函数是**唯一一份**曲线定义: 后端显示、DCA/相对 dB 动作、前端刻度都引用它。
+#    曾经这里写的是 20*log10(f/0.75) —— 只有 0.75 一个点对得上, 0.25 处偏 +20 dB,
+#    于是"台面 -30 dB、界面 -9.5 dB", 且 rel_db 动作移动量完全不对。
+_LEVEL_SEGS = ((0.5, 40.0, -30.0), (0.25, 80.0, -50.0),
+               (0.0625, 160.0, -70.0), (0.0, 480.0, -90.0))
+
+
+def level_db(f):
+    """归一值 0..1 → 真台显示的 dB。f=0 是真台的 -∞ 特殊点, 返回 -90 便于排序。"""
+    try:
+        f = float(f)
+    except (TypeError, ValueError):
+        return -90.0
+    if f <= 0.0:
+        return -90.0
+    f = min(f, 1.0)
+    for lo, k, b in _LEVEL_SEGS:
+        if f >= lo:
+            return k * f + b
+    return -90.0
+
+
+def level_from_db(db):
+    """level_db 的逆: dB → 0..1 (-90..+10)。"""
+    try:
+        db = float(db)
+    except (TypeError, ValueError):
+        return 0.0
+    db = min(max(db, -90.0), 10.0)
+    if db >= -10.0:
+        return (db + 30.0) / 40.0
+    if db >= -30.0:
+        return (db + 50.0) / 80.0
+    if db >= -60.0:      # 第三段覆盖 -60..-30, 分界是 -60 不是 -50 ——
+        return (db + 70.0) / 160.0   # 写 -50 会让 -54 落进第四段, f 从 0.1 跳到 0.075
+    return (db + 90.0) / 480.0
 
 
 def _snap(sp, v):
@@ -384,6 +605,13 @@ def _snap(sp, v):
         i = int(round((sp.logsteps - 1) * math.log(max(v, 1e-9) / a) / span))
         i = min(max(i, 0), sp.logsteps - 1)
         return a * (b / a) ** (i / (sp.logsteps - 1))
+    if sp.linsteps > 1:
+        # 线性等分档位 (level 161 档 / fader 1024 档): 值是 k/(n-1), k 取整。
+        # 用"点数"而不是 step, 是因为 1/160 无法用十进制 step 精确表达 ——
+        # 0.00625 这种步长跑 160 次会漂 1e-15, 回读比对就会误判成"变了"。
+        n = sp.linsteps - 1
+        v = round(v * n) / n
+        return round(min(max(v, lo), hi), 6)
     if sp.step:
         v = round(v / sp.step) * sp.step
         return round(min(max(v, lo), hi), 6)         # 量化后再钳 (0.3 这种非整步长下限)
@@ -401,13 +629,20 @@ def param_coerce(kind, value):
 def param_wire(sp, v):
     """本地存的值 → **线上**该发的值 (OSC 回包与桥接转发共用)。
 
-    只有 enum_wire="index" 需要换算: 本地 4.0 (4:1) → 线上 6。
-    其余按 vtype 定型 (float 发浮点 / bool 发 0-1 / int 发整数)。
+    三种换算:
+      · enum_wire="index"  → 本地比值/自然值换算成枚举下标 (dyn/ratio 4.0 → 6)
+      · enum_wire="label"  → 发**枚举名字符串** (发送取点 "POST")
+      · 其余按 vtype 定型 (float 发浮点 / bool 发 0-1 / int 发整数)
     """
     if sp.vtype == "bool":
         return 1 if _truthy(v) else 0
     if sp.enum is not None and sp.enum_wire == "index":
         return sp.enum.index(_nearest_enum(sp, _finite(v, sp.default)))
+    if sp.labels and sp.enum_wire == "label":
+        # 真台两种形式都收 (enum 的字符串形式是合法 OSC), 但回包形式因固件而异。
+        # 这个分支的存在意义是**可被探测/切换**, 不是默认路径 —— 见 --tap-wire。
+        k = int(round(_finite(v, sp.default)))
+        return sp.labels[k] if 0 <= k < len(sp.labels) else str(k)
     return float(v) if sp.vtype == "float" else int(round(float(v)))
 
 
@@ -416,7 +651,21 @@ def param_from_wire(sp, v):
 
     真台的 dyn/ratio 收到的是索引 (0..11)，直接落库会把 6 存成 "6:1" ——
     实际是 4:1。这一层换算只在入线处做一次，落库之后全项目都看到比值。
+
+    另外支持**枚举名字符串** (收到 "POST" / "GRP" / "GATE")：协议允许多种写法,
+    真台不同固件回包可能是字符串。以前这里会把字符串当非法值 → 落回默认值,
+    表现为"读一次真台，取点就从 POST 变成默认值"——静默改值, 最难查的一类。
     """
+    if isinstance(v, str) and sp.labels:
+        s = v.strip().upper()
+        for _i, _lab in enumerate(sp.labels):
+            if _lab.upper() == s:
+                if sp.vtype == "bool":
+                    return int(_i)
+                if sp.enum is not None and sp.enum_wire == "index":
+                    return sp.enum[_i]
+                return float(_i)
+        # 名字不认识 → 继续按数值解析; 解析不了会落回 default (由 _finite 兜底)
     if sp.vtype == "bool":
         return _truthy(v)
     if sp.enum is not None and sp.enum_wire == "index":

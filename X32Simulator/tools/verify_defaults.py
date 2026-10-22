@@ -1,18 +1,24 @@
 # -*- coding: utf-8 -*-
-"""核对 5 个「公开资料查不到」的出厂默认值 —— 在真台上跑一次就有答案。
+"""核对「出厂值未标定」的参数 —— 在真台上跑一次就有答案。
 
-背景: 这 5 个值在官方手册里只有**范围**，没有出厂值；社区场景文件里的是
-使用者自己的设置，不是出厂状态。所以模拟器暂时给的是合理猜测，并在
-ParamSpec.note 里标了「需真机确认」。这个脚本就是那个确认动作。
+背景: 有些出厂值在官方手册里只有**范围**、没有出厂值；社区场景文件里的是
+使用者自己的设置，不是出厂状态。模拟器给的是合理猜测，并在 ParamSpec 里标了
+`unverified=True`（这个标记会进 /api/info，界面上能看到"未标定"）。
+
+本脚本做两件事:
+  1. 逐条 GET 这些参数，和模拟器的假设值对比；
+  2. 打印差异，并可选写一份 JSON（给自动化/回归用）。
 
 用法:
-  1. 真台做一次出厂初始化 (开机时按住 Scenes/Undo，或 Setup/Config → Initialize)
+  1. 真台做一次出厂初始化 (开机按住 Scenes/Undo，或 Setup/Config → Initialize)
   2. python tools/verify_defaults.py 192.168.1.100
-     (只核对, 不改任何东西; 全程只发 GET)
+     python tools/verify_defaults.py 192.168.1.100 10023 --json out.json
+     (全程只发 GET，不改任何东西)
 
-判读: 输出里「真台」一列就是出厂值。若与「模拟器」不同，把真台值填回
-x32sim/params.py 对应 ParamSpec 的 default，并删掉 note 里的「需真机确认」。
+判读: 「真台」列就是出厂值。若与「假设」不同，把真台值填回 x32sim/params.py
+对应 ParamSpec 的 default，并把 unverified=True 删掉（note 里的"需真机确认"同步删）。
 """
+import json
 import os
 import socket
 import sys
@@ -22,15 +28,30 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from x32sim.osc import OscMsg, decode_packet, encode_message  # noqa: E402
+from x32sim.params import spec_addr, unverified_kinds  # noqa: E402
 
-# (地址, 说明, 模拟器当前默认, 单位/档位)
-CHECKS = [
-    ("/ch/01/preamp/hpf", "低切频率", 80.0, "Hz (logf 20..400, 101 档)"),
-    ("/ch/01/preamp/hpslope", "低切斜率", 12, "枚举 12/18/24"),
-    ("/ch/01/insert/pos", "插入位置", 0, "枚举 0=PRE / 1=POST"),
-    ("/ch/01/gate/thr", "噪声门门限", -40.0, "dB (linf -80..0, 0.5)"),
-    ("/ch/01/gate/range", "噪声门范围", 15.0, "dB (linf 3..60, 1)"),
-]
+# 优先核对这 5 个（手册明确写了范围、但没写出厂值，且影响演出默认状态）
+FOCUS = ("ch_hpf_f", "ch_hpf_slope", "ch_ins_pos", "ch_gate_thr", "ch_gate_range")
+
+CONSOLE = None
+
+
+def checks():
+    """从登记表生成核对清单 —— 新增的未标定参数自动进列表，不用手工维护。"""
+    rows = []
+    for sp in unverified_kinds():
+        if sp.group != "ch" or sp.nidx != 1:      # 发送是二维, 地址要 (ch,bus)
+            continue
+        rows.append({
+            "kind": sp.kind,
+            "addr": spec_addr(sp, 1),
+            "label": sp.label,
+            "assumed": sp.default,
+            "vtype": sp.vtype,
+            "note": sp.note,
+        })
+    rows.sort(key=lambda r: (0 if r["kind"] in FOCUS else 1, r["kind"]))
+    return rows
 
 
 def ask(sock, addr, timeout=1.5):
@@ -49,47 +70,90 @@ def ask(sock, addr, timeout=1.5):
     return None
 
 
-CONSOLE = None
+def same(a, b):
+    try:
+        return abs(float(a) - float(b)) < 1e-6
+    except (TypeError, ValueError):
+        return str(a) == str(b)
 
-if __name__ == "__main__":
+
+def main():
+    global CONSOLE
     if len(sys.argv) < 2:
         print(__doc__)
-        sys.exit(1)
+        return 1
     host = sys.argv[1]
-    port = int(sys.argv[2]) if len(sys.argv) > 2 else 10023
+    port = 10023
+    out_path = None
+    args = sys.argv[2:]
+    i = 0
+    while i < len(args):
+        if args[i] == "--json" and i + 1 < len(args):
+            out_path = args[i + 1]
+            i += 2
+            continue
+        if args[i].isdigit():
+            port = int(args[i])
+        i += 1
+
     CONSOLE = (host, port)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind(("0.0.0.0", 0))
     sock.settimeout(1.5)
-    # 先发 /xinfo 确认对面在
     sock.sendto(encode_message(OscMsg("/xinfo", [])), CONSOLE)
     try:
         sock.recvfrom(65536)
     except socket.timeout:
         print("!! %s:%d 没有回应 —— 检查 IP / 是否同一网段 / 端口" % CONSOLE)
-        sys.exit(2)
+        return 2
 
-    print("%-24s %-10s %-12s %-12s %s"
-          % ("地址", "项目", "真台", "模拟器", "结论"))
-    print("-" * 78)
-    bad = 0
-    for addr, label, sim, unit in CHECKS:
-        got = ask(sock, addr)
+    rows = checks()
+    print("%-26s %-12s %-12s %-12s %s" % ("地址", "项目", "真台", "假设", "结论"))
+    print("-" * 86)
+    diff, miss = [], []
+    for r in rows:
+        got = ask(sock, r["addr"])
         if got is None:
-            print("%-24s %-10s %-12s %-12s 读不到" % (addr, label, "-", sim))
-            bad += 1
+            miss.append(r)
+            print("%-26s %-12s %-12s %-12s 读不到" % (r["addr"], r["label"], "-", r["assumed"]))
             continue
-        same = (abs(float(got) - float(sim)) < 1e-6) if isinstance(sim, float) \
-            else (int(got) == int(sim))
-        verdict = "一致" if same else "★ 需修正"
-        if not same:
-            bad += 1
-        print("%-24s %-10s %-12s %-12s %s"
-              % (addr, label, got, sim, verdict + "  (" + unit + ")"))
-    print("-" * 78)
-    if bad:
-        print("%d 项不一致 —— 把「真台」列的值填回 x32sim/params.py 的 default,"
-              " 并删掉对应 note 里的「需真机确认」。" % bad)
-    else:
-        print("全部一致 —— 可以把 params.py 里这 5 条的「需真机确认」去掉，"
-              "并把来源改成「真机核对 YYYY-MM-DD」。")
+        r["actual"] = got
+        if same(got, r["assumed"]):
+            r["match"] = True
+            print("%-26s %-12s %-12s %-12s 一致" % (r["addr"], r["label"], got, r["assumed"]))
+        else:
+            r["match"] = False
+            diff.append(r)
+            try:
+                pct = " (Δ%.1f%%)" % (abs(float(got) - float(r["assumed"]))
+                                      / max(abs(float(r["assumed"])), 1e-9) * 100)
+            except (TypeError, ValueError):
+                pct = ""
+            print("%-26s %-12s %-12s %-12s ★ 需修正%s"
+                  % (r["addr"], r["label"], got, r["assumed"], pct))
+    print("-" * 86)
+    print("共 %d 项: 一致 %d / 不一致 %d / 读不到 %d"
+          % (len(rows), len(rows) - len(diff) - len(miss), len(diff), len(miss)))
+    if diff:
+        print("\n把「真台」列的值填回 x32sim/params.py 对应 ParamSpec 的 default，"
+              "并删掉 unverified=True 与 note 里的「需真机确认」。")
+    elif not miss:
+        print("\n全部一致 —— 可以把这些 ParamSpec 的 unverified=True 删掉，"
+              "note 里注明「真机核对 %s」。" % time.strftime("%Y-%m-%d"))
+
+    if out_path:
+        payload = {
+            "console": "%s:%d" % CONSOLE,
+            "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "rows": rows,
+            "diff": [r["kind"] for r in diff],
+            "missing": [r["kind"] for r in miss],
+        }
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=1)
+        print("已写 %s" % out_path)
+    return 0 if not diff else 3
+
+
+if __name__ == "__main__":
+    sys.exit(main())

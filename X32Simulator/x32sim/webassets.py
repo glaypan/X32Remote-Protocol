@@ -579,9 +579,10 @@ WEB_PAGE = r"""<!DOCTYPE html>
   <div class="mdlg" role="dialog" aria-label="通道参数">
     <div class="mhd"><b id="chpTitle">通道参数</b>
       <button class="mclose" onclick="closeChParams()" aria-label="关闭">✕</button></div>
-    <div class="ds">前置 / 动态 / 均衡 / 发送 · 拖动即写入台面（不是草稿）· 点数值可键盘精调</div>
+    <div class="ds">前置 / 门 / 动态 / 均衡 / 发送 · 拖动即写入台面（不是草稿）· 点数值可键盘精调</div>
     <div class="chp-tabs" id="chpTabBar">
       <button type="button" data-tab="pre" onclick="chpTab('pre')">前置</button>
+      <button type="button" data-tab="gate" onclick="chpTab('gate')">门</button>
       <button type="button" data-tab="dyn" onclick="chpTab('dyn')">动态</button>
       <button type="button" data-tab="eq" onclick="chpTab('eq')">均衡</button>
       <button type="button" data-tab="send" onclick="chpTab('send')">发送</button>
@@ -622,7 +623,15 @@ WEB_PAGE = r"""<!DOCTYPE html>
 
 <script>
 const $ = s => document.querySelector(s);
-const dbOf = f => f<=0 ? -90 : (f>=0.75 ? (f-0.75)/0.25*10 : 20*Math.log10(f/0.75));
+// 推子/发送电平的 dB 曲线: 协议 `level` 类型的 **4 段伪对数**
+//   f>=0.5 → 40f-30 | f>=0.25 → 80f-50 | f>=0.0625 → 160f-70 | 否则 480f-90
+// 锚点 0.75→0 dB, 0.5→-10, 0.25→-30, 0.0625→-60。与后端 params.level_db 同源;
+// 以前用的是 20*log10(f/0.75), 只有 0.75 一个点对得上 (0.25 处偏 +20 dB)。
+const dbOf = f => (f<=0 ? -90
+  : f>=0.5 ? f*40-30
+  : f>=0.25 ? f*80-50
+  : f>=0.0625 ? f*160-70
+  : f*480-90);
 const dbTxt = db => db<=-89 ? "-∞" : db.toFixed(1);
 let S = null;
 
@@ -669,12 +678,13 @@ function rowHTML(prefix, i){
     <button class="mute" onclick="toggle('${prefix}',${i},this)">M</button>
   </div>`;
 }
-// ±0.5 dB 精调 (与后端 fader_to_db 曲线一致) / 双击回 0 dB
+// ±0.5 dB 精调 (与后端 level_db 4 段曲线一致) / 双击回 0 dB
 function dbToFader(db){
   db=Math.min(Math.max(db,-90),10);
-  if(db<=-89.5) return 0;
-  if(db>=10) return 1;
-  return db>=0 ? 0.75+db/10*0.25 : 0.75*Math.pow(10,db/20);
+  if(db>=-10) return (db+30)/40;
+  if(db>=-30) return (db+50)/80;
+  if(db>=-60) return (db+70)/160;   // -60..-30 段 (分界 -60, 不是 -50)
+  return (db+90)/480;
 }
 function nudge(p,i,d){
   const r=document.getElementById('r-'+p+'-'+i); if(!r) return;
@@ -749,6 +759,14 @@ function flushSend(){
 // t: num=滑块+数值 / bool=两态按钮 / enum=下拉
 // 顺序必须与 CH_PARAM_SPECS 完全一致 (回归按序比对)。
 const EQ_TYPES=[[0,'LCut'],[1,'LShv'],[2,'PEQ'],[3,'VEQ'],[4,'HShv'],[5,'HCut']];
+// 侧链源 (keysrc): 协议 int[0..64] {OFF,In01..32,Aux1..6,USB L/R,Fx1L..Fx4R,Bus01..16}
+// 顺序即索引, 与后端 params._KEYS 逐项一致 (回归会比对长度与顺序)。
+const KEYS_OPTS=[[0,'OFF'],[1,'In01'],[2,'In02'],[3,'In03'],[4,'In04'],[5,'In05'],[6,'In06'],[7,'In07'],[8,'In08'],[9,'In09'],[10,'In10'],[11,'In11'],[12,'In12'],[13,'In13'],[14,'In14'],[15,'In15'],[16,'In16'],[17,'In17'],[18,'In18'],[19,'In19'],[20,'In20'],[21,'In21'],[22,'In22'],[23,'In23'],[24,'In24'],[25,'In25'],[26,'In26'],[27,'In27'],[28,'In28'],[29,'In29'],[30,'In30'],[31,'In31'],[32,'In32'],[33,'Aux1'],[34,'Aux2'],[35,'Aux3'],[36,'Aux4'],[37,'Aux5'],[38,'Aux6'],[39,'USB L'],[40,'USB R'],[41,'Fx1L'],[42,'Fx1R'],[43,'Fx2L'],[44,'Fx2R'],[45,'Fx3L'],[46,'Fx3R'],[47,'Fx4L'],[48,'Fx4R'],[49,'Bus01'],[50,'Bus02'],[51,'Bus03'],[52,'Bus04'],[53,'Bus05'],[54,'Bus06'],[55,'Bus07'],[56,'Bus08'],[57,'Bus09'],[58,'Bus10'],[59,'Bus11'],[60,'Bus12'],[61,'Bus13'],[62,'Bus14'],[63,'Bus15'],[64,'Bus16']];
+// 插入点目标: int[0..22] {OFF, FX1L..FX8R, AUX1..6}
+const INS_OPTS=[[0,'OFF'],[1,'FX1L'],[2,'FX1R'],[3,'FX2L'],[4,'FX2R'],[5,'FX3L'],[6,'FX3R'],[7,'FX4L'],[8,'FX4R'],[9,'FX5L'],[10,'FX5R'],[11,'FX6L'],[12,'FX6R'],[13,'FX7L'],[14,'FX7R'],[15,'FX8L'],[16,'FX8R'],[17,'AUX1'],[18,'AUX2'],[19,'AUX3'],[20,'AUX4'],[21,'AUX5'],[22,'AUX6']];
+// 侧链滤波器类型: enum int[0..8]
+const FILTER_TYPES=[[0,'LC6'],[1,'LC12'],[2,'HC6'],[3,'HC12'],[4,'1.0'],[5,'2.0'],[6,'3.0'],[7,'5.0'],[8,'10.0']];
+const GATE_MODES=[[0,'EXP2'],[1,'EXP3'],[2,'EXP4'],[3,'GATE'],[4,'DUCK']];
 const CH_PARAM_UI=[
   {f:'trim',       l:'增益',     t:'num',  u:'dB',     lo:-18, hi:18,  step:0.25, dec:2, dv:0},
   {f:'invert',     l:'反相',     t:'bool', lb:['正常','反相']},
@@ -759,19 +777,38 @@ const CH_PARAM_UI=[
   {f:'hpf_f',      l:'低切频率', t:'num',  u:'Hz',     lo:20,  hi:400, step:1,    dec:0, dv:80, dep:'hpf_on', lg:1},
   {f:'ins_on',     l:'插入',     t:'bool', lb:['关','开']},
   {f:'ins_pos',    l:'插入位置', t:'enum', opts:[[0,'PRE'],[1,'POST']], dep:'ins_on'},
+  {f:'ins_sel',    l:'插入目标', t:'enum', opts:INS_OPTS, dep:'ins_on'},
   {f:'gate_on',    l:'噪声门',   t:'bool', lb:['关','开']},
   {f:'gate_thr',   l:'门限',     t:'num',  u:'dB',     lo:-80, hi:0,   step:0.5,  dec:1, dv:-40, dep:'gate_on'},
   {f:'gate_range', l:'门范围',   t:'num',  u:'dB',     lo:3,   hi:60,  step:1,    dec:0, dv:15, dep:'gate_on'},
+  // ---- 噪声门: 补齐的 8 个旋钮 (对齐协议表) ----
+  {f:'gate_mode',  l:'门类型',   t:'enum', opts:GATE_MODES, dep:'gate_on'},
+  {f:'gate_attack',l:'门启动',   t:'num',  u:'ms',     lo:0,   hi:120, step:1,    dec:0, dv:10, dep:'gate_on'},
+  {f:'gate_hold',  l:'门保持',   t:'num',  u:'ms',     lo:0.02,hi:2000,step:0.01, dec:1, dv:20, dep:'gate_on', lg:1},
+  {f:'gate_release',l:'门释放',  t:'num',  u:'ms',     lo:5,   hi:4000,step:1,    dec:0, dv:200,dep:'gate_on', lg:1},
+  {f:'gate_keysrc',l:'门侧链源', t:'enum', opts:KEYS_OPTS, dep:'gate_on'},
+  {f:'gate_filter_on',  l:'门侧链滤波', t:'bool', lb:['关','开'], dep:'gate_on'},
+  {f:'gate_filter_type',l:'门滤波类型', t:'enum', opts:FILTER_TYPES, dep:'gate_filter_on'},
+  {f:'gate_filter_f',   l:'门滤波频率', t:'num',  u:'Hz', lo:20, hi:20000, step:1, dec:0, dv:1000, dep:'gate_filter_on', lg:1},
   // ---- 动态 (压缩/扩展) ----
   {f:'dyn_on',     l:'压缩',     t:'bool', lb:['关','开']},
+  {f:'dyn_mode',   l:'动态类型', t:'enum', opts:[[0,'COMP'],[1,'EXP']], dep:'dyn_on'},
+  {f:'dyn_det',    l:'检波',     t:'enum', opts:[[0,'PEAK'],[1,'RMS']], dep:'dyn_on'},
+  {f:'dyn_env',    l:'包络',     t:'enum', opts:[[0,'LIN'],[1,'LOG']], dep:'dyn_on'},
   {f:'dyn_thr',    l:'压缩阈值', t:'num',  u:'dB',     lo:-80, hi:0,   step:0.5,  dec:1, dv:-20, dep:'dyn_on'},
   {f:'dyn_ratio',  l:'压缩比',   t:'enum', opts:[[1.1,'1.1:1'],[1.3,'1.3:1'],[1.5,'1.5:1'],[2,'2:1'],[2.5,'2.5:1'],[3,'3:1'],[4,'4:1'],[5,'5:1'],[7,'7:1'],[10,'10:1'],[20,'20:1'],[100,'100:1']], dep:'dyn_on'},
   {f:'dyn_knee',   l:'拐点',     t:'num',  u:'',       lo:0,   hi:5,   step:1,    dec:0, dv:2, dep:'dyn_on'},
   {f:'dyn_mgain',  l:'补偿增益', t:'num',  u:'dB',     lo:0,   hi:24,  step:0.5,  dec:1, dv:0, dep:'dyn_on'},
   {f:'dyn_attack', l:'启动时间', t:'num',  u:'ms',     lo:0,   hi:120, step:1,    dec:0, dv:10, dep:'dyn_on'},
-  {f:'dyn_release',l:'释放时间', t:'num',  u:'ms',     lo:5,   hi:4000,step:1,    dec:0, dv:200, dep:'dyn_on'},
-  {f:'dyn_mix',    l:'干湿比',   t:'num',  u:'%',      lo:0,   hi:100, step:5,    dec:0, dv:100, dep:'dyn_on'},
+  {f:'dyn_hold',   l:'保持时间', t:'num',  u:'ms',     lo:0.02,hi:2000,step:0.01, dec:1, dv:20, dep:'dyn_on', lg:1},
+  {f:'dyn_release',l:'释放时间', t:'num',  u:'ms',     lo:5,   hi:4000,step:1,    dec:0, dv:200, dep:'dyn_on', lg:1},
   {f:'dyn_pos',    l:'压缩位置', t:'enum', opts:[[0,'PRE'],[1,'POST']], dep:'dyn_on'},
+  {f:'dyn_keysrc', l:'压缩侧链源', t:'enum', opts:KEYS_OPTS, dep:'dyn_on'},
+  {f:'dyn_mix',    l:'干湿比',   t:'num',  u:'%',      lo:0,   hi:100, step:5,    dec:0, dv:100, dep:'dyn_on'},
+  {f:'dyn_auto',   l:'自动增益', t:'bool', lb:['关','开'], dep:'dyn_on'},
+  {f:'dyn_filter_on',   l:'侧链滤波', t:'bool', lb:['关','开'], dep:'dyn_on'},
+  {f:'dyn_filter_type', l:'侧链滤波类型', t:'enum', opts:FILTER_TYPES, dep:'dyn_filter_on'},
+  {f:'dyn_filter_f',    l:'侧链滤波频率', t:'num',  u:'Hz', lo:20, hi:20000, step:1, dec:0, dv:1000, dep:'dyn_filter_on', lg:1},
   // ---- 均衡 4 段 ----
   {f:'eq_on',      l:'均衡',     t:'bool', lb:['关','开']},
   {f:'eq1_type',   l:'EQ1 类型', t:'enum', opts:EQ_TYPES, dep:'eq_on'},
@@ -795,13 +832,17 @@ const CH_PARAM_UI=[
 // 电平在线上是 0..1, 界面上按 % 显示 —— pct:1 标记这一层换算只在 UI 发生。
 const SEND_UI=[
   {f:'send_on',    l:'发送开关', t:'bool', lb:['关','开']},
-  {f:'send_level', l:'发送电平', t:'num',  u:'%', lo:0, hi:100, step:1, dec:0, dv:75, pct:1},
+  // 协议类型 level: 161 档 = 0..100% 按 0.625% 等分 (f=k/160)。
+  // 滑块仍按 % 走 (手机上百分比好理解), 但标签同时给出真台显示的 dB ——
+  // 50% 在真台是 -10 dB, 不是"一半音量", 只写百分比会误导。
+  {f:'send_level', l:'发送电平', t:'num',  u:'%', lo:0, hi:100, step:0.625, dec:1, dv:75, pct:1, db:1},
   // 官方枚举 {<-EQ, EQ->, PRE, POST, GRP}; 真台按 1&2 / 3&4 成对共享
   {f:'send_tap',   l:'发送取点', t:'enum', opts:[[0,'<-EQ'],[1,'EQ->'],[2,'PRE'],[3,'POST'],[4,'GRP']]},
 ];
-const CH_TABS=[['pre','前置'],['dyn','动态'],['eq','均衡'],['send','发送']];
+const CH_TABS=[['pre','前置'],['gate','门'],['dyn','动态'],['eq','均衡'],['send','发送']];
 function chpTabOf(f){
   if(f.indexOf('send_')===0) return 'send';
+  if(f.indexOf('gate_')===0) return 'gate';
   if(f.indexOf('dyn_')===0) return 'dyn';
   if(f.indexOf('eq')===0) return 'eq';
   return 'pre';
@@ -828,6 +869,7 @@ function chpVal(r,pos){
 function chpFmt(r,v){
   const x=+v||0;
   const txt=(r.dec?x.toFixed(r.dec):String(Math.round(x)));
+  if(r.db) return txt+'%'+(x<=0?' (-∞)':' ('+dbOf(x/100).toFixed(1)+' dB)');
   return txt+(r.u?(' '+r.u):'');
 }
 // 数值标签做成可点: 手机上滑块只能"拖个大概", 要精确到 0.25dB 必须能敲键盘。

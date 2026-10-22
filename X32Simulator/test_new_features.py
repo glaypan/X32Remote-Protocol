@@ -1,9 +1,33 @@
 # -*- coding: utf-8 -*-
 """新功能综合回归: DCA级联/rel_db/并行at/卡片链/step显示/置顶/批量写入/日志增量/订阅计数"""
 import os
-import json, math, socket, struct, time, urllib.request
+import json, socket, struct, time, urllib.request
 
 WEB = "http://127.0.0.1:28080"
+
+
+def _fader_to_db(f):
+    """与 x32sim.params.level_db 同源的 4 段伪对数 (黑盒测试不 import 后端)。"""
+    if f <= 0:
+        return -90.0
+    if f >= 0.5:
+        return f * 40 - 30
+    if f >= 0.25:
+        return f * 80 - 50
+    if f >= 0.0625:
+        return f * 160 - 70
+    return f * 480 - 90
+
+
+def _db_to_fader(db):
+    db = min(max(db, -90.0), 10.0)
+    if db >= -10:
+        return (db + 30) / 40
+    if db >= -30:
+        return (db + 50) / 80
+    if db >= -60:
+        return (db + 70) / 160
+    return (db + 90) / 480
 
 
 def post(path, data):
@@ -82,9 +106,10 @@ sock.sendto(osc_msg("/ch/09/mix/dca", 1), ("127.0.0.1", int(os.environ.get("X32_
 time.sleep(0.3)
 post("/api/set", {"kind": "dca", "param": "fader", "idx": 1, "value": 0.75})
 time.sleep(0.3)
-# DCA1 从 1.0(-10dB) 回到 0.75(0dB), 成员 ch9 也应 -10dB: 0.4 → 0.4*10^(-10/20)? 不, ch9=0.4dB≈-5.6dB → -15.6dB
-ch9_db = 20 * math.log10(0.4 / 0.75) if 0.4 < 0.75 else (0.4 - 0.75) / 0.25 * 10
-expect9 = 0.75 * (10 ** ((ch9_db - 10) / 20))
+# DCA1 从 1.0(+10dB) 回到 0.75(0dB): delta = -10 dB, 成员 ch9 也降 10 dB。
+# 注意用**协议的 4 段曲线**换算, 不是 20*log10 —— 后者在 0.4 处差 12 dB。
+ch9_db = _fader_to_db(0.4)
+expect9 = _db_to_fader(ch9_db - 10)
 check("OSC 设 DCA 成员后级联生效 (ch9 跟随 -10dB)", abs(fader("ch", 9) - expect9) < 0.05,
       "ch9=%.3f 期望=%.3f" % (fader("ch", 9), expect9))
 sock.sendto(osc_msg("/ch/09/mix/dca", 0), ("127.0.0.1", 10023))  # 还原成员表
@@ -94,11 +119,11 @@ time.sleep(0.2)
 post("/api/cardadd", {"card": {"name": "ZZ测试rel", "desc": "", "actions": [
     {"kind": "rel_db", "group": "ch", "chs": [1], "delta_db": -6.0, "duration": 1.0, "curve": "linear"}]}})
 cid_rel = next(c["id"] for c in state()["cards"] if c["name"] == "ZZ测试rel")
-before = state()["ch"]["1"]["fader"]          # 0.75 → -6dB ≈ 0.376
+before = state()["ch"]["1"]["fader"]          # 当前值 → 再降 6 dB
 post("/api/show", {"id": cid_rel})
 time.sleep(2.0)
 after = state()["ch"]["1"]["fader"]
-expect = 0.75 * (10 ** (-6 / 20))
+expect = _db_to_fader(_fader_to_db(before) - 6)
 check("rel_db -6dB 从当前值换算", abs(after - expect) < 0.02,
       "%.3f → %.3f (期望 %.3f)" % (before, after, expect))
 post("/api/show", {})

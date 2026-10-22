@@ -2,14 +2,13 @@
 """x32sim/oscsrv — OSC 消息分发 (UDP 主循环的每个包)"""
 
 import struct
-import time
 
 from .consts import KIND_LABEL, NAME_COUNTS
 from .kinds import fx_par_num, kind_group
 from .logbus import log
 from .osc import OscMsg, encode_bundle, encode_message
 from .params import PARAM_SPECS, param_fmt, param_from_wire, send_unpack
-from .state import METER_LOCK, METER_SUBSCRIBERS, STATE, compute_levels, get_name, get_value, match_address, set_name, set_value, value_reply
+from .state import METER_SUBSCRIBERS, STATE, compute_levels, get_name, get_value, match_address, set_name, set_value, subscribe_client, subscribe_pattern, unsubscribe_client, unsubscribe_pattern, value_reply
 from .version import SIM_FIRMWARE, SIM_MODEL, SIM_NAME
 
 # ------------------------------------------------------------
@@ -26,31 +25,48 @@ def handle(msg: OscMsg, addr, sock):
         sock.sendto(encode_message(reply), addr)
         return
 
-    if a == "/subscribe":
-        on = bool(msg.args and msg.args[0] != 0)
-        with METER_LOCK:
-            if on:
-                METER_SUBSCRIBERS[addr] = time.time()
+    if a in ("/subscribe", "/unsubscribe"):
+        # 协议 /subscribe ,s<地址> [,i<倍数>]: "我关心这个地址, 每 N×50ms 回一次"
+        # 无地址参数时退化成"台面变更推送订阅"(旧行为, 保留兼容)。
+        pat = None
+        for arg in msg.args:
+            if isinstance(arg, str) and arg.startswith("/"):
+                pat = arg
+                break
+        rate = 1
+        for arg in msg.args[1:]:
+            if isinstance(arg, (int, float)) and not isinstance(arg, bool):
+                rate = int(arg)
+                break
+        if a == "/subscribe":
+            first = subscribe_client(addr)
+            if pat:
+                subscribe_pattern(addr, pat, rate)
+            log("    订阅: %s %s (rate=%d, %s, 共 %d 个来源)" % (
+                addr, pat or "(台面变更)", rate,
+                "首次" if first else "续期", len(METER_SUBSCRIBERS)))
+        else:
+            if pat:
+                unsubscribe_pattern(addr, pat)
             else:
-                METER_SUBSCRIBERS.pop(addr, None)
-        log("    台面变更推送订阅: %s (来源 %s, 共 %d 个)" %
-            ("开启" if on else "关闭", addr, len(METER_SUBSCRIBERS)))
+                unsubscribe_client(addr)
+            log("    退订: %s %s (剩 %d 个来源)" % (
+                addr, pat or "(全部)", len(METER_SUBSCRIBERS)))
         return
 
-    if a == "/xremote":
+    if a in ("/xremote", "/xcontrol"):
         # 真台保活: 续期该来源的订阅 (30 秒无续期自动清理)
-        with METER_LOCK:
-            METER_SUBSCRIBERS[addr] = time.time()
+        # ⚠️ 真台 /xremote **只推变化**, 不推初始全量; 需要初始值时客户端应逐条
+        #    GET 或 /subscribe。这里保留同语义, 首帧补全由 --xremote-snapshot 开启。
+        subscribe_client(addr)
         return
 
     if a.startswith("/meters"):
         if msg.args and msg.args[0] == 0:
-            with METER_LOCK:
-                METER_SUBSCRIBERS.pop(addr, None)
+            unsubscribe_client(addr)
             log("    电平表退订: %s" % (addr,))
         else:
-            with METER_LOCK:
-                METER_SUBSCRIBERS[addr] = time.time()
+            subscribe_client(addr)
             log("    电平表订阅: %s (共 %d 个订阅者)" % (addr, len(METER_SUBSCRIBERS)))
             # 对齐真机: 每次请求立即回一帧
             floats = compute_levels()

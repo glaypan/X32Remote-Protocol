@@ -590,7 +590,8 @@ class ParamSpec:
                  lo=0.0, hi=1.0, default=None, step=0.0, logsteps=0,
                  enum=None, label="", unit="", dec=2, labels=None,
                  push=False, preset=True, note="", nidx=1, dims=0,
-                 enum_wire="value", logdesc=False):
+                 enum_wire="value", logdesc=False, linsteps=0,
+                 unverified=False):
         self.kind = kind                  # 语义管道里的名字, 如 "ch_trim"
         self.group = group                # 台面分组 (STATE 的属性名), 如 "ch"
         self.field = field                # 行字典里的键, 如 "trim"
@@ -615,6 +616,16 @@ class ParamSpec:
         self.step = float(step)           # 线性档位 (真台旋钮是"有级"的)
         self.logsteps = int(logsteps)     # 对数档位数 (手册里的 logf [lo,hi,N])
         self.logdesc = bool(logdesc)      # True = 该对数表从 hi 递减到 lo (EQ 的 Q)
+        # linsteps: **线性等分档位数** (协议第三列的数字)。
+        #   · level 类型 161 档 → 值域按 f=k/160 等分 (k=0..160), 不是"等 dB";
+        #   · fader 类型 1024 档 → f=k/1023。
+        # 与 step 的区别: step 是"步进量", linsteps 是"点数", 后者才能避免
+        # 0.1 这类步长在浮点下的累积偏差 (161 档时 1/160 无法用十进制 step 表达)。
+        self.linsteps = int(linsteps)
+        # unverified: 出厂值/默认值是**推断值**, 公开资料里查不到, 尚未在真台核对。
+        # 单独一个布尔而不是靠 note 里写"需真机确认"—— 注释不会进接口, 前端和
+        # 核对工具都看不见; 布尔会进 /api/info, 让"假设"这件事在界面上可见。
+        self.unverified = bool(unverified)
         self.enum = tuple(enum) if enum else None
         self.label = label or kind        # 界面/日志用名
         self.unit = unit                  # 显示单位
@@ -656,6 +667,30 @@ for _g in _LEGACY_GROUPS:
 
 # ---- 新增: 输入通道 1-32 的参数 (官方 X32 Protocol Manual) ----------------
 # 按信号流顺序排：增益 → 反相 → 延时 → 低切 → 插入 → 门
+
+# 侧链源 (keysrc) 在协议里是 **int [0..64]**, 不是 enum:
+#   {OFF, In01..32, Aux1..6, USB L, USB R, Fx1L..Fx4R, Bus01..16}
+# 0 + 32 + 6 + 2 + 8 + 16 = 65 → 0..64。顺序即索引，官方表逐项一致。
+# ⚠️ 正因为它是 int 而不是 enum，真台**只接受整数**（不接受字符串 "Bus05"），
+#    所以这里只用 labels 做显示，不把 enum_wire 设成 label。
+_KEYS = (("OFF",)
+         + tuple("In%02d" % i for i in range(1, 33))
+         + tuple("Aux%d" % i for i in range(1, 7))
+         + ("USB L", "USB R")
+         + tuple("Fx%d%s" % (i, s) for i in range(1, 5) for s in ("L", "R"))
+         + tuple("Bus%02d" % i for i in range(1, 17)))
+assert len(_KEYS) == 65, "keysrc 枚举长度应为 65 (0..64), 实际 %d" % len(_KEYS)
+
+# 侧链滤波器类型: enum int[0..8]。前 4 档是固定斜率的高低通，后 5 档是
+# 「Keysolo (Solo/Q)」模式下的 Q 值。名称按官方表原样保留。
+_FILTER_TYPES = ("LC6", "LC12", "HC6", "HC12", "1.0", "2.0", "3.0", "5.0", "10.0")
+
+# 插入点目标: enum int[0..22] {OFF, FX1L..FX8R, AUX1..6}
+_INS_TARGETS = (("OFF",)
+                + tuple("FX%d%s" % (i, s) for i in range(1, 9) for s in ("L", "R"))
+                + tuple("AUX%d" % i for i in range(1, 7)))
+assert len(_INS_TARGETS) == 23, "insert/sel 枚举长度应为 23 (0..22), 实际 %d" % len(_INS_TARGETS)
+
 _CH_EXTRA = (
     ParamSpec("ch_trim", "ch", "trim", "/ch/%02d/preamp/trim",
               vtype="float", lo=-18.0, hi=18.0, default=0.0, step=0.25,
@@ -674,41 +709,115 @@ _CH_EXTRA = (
               vtype="bool", default=0, label="低切"),
     ParamSpec("ch_hpf_slope", "ch", "hpf_slope", "/ch/%02d/preamp/hpslope",
               vtype="int", lo=12, hi=24, default=12, enum=(12, 18, 24),
-              label="低切斜率", unit="dB/oct", dec=0,
+              label="低切斜率", unit="dB/oct", dec=0, unverified=True,
               note="手册 enum{12,18,24} 按字面值; 出厂默认需真机确认"),
     ParamSpec("ch_hpf_f", "ch", "hpf_f", "/ch/%02d/preamp/hpf",
               vtype="float", lo=20.0, hi=400.0, default=80.0, logsteps=101,
-              label="低切频率", unit="Hz", dec=0,
+              label="低切频率", unit="Hz", dec=0, unverified=True,
               note="手册 logf[20,400,101] Hz; 出厂默认频率需真机确认, "
                    "暂取人声常用 80 Hz"),
     ParamSpec("ch_ins_on", "ch", "ins_on", "/ch/%02d/insert/on",
               vtype="bool", default=0, label="插入"),
     ParamSpec("ch_ins_pos", "ch", "ins_pos", "/ch/%02d/insert/pos",
               vtype="bool", default=0, label="插入位置", labels=("PRE", "POST"),
+              unverified=True,
               note="enum{PRE,POST} → 0/1; 出厂位置需真机确认, 暂取 PRE"),
+    ParamSpec("ch_ins_sel", "ch", "ins_sel", "/ch/%02d/insert/sel",
+              vtype="int", lo=0, hi=22, default=0, dec=0, labels=_INS_TARGETS,
+              label="插入目标", preset=True, unverified=True,
+              note="enum int[0..22] {OFF, FX1L..FX8R, AUX1..6}; "
+                   "这是**插入点接到哪里** (与 ins_pos 的 PRE/POST 是两个维度); "
+                   "出厂值需真机确认, 暂取 OFF"),
     ParamSpec("ch_gate_on", "ch", "gate_on", "/ch/%02d/gate/on",
               vtype="bool", default=0, label="噪声门"),
     ParamSpec("ch_gate_thr", "ch", "gate_thr", "/ch/%02d/gate/thr",
               vtype="float", lo=-80.0, hi=0.0, default=-40.0, step=0.5,
-              label="门限", unit="dB", dec=1,
+              label="门限", unit="dB", dec=1, unverified=True,
               note="手册 linf[-80,0,0.5] dB; 出厂阈值需真机确认, 暂取 -40 dB"),
     ParamSpec("ch_gate_range", "ch", "gate_range", "/ch/%02d/gate/range",
               vtype="float", lo=3.0, hi=60.0, default=15.0, step=1.0,
-              label="门范围", unit="dB", dec=0,
+              label="门范围", unit="dB", dec=0, unverified=True,
               note="手册 linf[3,60,1] dB(正值=衰减量); 出厂值需真机确认"),
 )
 _SPECS.extend(_CH_EXTRA)
+
+# ---- 噪声门: 补齐剩下的 8 个旋钮 ----------------------------------------
+# 官方表 (通道 gate 组):
+#   mode    enum int[0..4] {EXP2, EXP3, EXP4, GATE, DUCK}
+#   attack  linf[0, 120, 1] ms
+#   hold    logf[0.02, 2000, 101] ms
+#   release logf[5, 4000, 101] ms
+#   keysrc  int[0..64]  (侧链源, 见 _KEYS)
+#   filter/on | filter/type | filter/f   (侧链滤波器: 5 段地址)
+# ⚠️ filter/* 是**五段地址** (/ch/01/gate/filter/on)，与 EQ 的
+#    /ch/01/eq/1/g 同深度，因此单独建 CH_DEEP_ADDR 表，不能塞进 CH_EXTRA_ADDR
+#    (那张表只认四段)。
+_GATE = (
+    ParamSpec("ch_gate_mode", "ch", "gate_mode", "/ch/%02d/gate/mode",
+              vtype="int", lo=0, hi=4, default=3, dec=0,
+              labels=("EXP2", "EXP3", "EXP4", "GATE", "DUCK"),
+              label="门类型", unverified=True,
+              note="enum int[0..4]; 索引即线上值; 出厂模式需真机确认, 暂取 GATE"),
+    ParamSpec("ch_gate_attack", "ch", "gate_attack", "/ch/%02d/gate/attack",
+              vtype="float", lo=0.0, hi=120.0, default=10.0, step=1.0,
+              label="门启动", unit="ms", dec=0, unverified=True,
+              note="linf[0,120,1] ms; 出厂值需真机确认, 暂取 10 ms"),
+    ParamSpec("ch_gate_hold", "ch", "gate_hold", "/ch/%02d/gate/hold",
+              vtype="float", lo=0.02, hi=2000.0, default=20.0, logsteps=101,
+              label="门保持", unit="ms", dec=1, unverified=True,
+              note="logf[0.02,2000,101] ms; 出厂值需真机确认, 暂取 20 ms"),
+    ParamSpec("ch_gate_release", "ch", "gate_release", "/ch/%02d/gate/release",
+              vtype="float", lo=5.0, hi=4000.0, default=200.0, logsteps=101,
+              label="门释放", unit="ms", dec=0, unverified=True,
+              note="logf[5,4000,101] ms; 出厂值需真机确认, 暂取 200 ms"),
+    ParamSpec("ch_gate_keysrc", "ch", "gate_keysrc", "/ch/%02d/gate/keysrc",
+              vtype="int", lo=0, hi=64, default=0, dec=0, labels=_KEYS,
+              label="门侧链源", unverified=True,
+              note="int[0..64] {OFF,In01..32,Aux1..6,USB L/R,Fx1L..Fx4R,Bus01..16}; "
+                   "**不是 enum** —— 真台只吃整数, 所以 labels 仅用于显示; "
+                   "出厂值需真机确认"),
+    ParamSpec("ch_gate_filter_on", "ch", "gate_filter_on",
+              "/ch/%02d/gate/filter/on",
+              vtype="bool", default=0, label="门侧链滤波", unverified=True,
+              note="出厂值需真机确认, 暂取关"),
+    ParamSpec("ch_gate_filter_type", "ch", "gate_filter_type",
+              "/ch/%02d/gate/filter/type",
+              vtype="int", lo=0, hi=8, default=0, dec=0, labels=_FILTER_TYPES,
+              label="门滤波类型", unverified=True,
+              note="enum int[0..8] {LC6,LC12,HC6,HC12,1.0,2.0,3.0,5.0,10.0}; "
+                   "后 5 档是 Keysolo(Solo/Q) 的 Q 值"),
+    ParamSpec("ch_gate_filter_f", "ch", "gate_filter_f",
+              "/ch/%02d/gate/filter/f",
+              vtype="float", lo=20.0, hi=20000.0, default=1000.0, logsteps=201,
+              label="门滤波频率", unit="Hz", dec=0, unverified=True,
+              note="logf[20,20000,201] Hz; 出厂值需真机确认, 暂取 1 kHz"),
+)
+_SPECS.extend(_GATE)
 
 # ---- 动态处理 (压缩/扩展) -------------------------------------------------
 # 地址/量程逐条取自 Behringer X32 Protocol Manual 与《Unofficial X32/M32 OSC
 # Remote Protocol》v4.06 —— 两者在 thr 上不一致 (官方 [-80,0] / 社区 [-60,0])，
 # 按"取宽 + 注释"处理：本地允许到 -80，真台若只认到 -60 会在回读时被拉回。
 #   ratio 线上是 **0..11 的索引**，不是比值本身 —— 这是本表里唯一的 index 型枚举。
-#   attack 官方文档写 linf[0,120,1] ms (社区同)；hold/release 是 101 点对数表，
-#   这里暂不建模 (只做演出最常用的 8 个旋钮)，见 note。
+#   hold 是 logf[0.02,2000,101]；keysrc 是 int[0..64]，与 gate 同表；
+#   filter/type 是 enum int[0..8]，filter/f 是 logf[20,20000,201]。
+# 排列顺序 = 协议表的顺序 (on→mode→det→env→thr→ratio→knee→mgain→attack→
+# hold→release→pos→keysrc→mix→auto→filter)，前端控件表按同一顺序展开。
 _DYN = (
     ParamSpec("ch_dyn_on", "ch", "dyn_on", "/ch/%02d/dyn/on",
               vtype="bool", default=0, label="压缩"),
+    ParamSpec("ch_dyn_mode", "ch", "dyn_mode", "/ch/%02d/dyn/mode",
+              vtype="int", lo=0, hi=1, default=0, dec=0, labels=("COMP", "EXP"),
+              label="动态类型", unverified=True,
+              note="enum int[0..1] {COMP,EXP}; 出厂值需真机确认, 暂取 COMP"),
+    ParamSpec("ch_dyn_det", "ch", "dyn_det", "/ch/%02d/dyn/det",
+              vtype="int", lo=0, hi=1, default=0, dec=0, labels=("PEAK", "RMS"),
+              label="检波方式", unverified=True,
+              note="enum int[0..1] {PEAK,RMS}; 出厂值需真机确认, 暂取 PEAK"),
+    ParamSpec("ch_dyn_env", "ch", "dyn_env", "/ch/%02d/dyn/env",
+              vtype="int", lo=0, hi=1, default=0, dec=0, labels=("LIN", "LOG"),
+              label="包络", unverified=True,
+              note="enum int[0..1] {LIN,LOG}; 出厂值需真机确认, 暂取 LIN"),
     ParamSpec("ch_dyn_thr", "ch", "dyn_thr", "/ch/%02d/dyn/thr",
               vtype="float", lo=-80.0, hi=0.0, default=-20.0, step=0.5,
               label="压缩阈值", unit="dB", dec=1,
@@ -729,17 +838,43 @@ _DYN = (
     ParamSpec("ch_dyn_attack", "ch", "dyn_attack", "/ch/%02d/dyn/attack",
               vtype="float", lo=0.0, hi=120.0, default=10.0, step=1.0,
               label="启动时间", unit="ms", dec=0),
+    ParamSpec("ch_dyn_hold", "ch", "dyn_hold", "/ch/%02d/dyn/hold",
+              vtype="float", lo=0.02, hi=2000.0, default=20.0, logsteps=101,
+              label="保持时间", unit="ms", dec=1, unverified=True,
+              note="logf[0.02,2000,101] ms; 出厂值需真机确认, 暂取 20 ms"),
     ParamSpec("ch_dyn_release", "ch", "dyn_release", "/ch/%02d/dyn/release",
               vtype="float", lo=5.0, hi=4000.0, default=200.0, logsteps=101,
               label="释放时间", unit="ms", dec=0,
               note="手册 logf[5,4000,101] ms"),
+    ParamSpec("ch_dyn_pos", "ch", "dyn_pos", "/ch/%02d/dyn/pos",
+              vtype="bool", default=1, label="压缩位置", labels=("PRE", "POST"),
+              note="enum{PRE,POST} → 0/1 (相对 EQ)"),
+    ParamSpec("ch_dyn_keysrc", "ch", "dyn_keysrc", "/ch/%02d/dyn/keysrc",
+              vtype="int", lo=0, hi=64, default=0, dec=0, labels=_KEYS,
+              label="压缩侧链源", unverified=True,
+              note="int[0..64] {OFF,In01..32,Aux1..6,USB L/R,Fx1L..Fx4R,Bus01..16}; "
+                   "**不是 enum**, 真台只吃整数; 出厂值需真机确认"),
     ParamSpec("ch_dyn_mix", "ch", "dyn_mix", "/ch/%02d/dyn/mix",
               vtype="float", lo=0.0, hi=100.0, default=100.0, step=5.0,
               label="干湿比", unit="%", dec=0,
               note="手册 linf[0,100,5] %, 100 = 全湿"),
-    ParamSpec("ch_dyn_pos", "ch", "dyn_pos", "/ch/%02d/dyn/pos",
-              vtype="bool", default=1, label="压缩位置", labels=("PRE", "POST"),
-              note="enum{PRE,POST} → 0/1 (相对 EQ)"),
+    ParamSpec("ch_dyn_auto", "ch", "dyn_auto", "/ch/%02d/dyn/auto",
+              vtype="bool", default=0, label="自动增益", unverified=True,
+              note="enum{OFF,ON}; 自动补偿增益; 出厂值需真机确认, 暂取关"),
+    ParamSpec("ch_dyn_filter_on", "ch", "dyn_filter_on",
+              "/ch/%02d/dyn/filter/on",
+              vtype="bool", default=0, label="压缩侧链滤波", unverified=True,
+              note="出厂值需真机确认, 暂取关"),
+    ParamSpec("ch_dyn_filter_type", "ch", "dyn_filter_type",
+              "/ch/%02d/dyn/filter/type",
+              vtype="int", lo=0, hi=8, default=0, dec=0, labels=_FILTER_TYPES,
+              label="侧链滤波类型", unverified=True,
+              note="enum int[0..8] {LC6,LC12,HC6,HC12,1.0,2.0,3.0,5.0,10.0}"),
+    ParamSpec("ch_dyn_filter_f", "ch", "dyn_filter_f",
+              "/ch/%02d/dyn/filter/f",
+              vtype="float", lo=20.0, hi=20000.0, default=1000.0, logsteps=201,
+              label="侧链滤波频率", unit="Hz", dec=0, unverified=True,
+              note="logf[20,20000,201] Hz; 出厂值需真机确认, 暂取 1 kHz"),
 )
 _SPECS.extend(_DYN)
 
@@ -804,18 +939,23 @@ _SEND_TAP_LABELS = ("<-EQ", "EQ->", "PRE", "POST", "GRP")
 _SEND = (
     ParamSpec("send_level", "send", "level", "/ch/%02d/mix/%02d/level",
               vtype="float", lo=0.0, hi=1.0, default=0.0, dec=3,
-              label="发送电平", unit="%", nidx=2, dims=SEND_BUS,
-              note="level[0..1(+10dB), 161]; 出厂值需真机确认, 暂取 0(-∞)"),
+              linsteps=161, label="发送电平", unit="%", nidx=2, dims=SEND_BUS,
+              unverified=True,
+              note="协议类型 **level**: [0..1(+10dB), 161 档] —— 161 个点就是 "
+                   "f=k/160 (k=0..160) 的等分, 不是等 dB; dB 换算见 level_db()。"
+                   "出厂值需真机确认, 暂取 0(-∞)"),
     ParamSpec("send_on", "send", "on", "/ch/%02d/mix/%02d/on",
               vtype="bool", default=0, label="发送开关", nidx=2, dims=SEND_BUS,
+              unverified=True,
               note="出厂值需真机确认, 暂取关"),
     ParamSpec("send_tap", "send", "tap", "/ch/%02d/mix/%02d/type",
               vtype="int", lo=0.0, hi=4.0, default=3, dec=0,
               labels=_SEND_TAP_LABELS, label="发送取点",
-              nidx=2, dims=SEND_BUS,
+              nidx=2, dims=SEND_BUS, unverified=True,
               note="enum int[0..4] {<-EQ,EQ->,PRE,POST,GRP}; "
                    "**只对奇数 Bus 定义** (协议表), 真台按 1&2 / 3&4 成对共享取点 → "
                    "本地把偶数 Bus 统一落到奇数 Bus, 只留一份真相; "
+                   "线上用整数索引 (真台也接受字符串, 见 --tap-wire); "
                    "出厂默认需真机确认, 暂取 POST"),
 )
 _SPECS.extend(_SEND)
@@ -853,6 +993,18 @@ for _sp in _SPECS:
     if len(_parts) == 5:
         CH_EQ_ADDR.setdefault((_parts[2], _parts[4]), []).append(_sp)
 
+# 五段深层地址 (非 EQ): /ch/01/gate/filter/on、/ch/01/dyn/filter/f …
+# 用 (第3段, 第4段, 第5段) 做键, 与 EQ 的 (第3段, 末段) 分开 ——
+# 两张表混用会让 /ch/01/dyn/filter/f 被当成 EQ 段号去查, 静默无回包。
+# ⚠️ 排除 eq: 它已经有自己的表, 重复登记会让 match_address 返回两份结果。
+CH_DEEP_ADDR = {}
+for _sp in _SPECS:
+    if _sp.group != "ch" or _sp.push or _sp.kind.startswith("ch_eq"):
+        continue
+    _parts = _sp.osc.strip("/").split("/")
+    if len(_parts) == 5 and "%02d" in _parts[1]:
+        CH_DEEP_ADDR.setdefault((_parts[2], _parts[3], _parts[4]), []).append(_sp)
+
 
 # 控台实际能接受的范围 (kind → (lo, hi))。由 app 在选好控台后写入,
 # 目前只有 trim: 手册 ±12 / 固件 1.15+ ±18。空表 = 全部用 spec 自带量程。
@@ -867,6 +1019,30 @@ def set_param_limits(limits):
 
 def active_limits(kind):
     return _ACTIVE_LIMITS.get(kind)
+
+
+def set_enum_wire(overrides):
+    """运行时切换枚举的线上形式 (kind → "value"/"index"/"label")。
+
+    存在的理由: 真台对**枚举字符串**的接受度是明确的 (合法 OSC), 但**回包**形式
+    随固件不同, 而这一点在没有真机时无法确认。与其猜一个全局默认, 不如:
+      · 默认按 spec 声明 (索引);
+      · 用一个独立的启动开关 `--tap-wire label` 切换;
+      · 两种形式都由回归覆盖 —— 万一真台回字符串, 改一个参数就能对上。
+    """
+    changed = []
+    for kind, style in (overrides or {}).items():
+        sp = PARAM_SPECS.get(kind)
+        if sp is None or style not in ("value", "index", "label"):
+            continue
+        sp.enum_wire = style
+        changed.append("%s=%s" % (kind, style))
+    return changed
+
+
+def unverified_kinds():
+    """出厂值是推断值、尚未真机核对的参数清单 (给 /api/info 与核对工具用)。"""
+    return [sp for sp in _SPECS if sp.unverified]
 
 
 def spec_addr(sp, idx):
@@ -890,6 +1066,51 @@ def spec_addr(sp, idx):
 
 def _nearest_enum(sp, v):
     return min(sp.enum, key=lambda e: (abs(e - v), e))
+
+
+# ---------------------------------------------------------------- level 曲线
+# 协议里 `level` 类型 (推子 / 发送电平 / 主输出…) 不是等 dB, 而是 **4 段伪对数**:
+#   f >= 0.5        → dB = 40f  - 30
+#   0.25 <= f < 0.5 → dB = 80f  - 50
+#   0.0625<= f <0.25→ dB = 160f - 70
+#   f < 0.0625      → dB = 480f - 90
+# 锚点: 0.75→0 dB, 0.5→-10, 0.25→-30, 0.0625→-60, 1→+10, 0→-∞。
+# ⚠️ 本函数是**唯一一份**曲线定义: 后端显示、DCA/相对 dB 动作、前端刻度都引用它。
+#    曾经这里写的是 20*log10(f/0.75) —— 只有 0.75 一个点对得上, 0.25 处偏 +20 dB,
+#    于是"台面 -30 dB、界面 -9.5 dB", 且 rel_db 动作移动量完全不对。
+_LEVEL_SEGS = ((0.5, 40.0, -30.0), (0.25, 80.0, -50.0),
+               (0.0625, 160.0, -70.0), (0.0, 480.0, -90.0))
+
+
+def level_db(f):
+    """归一值 0..1 → 真台显示的 dB。f=0 是真台的 -∞ 特殊点, 返回 -90 便于排序。"""
+    try:
+        f = float(f)
+    except (TypeError, ValueError):
+        return -90.0
+    if f <= 0.0:
+        return -90.0
+    f = min(f, 1.0)
+    for lo, k, b in _LEVEL_SEGS:
+        if f >= lo:
+            return k * f + b
+    return -90.0
+
+
+def level_from_db(db):
+    """level_db 的逆: dB → 0..1 (-90..+10)。"""
+    try:
+        db = float(db)
+    except (TypeError, ValueError):
+        return 0.0
+    db = min(max(db, -90.0), 10.0)
+    if db >= -10.0:
+        return (db + 30.0) / 40.0
+    if db >= -30.0:
+        return (db + 50.0) / 80.0
+    if db >= -60.0:      # 第三段覆盖 -60..-30, 分界是 -60 不是 -50 ——
+        return (db + 70.0) / 160.0   # 写 -50 会让 -54 落进第四段, f 从 0.1 跳到 0.075
+    return (db + 90.0) / 480.0
 
 
 def _snap(sp, v):
@@ -918,6 +1139,13 @@ def _snap(sp, v):
         i = int(round((sp.logsteps - 1) * math.log(max(v, 1e-9) / a) / span))
         i = min(max(i, 0), sp.logsteps - 1)
         return a * (b / a) ** (i / (sp.logsteps - 1))
+    if sp.linsteps > 1:
+        # 线性等分档位 (level 161 档 / fader 1024 档): 值是 k/(n-1), k 取整。
+        # 用"点数"而不是 step, 是因为 1/160 无法用十进制 step 精确表达 ——
+        # 0.00625 这种步长跑 160 次会漂 1e-15, 回读比对就会误判成"变了"。
+        n = sp.linsteps - 1
+        v = round(v * n) / n
+        return round(min(max(v, lo), hi), 6)
     if sp.step:
         v = round(v / sp.step) * sp.step
         return round(min(max(v, lo), hi), 6)         # 量化后再钳 (0.3 这种非整步长下限)
@@ -935,13 +1163,20 @@ def param_coerce(kind, value):
 def param_wire(sp, v):
     """本地存的值 → **线上**该发的值 (OSC 回包与桥接转发共用)。
 
-    只有 enum_wire="index" 需要换算: 本地 4.0 (4:1) → 线上 6。
-    其余按 vtype 定型 (float 发浮点 / bool 发 0-1 / int 发整数)。
+    三种换算:
+      · enum_wire="index"  → 本地比值/自然值换算成枚举下标 (dyn/ratio 4.0 → 6)
+      · enum_wire="label"  → 发**枚举名字符串** (发送取点 "POST")
+      · 其余按 vtype 定型 (float 发浮点 / bool 发 0-1 / int 发整数)
     """
     if sp.vtype == "bool":
         return 1 if _truthy(v) else 0
     if sp.enum is not None and sp.enum_wire == "index":
         return sp.enum.index(_nearest_enum(sp, _finite(v, sp.default)))
+    if sp.labels and sp.enum_wire == "label":
+        # 真台两种形式都收 (enum 的字符串形式是合法 OSC), 但回包形式因固件而异。
+        # 这个分支的存在意义是**可被探测/切换**, 不是默认路径 —— 见 --tap-wire。
+        k = int(round(_finite(v, sp.default)))
+        return sp.labels[k] if 0 <= k < len(sp.labels) else str(k)
     return float(v) if sp.vtype == "float" else int(round(float(v)))
 
 
@@ -950,7 +1185,21 @@ def param_from_wire(sp, v):
 
     真台的 dyn/ratio 收到的是索引 (0..11)，直接落库会把 6 存成 "6:1" ——
     实际是 4:1。这一层换算只在入线处做一次，落库之后全项目都看到比值。
+
+    另外支持**枚举名字符串** (收到 "POST" / "GRP" / "GATE")：协议允许多种写法,
+    真台不同固件回包可能是字符串。以前这里会把字符串当非法值 → 落回默认值,
+    表现为"读一次真台，取点就从 POST 变成默认值"——静默改值, 最难查的一类。
     """
+    if isinstance(v, str) and sp.labels:
+        s = v.strip().upper()
+        for _i, _lab in enumerate(sp.labels):
+            if _lab.upper() == s:
+                if sp.vtype == "bool":
+                    return int(_i)
+                if sp.enum is not None and sp.enum_wire == "index":
+                    return sp.enum[_i]
+                return float(_i)
+        # 名字不认识 → 继续按数值解析; 解析不了会落回 default (由 _finite 兜底)
     if sp.vtype == "bool":
         return _truthy(v)
     if sp.enum is not None and sp.enum_wire == "index":
@@ -1490,26 +1739,15 @@ class MixerState:
         self.names = dict(DEFAULT_NAMES)
 
     def fader_to_db(self, f: float) -> float:
-        if f <= 0.0:
-            return -90.0
-        if f >= 0.75:
-            return (f - 0.75) / 0.25 * 10.0
-        # 历史 bug：此处曾有 `if f <= 0.001: return -90.0`，把 -57.5dB 以下的整段
-        # 塌陷成 -∞，导致 -60dB 无法往返（Android/Kotlin 端曾忠实照搬同一 bug）。
-        # 改为对下限做 clamp，保住低段分辨率。
-        return max(-90.0, 20.0 * math.log10(f / 0.75))
+        # 曲线定义搬到 params.level_db: 协议 4 段伪对数 (0.75→0dB, 0.5→-10,
+        # 0.25→-30, 0.0625→-60)。这里只做入口转发, 保证"界面 / 卡片 rel_db /
+        # DCA 级联 / 电平模拟"四处的 dB 全部同源。
+        return level_db(f)
 
 
 def db_to_fader(db: float) -> float:
-    """fader_to_db 的逆运算:-90..+10 dB → 0..1 推子行程"""
-    db = min(max(db, -90.0), 10.0)
-    if db <= -89.5:
-        return 0.0
-    if db >= 10.0:
-        return 1.0
-    if db >= 0.0:
-        return 0.75 + db / 10.0 * 0.25
-    return 0.75 * (10.0 ** (db / 20.0))
+    """fader_to_db 的逆运算:-90..+10 dB → 0..1 推子行程 (同一 4 段曲线)。"""
+    return level_from_db(db)
 
 STATE = MixerState()
 METER_SUBSCRIBERS = {}      # {(ip, port): 最后活跃时间}; /meters /subscribe /xremote 续期, 30 秒超时清理
@@ -1585,6 +1823,15 @@ def match_address(pattern: str):
                         hit = seg_match(segs[3], "%02d" % (bus + 1))
                     if hit:
                         results.append((sp.kind, send_pack(ch, bus)))
+        elif len(segs) == 5 and segs[0] == "ch" \
+                and (segs[2], segs[3], segs[4]) in CH_DEEP_ADDR:
+            # 侧链滤波器: /ch/01/gate/filter/on、/ch/01/dyn/filter/f …
+            # 与 EQ 同为五段但结构不同 (EQ 是 /eq/<段号>/<参数>), 用独立的表,
+            # 免得 /dyn/filter/f 被当成"EQ 第 4 段"去查而静默无回包。
+            for sp in CH_DEEP_ADDR[(segs[2], segs[3], segs[4])]:
+                for i in sorted(STATE.ch):
+                    if seg_match(segs[1], "%02d" % i):
+                        results.append((sp.kind, i))
         elif len(segs) == 4 and segs[0] == "bus" and segs[2] == "mix":
             kind = {"fader": "bus_fader", "on": "bus_on"}.get(segs[3])
             if kind:
@@ -1851,11 +2098,109 @@ def value_reply(kind, idx):
 PUSH_CACHE = {}      # (kind, idx) -> 上次推送的值; 状态变化推给订阅者 (真台 /xremote 行为)
 PUSH_KINDS = (list(FADER_ADDR.keys()) + list(ON_ADDR.keys()))
 
+# 每个订阅者"已经推过哪些键"。
+# 为什么不能只用 PUSH_CACHE（全局）: 它是"上次推给**任何**订阅者"的值。
+# 第二个客户端连上来时缓存已经填满、值也没变 → 它一个包都收不到，界面全 0；
+# 客户端 A 断开期间发生的变化，A 重连后同样补不回来。真台 /xremote 本来也
+# 只推变化（不做初始全量），所以这不算协议不一致，但**作为模拟器**，
+# 让新订阅者能自己对齐状态是刚需 —— 见 XREMOTE_SNAPSHOT 与 /subscribe。
+SUB_SEEN = {}        # addr -> set((kind, idx))
+XREMOTE_SNAPSHOT = [False]   # /xremote 首帧是否补一次全量（非真台行为，默认关）
+
+# /subscribe 的按地址周期订阅: addr -> {pattern: {rate, due, expire}}
+# 协议语义（Unofficial v4.06 / 官方 /subscribe）: 客户端说"我关心这个地址、
+# 按这个倍数回报"，服务端在 10 秒内周期性回值；rate 的单位是 50ms 的倍数。
+PATTERN_SUBS = {}
+PATTERN_LOCK = threading.Lock()
+SUB_TIMEOUT = 10.0
+
+
+def subscribe_client(addr):
+    """登记一个订阅者（/xremote、/subscribe、/meters 都走这里）。
+
+    返回 True 表示这是**首次**出现的来源 —— 调用方可以据此决定要不要补快照。
+    ⚠️ 以前三处各自 `METER_SUBSCRIBERS[addr] = time.time()`，SUB_SEEN 就没人建，
+       新订阅者第一次遍历时拿不到 seen 集合（表现为"有时补、有时不补"）。
+    """
+    with METER_LOCK:
+        first = addr not in METER_SUBSCRIBERS
+        METER_SUBSCRIBERS[addr] = time.time()
+        if first:
+            SUB_SEEN[addr] = set()
+        return first
+
+
+def unsubscribe_client(addr):
+    with METER_LOCK:
+        METER_SUBSCRIBERS.pop(addr, None)
+        SUB_SEEN.pop(addr, None)
+    with PATTERN_LOCK:
+        PATTERN_SUBS.pop(addr, None)
+
+
+def subscribe_pattern(addr, pattern, rate=1):
+    """按地址周期订阅（协议 /subscribe）。rate 单位 = 50ms 的倍数。"""
+    try:
+        rate = max(1, min(int(rate), 200))
+    except (TypeError, ValueError):
+        rate = 1
+    now = time.time()
+    with PATTERN_LOCK:
+        d = PATTERN_SUBS.setdefault(addr, {})
+        # due=now → 订阅后的第一轮立刻回一帧当前值，这正是"新客户端拿到初始值"
+        # 的标准做法（真台也是这样：/subscribe 之后马上就能收到当前值）。
+        d[pattern] = {"rate": rate * 0.05, "due": now, "expire": now + SUB_TIMEOUT}
+    return rate
+
+
+def unsubscribe_pattern(addr, pattern=None):
+    with PATTERN_LOCK:
+        if pattern is None:
+            PATTERN_SUBS.pop(addr, None)
+        else:
+            PATTERN_SUBS.get(addr, {}).pop(pattern, None)
+
+
+def _service_pattern_subs(sock):
+    """按 due 时间把订阅地址的当前值回给订阅者（10 秒无续期自动过期）。"""
+    now = time.time()
+    with PATTERN_LOCK:
+        due = []
+        for a, d in list(PATTERN_SUBS.items()):
+            for p, st in list(d.items()):
+                if now > st["expire"]:
+                    d.pop(p, None)
+                    continue
+                if now >= st["due"]:
+                    st["due"] = now + st["rate"]
+                    due.append((a, p))
+            if not d:
+                PATTERN_SUBS.pop(a, None)
+    for a, p in due:
+        matches = match_address(p)
+        replies = [r for r in (value_reply(k, i) for k, i in matches) if r is not None]
+        if not replies:
+            continue
+        try:
+            pkt = encode_message(replies[0]) if len(replies) == 1 \
+                else encode_bundle(replies)
+            sock.sendto(pkt, a)
+        except OSError:
+            pass
+
 
 def _push_state_diffs(sock, subscribers):
-    """每次 tick 对比缓存, 把发生变化的推子/静音推给订阅者 (模拟真台变更推送)。"""
+    """每次 tick 对比缓存, 把发生变化的推子/静音推给订阅者 (模拟真台变更推送)。
+
+    ⚠️ 两个易错点（都踩过）:
+      1. `PUSH_CACHE` 必须在**所有**订阅者都发完之后再更新。写在循环里的话，
+         第一个订阅者发完就把缓存改了，后面的订阅者算出来"没变化"→ 漏发。
+      2. 新订阅者（SUB_SEEN 里没有这个键）在 XREMOTE_SNAPSHOT 开启时要补一帧，
+         否则它只能等下一次真实变化 —— 界面在很长一段时间里是空的。
+    """
     sent = 0
     counts = profile().counts
+    snapshot = XREMOTE_SNAPSHOT[0]
     for kind in PUSH_KINDS:
         ids = [0] if kind.startswith("main_") else \
             range(1, counts.get(kind_group(kind), 0) + 1)
@@ -1865,34 +2210,58 @@ def _push_state_diffs(sock, subscribers):
                 continue
             key = (kind, i)
             old = PUSH_CACHE.get(key)
-            if old is not None and abs(old - v) < 1e-4:
-                continue
-            PUSH_CACHE[key] = v
-            reply = value_reply(kind, i)
-            if reply is None:      # 当前控台没有这个目标的地址 → 不推送
-                continue
-            pkt = encode_message(reply)
+            changed = old is None or abs(old - v) >= 1e-4
+            pkt = None
             for s in subscribers:
+                seen = SUB_SEEN.get(s)
+                if seen is None:
+                    seen = SUB_SEEN[s] = set()
+                if not changed and not (snapshot and key not in seen):
+                    continue
+                if pkt is None:
+                    reply = value_reply(kind, i)
+                    if reply is None:      # 当前控台没有这个目标的地址 → 不推送
+                        break
+                    pkt = encode_message(reply)
                 try:
                     sock.sendto(pkt, s)
                     sent += 1
                 except OSError:
                     pass
+                seen.add(key)
+            if changed:
+                PUSH_CACHE[key] = v
     return sent
 
 
 def meter_streamer(sock):
-    """每 150ms 向所有订阅者推送 /meters/1 blob + 台面变更推送; 30 秒无续期的订阅者自动剔除。"""
+    """50ms 基准循环: 电平与变更推送仍按 150ms (3 tick), /subscribe 按各自 rate。
+
+    为什么拆成 50ms 基准: /subscribe 的 rate 单位就是 50ms 的倍数, 用 150ms 的
+    循环去服务它, rate=1 只能做到 6.7 Hz, 与协议的 20 Hz 差三倍。
+    """
+    tick = 0
     while True:
-        time.sleep(0.15)
+        time.sleep(0.05)
+        tick += 1
         now = time.time()
         with METER_LOCK:
             stale = [s for s, ts in METER_SUBSCRIBERS.items() if now - ts > 30.0]
             for s in stale:
                 METER_SUBSCRIBERS.pop(s, None)
+                SUB_SEEN.pop(s, None)
             if stale:
                 log("METER 清理失活订阅者: %d 个" % len(stale))
             subscribers = list(METER_SUBSCRIBERS)
+        for s in stale:
+            with PATTERN_LOCK:
+                PATTERN_SUBS.pop(s, None)
+        try:
+            _service_pattern_subs(sock)
+        except Exception as e:
+            log("按地址订阅推送出错: %r" % e)
+        if tick % 3:            # 以下保持 150ms 一轮
+            continue
         if not subscribers:
             continue
         floats = compute_levels()
@@ -4687,7 +5056,6 @@ SIM_FIRMWARE = "3.06-sim"
 """x32sim/oscsrv — OSC 消息分发 (UDP 主循环的每个包)"""
 
 import struct
-import time
 
 
 
@@ -4701,31 +5069,48 @@ def handle(msg: OscMsg, addr, sock):
         sock.sendto(encode_message(reply), addr)
         return
 
-    if a == "/subscribe":
-        on = bool(msg.args and msg.args[0] != 0)
-        with METER_LOCK:
-            if on:
-                METER_SUBSCRIBERS[addr] = time.time()
+    if a in ("/subscribe", "/unsubscribe"):
+        # 协议 /subscribe ,s<地址> [,i<倍数>]: "我关心这个地址, 每 N×50ms 回一次"
+        # 无地址参数时退化成"台面变更推送订阅"(旧行为, 保留兼容)。
+        pat = None
+        for arg in msg.args:
+            if isinstance(arg, str) and arg.startswith("/"):
+                pat = arg
+                break
+        rate = 1
+        for arg in msg.args[1:]:
+            if isinstance(arg, (int, float)) and not isinstance(arg, bool):
+                rate = int(arg)
+                break
+        if a == "/subscribe":
+            first = subscribe_client(addr)
+            if pat:
+                subscribe_pattern(addr, pat, rate)
+            log("    订阅: %s %s (rate=%d, %s, 共 %d 个来源)" % (
+                addr, pat or "(台面变更)", rate,
+                "首次" if first else "续期", len(METER_SUBSCRIBERS)))
+        else:
+            if pat:
+                unsubscribe_pattern(addr, pat)
             else:
-                METER_SUBSCRIBERS.pop(addr, None)
-        log("    台面变更推送订阅: %s (来源 %s, 共 %d 个)" %
-            ("开启" if on else "关闭", addr, len(METER_SUBSCRIBERS)))
+                unsubscribe_client(addr)
+            log("    退订: %s %s (剩 %d 个来源)" % (
+                addr, pat or "(全部)", len(METER_SUBSCRIBERS)))
         return
 
-    if a == "/xremote":
+    if a in ("/xremote", "/xcontrol"):
         # 真台保活: 续期该来源的订阅 (30 秒无续期自动清理)
-        with METER_LOCK:
-            METER_SUBSCRIBERS[addr] = time.time()
+        # ⚠️ 真台 /xremote **只推变化**, 不推初始全量; 需要初始值时客户端应逐条
+        #    GET 或 /subscribe。这里保留同语义, 首帧补全由 --xremote-snapshot 开启。
+        subscribe_client(addr)
         return
 
     if a.startswith("/meters"):
         if msg.args and msg.args[0] == 0:
-            with METER_LOCK:
-                METER_SUBSCRIBERS.pop(addr, None)
+            unsubscribe_client(addr)
             log("    电平表退订: %s" % (addr,))
         else:
-            with METER_LOCK:
-                METER_SUBSCRIBERS[addr] = time.time()
+            subscribe_client(addr)
             log("    电平表订阅: %s (共 %d 个订阅者)" % (addr, len(METER_SUBSCRIBERS)))
             # 对齐真机: 每次请求立即回一帧
             floats = compute_levels()
@@ -5416,9 +5801,10 @@ WEB_PAGE = r"""<!DOCTYPE html>
   <div class="mdlg" role="dialog" aria-label="通道参数">
     <div class="mhd"><b id="chpTitle">通道参数</b>
       <button class="mclose" onclick="closeChParams()" aria-label="关闭">✕</button></div>
-    <div class="ds">前置 / 动态 / 均衡 / 发送 · 拖动即写入台面（不是草稿）· 点数值可键盘精调</div>
+    <div class="ds">前置 / 门 / 动态 / 均衡 / 发送 · 拖动即写入台面（不是草稿）· 点数值可键盘精调</div>
     <div class="chp-tabs" id="chpTabBar">
       <button type="button" data-tab="pre" onclick="chpTab('pre')">前置</button>
+      <button type="button" data-tab="gate" onclick="chpTab('gate')">门</button>
       <button type="button" data-tab="dyn" onclick="chpTab('dyn')">动态</button>
       <button type="button" data-tab="eq" onclick="chpTab('eq')">均衡</button>
       <button type="button" data-tab="send" onclick="chpTab('send')">发送</button>
@@ -5459,7 +5845,15 @@ WEB_PAGE = r"""<!DOCTYPE html>
 
 <script>
 const $ = s => document.querySelector(s);
-const dbOf = f => f<=0 ? -90 : (f>=0.75 ? (f-0.75)/0.25*10 : 20*Math.log10(f/0.75));
+// 推子/发送电平的 dB 曲线: 协议 `level` 类型的 **4 段伪对数**
+//   f>=0.5 → 40f-30 | f>=0.25 → 80f-50 | f>=0.0625 → 160f-70 | 否则 480f-90
+// 锚点 0.75→0 dB, 0.5→-10, 0.25→-30, 0.0625→-60。与后端 params.level_db 同源;
+// 以前用的是 20*log10(f/0.75), 只有 0.75 一个点对得上 (0.25 处偏 +20 dB)。
+const dbOf = f => (f<=0 ? -90
+  : f>=0.5 ? f*40-30
+  : f>=0.25 ? f*80-50
+  : f>=0.0625 ? f*160-70
+  : f*480-90);
 const dbTxt = db => db<=-89 ? "-∞" : db.toFixed(1);
 let S = null;
 
@@ -5506,12 +5900,13 @@ function rowHTML(prefix, i){
     <button class="mute" onclick="toggle('${prefix}',${i},this)">M</button>
   </div>`;
 }
-// ±0.5 dB 精调 (与后端 fader_to_db 曲线一致) / 双击回 0 dB
+// ±0.5 dB 精调 (与后端 level_db 4 段曲线一致) / 双击回 0 dB
 function dbToFader(db){
   db=Math.min(Math.max(db,-90),10);
-  if(db<=-89.5) return 0;
-  if(db>=10) return 1;
-  return db>=0 ? 0.75+db/10*0.25 : 0.75*Math.pow(10,db/20);
+  if(db>=-10) return (db+30)/40;
+  if(db>=-30) return (db+50)/80;
+  if(db>=-60) return (db+70)/160;   // -60..-30 段 (分界 -60, 不是 -50)
+  return (db+90)/480;
 }
 function nudge(p,i,d){
   const r=document.getElementById('r-'+p+'-'+i); if(!r) return;
@@ -5586,6 +5981,14 @@ function flushSend(){
 // t: num=滑块+数值 / bool=两态按钮 / enum=下拉
 // 顺序必须与 CH_PARAM_SPECS 完全一致 (回归按序比对)。
 const EQ_TYPES=[[0,'LCut'],[1,'LShv'],[2,'PEQ'],[3,'VEQ'],[4,'HShv'],[5,'HCut']];
+// 侧链源 (keysrc): 协议 int[0..64] {OFF,In01..32,Aux1..6,USB L/R,Fx1L..Fx4R,Bus01..16}
+// 顺序即索引, 与后端 params._KEYS 逐项一致 (回归会比对长度与顺序)。
+const KEYS_OPTS=[[0,'OFF'],[1,'In01'],[2,'In02'],[3,'In03'],[4,'In04'],[5,'In05'],[6,'In06'],[7,'In07'],[8,'In08'],[9,'In09'],[10,'In10'],[11,'In11'],[12,'In12'],[13,'In13'],[14,'In14'],[15,'In15'],[16,'In16'],[17,'In17'],[18,'In18'],[19,'In19'],[20,'In20'],[21,'In21'],[22,'In22'],[23,'In23'],[24,'In24'],[25,'In25'],[26,'In26'],[27,'In27'],[28,'In28'],[29,'In29'],[30,'In30'],[31,'In31'],[32,'In32'],[33,'Aux1'],[34,'Aux2'],[35,'Aux3'],[36,'Aux4'],[37,'Aux5'],[38,'Aux6'],[39,'USB L'],[40,'USB R'],[41,'Fx1L'],[42,'Fx1R'],[43,'Fx2L'],[44,'Fx2R'],[45,'Fx3L'],[46,'Fx3R'],[47,'Fx4L'],[48,'Fx4R'],[49,'Bus01'],[50,'Bus02'],[51,'Bus03'],[52,'Bus04'],[53,'Bus05'],[54,'Bus06'],[55,'Bus07'],[56,'Bus08'],[57,'Bus09'],[58,'Bus10'],[59,'Bus11'],[60,'Bus12'],[61,'Bus13'],[62,'Bus14'],[63,'Bus15'],[64,'Bus16']];
+// 插入点目标: int[0..22] {OFF, FX1L..FX8R, AUX1..6}
+const INS_OPTS=[[0,'OFF'],[1,'FX1L'],[2,'FX1R'],[3,'FX2L'],[4,'FX2R'],[5,'FX3L'],[6,'FX3R'],[7,'FX4L'],[8,'FX4R'],[9,'FX5L'],[10,'FX5R'],[11,'FX6L'],[12,'FX6R'],[13,'FX7L'],[14,'FX7R'],[15,'FX8L'],[16,'FX8R'],[17,'AUX1'],[18,'AUX2'],[19,'AUX3'],[20,'AUX4'],[21,'AUX5'],[22,'AUX6']];
+// 侧链滤波器类型: enum int[0..8]
+const FILTER_TYPES=[[0,'LC6'],[1,'LC12'],[2,'HC6'],[3,'HC12'],[4,'1.0'],[5,'2.0'],[6,'3.0'],[7,'5.0'],[8,'10.0']];
+const GATE_MODES=[[0,'EXP2'],[1,'EXP3'],[2,'EXP4'],[3,'GATE'],[4,'DUCK']];
 const CH_PARAM_UI=[
   {f:'trim',       l:'增益',     t:'num',  u:'dB',     lo:-18, hi:18,  step:0.25, dec:2, dv:0},
   {f:'invert',     l:'反相',     t:'bool', lb:['正常','反相']},
@@ -5596,19 +5999,38 @@ const CH_PARAM_UI=[
   {f:'hpf_f',      l:'低切频率', t:'num',  u:'Hz',     lo:20,  hi:400, step:1,    dec:0, dv:80, dep:'hpf_on', lg:1},
   {f:'ins_on',     l:'插入',     t:'bool', lb:['关','开']},
   {f:'ins_pos',    l:'插入位置', t:'enum', opts:[[0,'PRE'],[1,'POST']], dep:'ins_on'},
+  {f:'ins_sel',    l:'插入目标', t:'enum', opts:INS_OPTS, dep:'ins_on'},
   {f:'gate_on',    l:'噪声门',   t:'bool', lb:['关','开']},
   {f:'gate_thr',   l:'门限',     t:'num',  u:'dB',     lo:-80, hi:0,   step:0.5,  dec:1, dv:-40, dep:'gate_on'},
   {f:'gate_range', l:'门范围',   t:'num',  u:'dB',     lo:3,   hi:60,  step:1,    dec:0, dv:15, dep:'gate_on'},
+  // ---- 噪声门: 补齐的 8 个旋钮 (对齐协议表) ----
+  {f:'gate_mode',  l:'门类型',   t:'enum', opts:GATE_MODES, dep:'gate_on'},
+  {f:'gate_attack',l:'门启动',   t:'num',  u:'ms',     lo:0,   hi:120, step:1,    dec:0, dv:10, dep:'gate_on'},
+  {f:'gate_hold',  l:'门保持',   t:'num',  u:'ms',     lo:0.02,hi:2000,step:0.01, dec:1, dv:20, dep:'gate_on', lg:1},
+  {f:'gate_release',l:'门释放',  t:'num',  u:'ms',     lo:5,   hi:4000,step:1,    dec:0, dv:200,dep:'gate_on', lg:1},
+  {f:'gate_keysrc',l:'门侧链源', t:'enum', opts:KEYS_OPTS, dep:'gate_on'},
+  {f:'gate_filter_on',  l:'门侧链滤波', t:'bool', lb:['关','开'], dep:'gate_on'},
+  {f:'gate_filter_type',l:'门滤波类型', t:'enum', opts:FILTER_TYPES, dep:'gate_filter_on'},
+  {f:'gate_filter_f',   l:'门滤波频率', t:'num',  u:'Hz', lo:20, hi:20000, step:1, dec:0, dv:1000, dep:'gate_filter_on', lg:1},
   // ---- 动态 (压缩/扩展) ----
   {f:'dyn_on',     l:'压缩',     t:'bool', lb:['关','开']},
+  {f:'dyn_mode',   l:'动态类型', t:'enum', opts:[[0,'COMP'],[1,'EXP']], dep:'dyn_on'},
+  {f:'dyn_det',    l:'检波',     t:'enum', opts:[[0,'PEAK'],[1,'RMS']], dep:'dyn_on'},
+  {f:'dyn_env',    l:'包络',     t:'enum', opts:[[0,'LIN'],[1,'LOG']], dep:'dyn_on'},
   {f:'dyn_thr',    l:'压缩阈值', t:'num',  u:'dB',     lo:-80, hi:0,   step:0.5,  dec:1, dv:-20, dep:'dyn_on'},
   {f:'dyn_ratio',  l:'压缩比',   t:'enum', opts:[[1.1,'1.1:1'],[1.3,'1.3:1'],[1.5,'1.5:1'],[2,'2:1'],[2.5,'2.5:1'],[3,'3:1'],[4,'4:1'],[5,'5:1'],[7,'7:1'],[10,'10:1'],[20,'20:1'],[100,'100:1']], dep:'dyn_on'},
   {f:'dyn_knee',   l:'拐点',     t:'num',  u:'',       lo:0,   hi:5,   step:1,    dec:0, dv:2, dep:'dyn_on'},
   {f:'dyn_mgain',  l:'补偿增益', t:'num',  u:'dB',     lo:0,   hi:24,  step:0.5,  dec:1, dv:0, dep:'dyn_on'},
   {f:'dyn_attack', l:'启动时间', t:'num',  u:'ms',     lo:0,   hi:120, step:1,    dec:0, dv:10, dep:'dyn_on'},
-  {f:'dyn_release',l:'释放时间', t:'num',  u:'ms',     lo:5,   hi:4000,step:1,    dec:0, dv:200, dep:'dyn_on'},
-  {f:'dyn_mix',    l:'干湿比',   t:'num',  u:'%',      lo:0,   hi:100, step:5,    dec:0, dv:100, dep:'dyn_on'},
+  {f:'dyn_hold',   l:'保持时间', t:'num',  u:'ms',     lo:0.02,hi:2000,step:0.01, dec:1, dv:20, dep:'dyn_on', lg:1},
+  {f:'dyn_release',l:'释放时间', t:'num',  u:'ms',     lo:5,   hi:4000,step:1,    dec:0, dv:200, dep:'dyn_on', lg:1},
   {f:'dyn_pos',    l:'压缩位置', t:'enum', opts:[[0,'PRE'],[1,'POST']], dep:'dyn_on'},
+  {f:'dyn_keysrc', l:'压缩侧链源', t:'enum', opts:KEYS_OPTS, dep:'dyn_on'},
+  {f:'dyn_mix',    l:'干湿比',   t:'num',  u:'%',      lo:0,   hi:100, step:5,    dec:0, dv:100, dep:'dyn_on'},
+  {f:'dyn_auto',   l:'自动增益', t:'bool', lb:['关','开'], dep:'dyn_on'},
+  {f:'dyn_filter_on',   l:'侧链滤波', t:'bool', lb:['关','开'], dep:'dyn_on'},
+  {f:'dyn_filter_type', l:'侧链滤波类型', t:'enum', opts:FILTER_TYPES, dep:'dyn_filter_on'},
+  {f:'dyn_filter_f',    l:'侧链滤波频率', t:'num',  u:'Hz', lo:20, hi:20000, step:1, dec:0, dv:1000, dep:'dyn_filter_on', lg:1},
   // ---- 均衡 4 段 ----
   {f:'eq_on',      l:'均衡',     t:'bool', lb:['关','开']},
   {f:'eq1_type',   l:'EQ1 类型', t:'enum', opts:EQ_TYPES, dep:'eq_on'},
@@ -5632,13 +6054,17 @@ const CH_PARAM_UI=[
 // 电平在线上是 0..1, 界面上按 % 显示 —— pct:1 标记这一层换算只在 UI 发生。
 const SEND_UI=[
   {f:'send_on',    l:'发送开关', t:'bool', lb:['关','开']},
-  {f:'send_level', l:'发送电平', t:'num',  u:'%', lo:0, hi:100, step:1, dec:0, dv:75, pct:1},
+  // 协议类型 level: 161 档 = 0..100% 按 0.625% 等分 (f=k/160)。
+  // 滑块仍按 % 走 (手机上百分比好理解), 但标签同时给出真台显示的 dB ——
+  // 50% 在真台是 -10 dB, 不是"一半音量", 只写百分比会误导。
+  {f:'send_level', l:'发送电平', t:'num',  u:'%', lo:0, hi:100, step:0.625, dec:1, dv:75, pct:1, db:1},
   // 官方枚举 {<-EQ, EQ->, PRE, POST, GRP}; 真台按 1&2 / 3&4 成对共享
   {f:'send_tap',   l:'发送取点', t:'enum', opts:[[0,'<-EQ'],[1,'EQ->'],[2,'PRE'],[3,'POST'],[4,'GRP']]},
 ];
-const CH_TABS=[['pre','前置'],['dyn','动态'],['eq','均衡'],['send','发送']];
+const CH_TABS=[['pre','前置'],['gate','门'],['dyn','动态'],['eq','均衡'],['send','发送']];
 function chpTabOf(f){
   if(f.indexOf('send_')===0) return 'send';
+  if(f.indexOf('gate_')===0) return 'gate';
   if(f.indexOf('dyn_')===0) return 'dyn';
   if(f.indexOf('eq')===0) return 'eq';
   return 'pre';
@@ -5665,6 +6091,7 @@ function chpVal(r,pos){
 function chpFmt(r,v){
   const x=+v||0;
   const txt=(r.dec?x.toFixed(r.dec):String(Math.round(x)));
+  if(r.db) return txt+'%'+(x<=0?' (-∞)':' ('+dbOf(x/100).toFixed(1)+' dB)');
   return txt+(r.u?(' '+r.u):'');
 }
 // 数值标签做成可点: 手机上滑块只能"拖个大概", 要精确到 0.25dB 必须能敲键盘。
@@ -7553,10 +7980,17 @@ class WebHandler(BaseHTTPRequestHandler):
             # trimRange: 控台实际接受的数字增益量程 (12=旧固件 / 18=新固件)。
             # 界面用它设滑块范围 —— 不让用户拖到 18 再被服务端弹回 12。
             _lim = active_limits("ch_trim")
+            # calibration.unverified: 出厂值是**推断值**的参数清单。
+            # 不把假设当事实 —— 界面可以据此显示"未标定"角标, 核对工具据此逐条比对。
+            # 只回 kind 列表 (不回 note), 否则 /api/info 会被 26 条注释撑到 5KB。
+            _unv = [sp.kind for sp in unverified_kinds()]
             self._send(200, "application/json; charset=utf-8", json.dumps({
                 "lanIp": LAN_IP[0], "udpPort": UDP_PORT[0], "webPort": WEB_PORT[0],
                 "lanUrl": "http://%s:%d" % (LAN_IP[0], WEB_PORT[0]),
                 "trimRange": abs(_lim[1]) if _lim else 18,
+                "xremoteSnapshot": bool(XREMOTE_SNAPSHOT[0]),
+                "tapWire": PARAM_SPECS["send_tap"].enum_wire,
+                "calibration": {"count": len(_unv), "unverified": _unv},
             }).encode("utf-8"))
         elif path == "/api/scan":
             # 局域网发现: 广播 /xinfo 找真台 (X32 官方发现指令), 无需手填 IP
@@ -8376,7 +8810,23 @@ def main():
     # 收到 ±12: 界面显示多少, 台子上就是多少, 不会出现"本地 15 / 真台 12"的静默差。
     parser.add_argument("--trim-range", type=float, default=None, metavar="DB",
                         help="数字增益量程 ±db (12=旧固件, 18=新固件; 默认按控台能力)")
+    # 真台 /xremote 只推变化, 不推初始全量；需要初始值的客户端应自己 GET 或 /subscribe。
+    # 这个开关是**非标准增强**, 默认关: 打开后新订阅者第一轮能收到当前全台快照,
+    # 便于自研客户端联调, 但不要依赖它 —— 上真台没有这个行为。
+    parser.add_argument("--xremote-snapshot", action="store_true",
+                        help="新订阅者首帧补一次全量 (非真台行为, 默认关)")
+    # 发送取点 (enum) 的线上形式。协议规定枚举可以用整数索引或名字符串发送,
+    # 真台两种都收; 回包形式随固件而异。默认索引; 若真台回字符串读不回来, 用 label。
+    parser.add_argument("--tap-wire", choices=("index", "label"), default="index",
+                        help="发送取点线上形式: index=整数(默认) / label=字符串")
     args = parser.parse_args()
+
+    if args.xremote_snapshot:
+        XREMOTE_SNAPSHOT[0] = True
+        log("订阅: 新订阅者首帧补全量 (非真台行为, 仅调试用)")
+    if args.tap_wire != "index":
+        _chg = set_enum_wire({"send_tap": args.tap_wire})
+        log("枚举线上形式: %s (真台若回字符串, 用这个对齐)" % (", ".join(_chg) or "无"))
 
     _register_sinks()          # 写出口就位后, 任何 set_value 都能被桥接看到
     # 量程覆盖必须在 load_user_config 之前装好: 否则配置文件里的旧值会按宽量程
