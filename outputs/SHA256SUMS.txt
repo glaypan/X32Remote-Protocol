@@ -1,21 +1,20 @@
-621aa1a52116ef4ddde74d3a5ec4ee9e042e71a18c8ed704f9dc40bd28df1be3 *X32Remote-v1.3.1-full.zip
-598c8182f223bc6e69eb3617787913e08c717f967056261aea6d651094e3c4c6 *X32Remote-v1.3.1-assets.zip
-e6c2c459d31750ae4104e6d9b56ca438e05966916fa1bb763849e7fa5e6fd31b *X32Remote-1.1.0.apk
-548f4f6b1a8a2ee4849e62fe3b202ec0ee8705b34efff49b3d00dc5e516f7e08 *X32Remote-unsigned.ipa
+21f1733674a9b12e39472f0985909b665b2ef240fdd51a513b7e245b36e90fa4 *X32Remote-v1.4.0-full.zip
+b111e891f0ba2b21c88bd54f7440ed3c4a4d47ae5b26d7bd0a00d9d6fb680c17 *X32Remote-v1.4.0-assets.zip
+d62223318183656c24c6758008346700004656dc49b9344d39ef141d94df6b34 *X32Remote-1.2.0.apk
+1bb93b5cc31c0048207279980cd2ac2b613d8bf402e6965985b0d2c65ca0735f *X32Remote-unsigned.ipa
 21095074d2764dce6cff290ff1ff04eb3efe1b46c984fcdd69b46e101e97771e *X32Remote-WebDemo.html
-# X32 Remote v1.3.1 发布包校验和 (SHA256)
-# 生成时间: 2026-10-23
+# X32 Remote v1.4.0 发布包校验和 (SHA256)
+# 生成时间: 2026-10-24
 # 校验方式: sha256sum -c SHA256SUMS.txt
 # 说明:
-#   X32Remote-v1.3.1-full.zip      完整发布包（全部源码 + 产物 + 文档）
-#   X32Remote-v1.3.1-assets.zip    仅产物（Android APK + iOS IPA + 网页试用版 + 发布说明）
-#   X32Remote-1.1.0.apk            Android 安装包（versionName 1.1.0 / versionCode 2）
-#   X32Remote-unsigned.ipa         iOS 未签名包（需 Sideloadly 签名，要求 iOS 17+）
-#   X32Remote-WebDemo.html         网页试用版（单文件，浏览器直接打开）
+#   X32Remote-v1.4.0-full.zip      完整发布包（全部源码 + 产物 + 文档）
+#   X32Remote-v1.4.0-assets.zip    仅产物（APK + IPA + 网页试用版 + 发布说明）
+#   X32Remote-1.2.0.apk            Android 安装包（versionName 1.2.0 / versionCode 3，含自动增益入口）
+#   X32Remote-unsigned.ipa         iOS 未签名包（1.2.0 / build 3，含「自动」页签，需自行签名）
+#   X32Remote-WebDemo.html         网页试用版（单文件；快照，不含自动页签）
 #
-# Android APK: 1.1.0 (versionCode 2) / minSdk 26 / targetSdk 35（同源码重建，版本不涨）
-# iOS IPA:     1.1.0 (build 2) / MinimumOSVersion 17.0（同源码重建，无代码变动）
+# Android APK: 1.2.0 (versionCode 3) / minSdk 26 / targetSdk 35，v2/v3 签名（CN=X32 Remote）
+# iOS IPA:     1.2.0 (build 3) / iOS 17+，云端编译 run 40009302385
 #
-# 测试: 回归 10/10 组（新增 qr 组 25 项：解回原文 + RS 校验位全零）
-#       二维码另用 python-qrcode 做同版本同掩码逐位比对（开发环境，5/5 一致）
-#       pyflakes 净 / check_layers 无环 / 单文件 25 模块 9383 行与包同步
+# 测试: 回归 11/11 组（rider 组 42 项）；pyflakes 净；check_layers 无环；
+#       单文件 26 模块与包同步；iOS CI 含单测全绿

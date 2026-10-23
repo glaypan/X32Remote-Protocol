@@ -31,7 +31,7 @@ import threading
 import time
 
 from .logbus import log
-from .state import FADE_LOCK, FADE_ZONE, STATE, compute_levels, db_to_fader, get_value, set_value  # noqa: E501
+from .state import FADE_LOCK, FADE_ZONE, STATE, compute_levels, db_to_fader, get_value, set_value, source_level_db  # noqa: E501
 
 # 三档速度：窗口（平均）/ 死区 / 每秒最大修正
 SPEEDS = {
@@ -55,7 +55,13 @@ RIDER_RT = {}
 
 
 def default_cfg():
-    return {"on": False, "target": -18.0, "mode": "fader", "speed": "medium", "range": 12.0}
+    return {"on": False, "target": -18.0, "mode": "fader", "speed": "medium", "range": 12.0,
+            # 表源: post = 推子后(默认, 与界面电平表同源); pre = 推子前(推子动不影响测量)
+            "tap": "post",
+            # 侧链: 0 = 用本通道电平; 1-32 = 用那一路的电平来判断, 但仍修正本通道
+            "sidechain": 0,
+            # 目标曲线: None = 固定目标; {"loop": 秒(0=不循环), "points": [[t, dB], ...]}
+            "curve": None}
 
 
 def _num(v, lo, hi, default):
@@ -67,6 +73,90 @@ def _num(v, lo, hi, default):
     if not math.isfinite(f):
         return default
     return max(lo, min(hi, f))
+
+
+def _clean_curve(raw):
+    """把界面传来的曲线消毒成 {"loop": 秒, "points": [[t, dB], ...]}；非法返回 None。"""
+    if raw in (None, "", [], {}):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    pts = raw.get("points")
+    if not isinstance(pts, list) or len(pts) < 2:
+        return None
+    clean = []
+    for pt in pts[:32]:
+        try:
+            t = float(pt[0])
+            db = float(pt[1])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if not (math.isfinite(t) and math.isfinite(db)):
+            continue
+        clean.append([round(max(0.0, min(3600.0, t)), 2), round(max(-60.0, min(0.0, db)), 1)])
+    clean.sort(key=lambda x: x[0])
+    # 同一时刻只留一个（后者覆盖）
+    dedup = []
+    for t, db in clean:
+        if dedup and abs(dedup[-1][0] - t) < 0.01:
+            dedup[-1][1] = db
+        else:
+            dedup.append([t, db])
+    if len(dedup) < 2:
+        return None
+    try:
+        loop = float(raw.get("loop") or 0.0)
+    except (TypeError, ValueError):
+        loop = 0.0
+    loop = max(0.0, min(3600.0, loop)) if math.isfinite(loop) else 0.0
+    if 0 < loop < dedup[-1][0]:
+        loop = dedup[-1][0]          # 循环长度不能短于最后一个点
+    return {"loop": round(loop, 2), "points": dedup}
+
+
+def target_at(curve, elapsed, fallback):
+    """曲线在 elapsed 秒处的目标电平（线性插值，两端钳住，可循环）。"""
+    if not curve:
+        return fallback
+    pts = curve.get("points") or []
+    if len(pts) < 2:
+        return fallback
+    loop = float(curve.get("loop") or 0)
+    t = max(0.0, elapsed if elapsed == elapsed else 0.0)
+    if loop > 0:
+        t = math.fmod(t, loop)
+    if t <= pts[0][0]:
+        return pts[0][1]
+    if t >= pts[-1][0]:
+        return pts[-1][1]
+    for k in range(1, len(pts)):
+        t0, v0 = pts[k - 1]
+        t1, v1 = pts[k]
+        if t <= t1:
+            if t1 <= t0:
+                return v1
+            return v0 + (v1 - v0) * (t - t0) / (t1 - t0)
+    return pts[-1][1]
+
+
+def measure(ch, cfg, levels, now=None):
+    """本拍用于判断的电平：侧链优先；tap=pre 用推子前(信号+增益)，post 用推子后(电平表)。"""
+    try:
+        src = int(cfg.get("sidechain") or 0)
+    except (TypeError, ValueError):
+        src = 0
+    if not (1 <= src <= MAX_CH):
+        src = ch
+    if cfg.get("tap") == "pre":
+        try:
+            trim = float((STATE.ch[src] or {}).get("trim") or 0.0)
+        except Exception:
+            trim = 0.0
+        return source_level_db(src, now) + trim
+    try:
+        return levels[src - 1]
+    except (IndexError, TypeError, KeyError):
+        return None
 
 
 def _rt(key):
@@ -118,7 +208,11 @@ def tick_channel(i, cfg, rt, level_db, dt, now=None):
     avg_db = 10.0 * math.log10(max(rt["rms"], 1e-12))
     rt["avg"] = round(avg_db, 2)
 
-    target = cfg["target"]
+    # 目标: 配了曲线就按曲线走（以本次启用为 0 时刻，可循环），否则用固定目标
+    if rt.get("start") is None:
+        rt["start"] = now
+    target = target_at(cfg.get("curve"), now - rt["start"], cfg["target"])
+    rt["target"] = round(target, 2)
     rng = cfg["range"]
     err = max(-rng, min(rng, target - avg_db))
 
@@ -204,7 +298,7 @@ def rider_loop():
                 i = int(key)
                 if not (1 <= i <= MAX_CH):
                     continue
-                tick_channel(i, cfg, _rt(key), levels[i - 1], dt, now)
+                tick_channel(i, cfg, _rt(key), measure(i, cfg, levels, now), dt, now)
         except Exception as e:              # 控制器绝不能把主进程带崩
             log("RIDER 循环异常: %r" % e)
             time.sleep(0.5)
@@ -221,6 +315,7 @@ def rider_config():
             chans[k].update({
                 "level": rt.get("avg"),
                 "applied": rt.get("applied"),
+                "target_now": rt.get("target", cfg["target"]),
                 "paused": time.time() < rt.get("pause_until", 0.0),
                 "writes": rt.get("writes", 0),
             })
@@ -236,9 +331,11 @@ def rider_snapshot():
             if not cfg.get("on"):
                 continue
             rt = RIDER_RT.get(k, {})
-            out.append({"ch": int(k), "target": cfg["target"], "mode": cfg["mode"],
-                        "speed": cfg["speed"], "level": rt.get("avg"),
-                        "applied": rt.get("applied"),
+            out.append({"ch": int(k), "target": rt.get("target", cfg["target"]),
+                        "mode": cfg["mode"], "speed": cfg["speed"],
+                        "tap": cfg.get("tap", "post"), "sidechain": cfg.get("sidechain", 0),
+                        "level": rt.get("avg"), "applied": rt.get("applied"),
+                        "curve": bool(cfg.get("curve")),
                         "paused": time.time() < rt.get("pause_until", 0.0)})
     return {"enabled": RIDER["enabled"], "on": out}
 
@@ -271,7 +368,7 @@ def rider_set(data):
         reset_channel(str(i))
         return rider_config()
 
-    patch_keys = ("on", "target", "mode", "speed", "range")
+    patch_keys = ("on", "target", "mode", "speed", "range", "tap", "sidechain", "curve")
     if not any(k in data for k in patch_keys) and "channel" not in data:
         return rider_config()
 
@@ -308,6 +405,20 @@ def rider_set(data):
                 cfg["speed"] = data["speed"]
             if "range" in data:
                 cfg["range"] = round(_num(data["range"], 3.0, 24.0, cfg["range"]), 1)
+            if "tap" in data:
+                if data["tap"] not in ("pre", "post"):
+                    raise ValueError("tap 只能是 pre / post")
+                cfg["tap"] = data["tap"]
+            if "sidechain" in data:
+                try:
+                    sc = int(data["sidechain"] or 0)
+                except (TypeError, ValueError):
+                    raise ValueError("sidechain 必须是 0-32")
+                if not (0 <= sc <= MAX_CH):
+                    raise ValueError("sidechain 必须是 0-32")
+                cfg["sidechain"] = sc
+            if "curve" in data:
+                cfg["curve"] = _clean_curve(data["curve"])
             if cfg.get("on") and not was_on:
                 reset_channel(key)          # 重新开骑：从当前电平重新起算
             if not cfg.get("on"):
@@ -346,5 +457,14 @@ def rider_load(d):
         if v.get("speed") in SPEEDS:
             cfg["speed"] = v["speed"]
         cfg["range"] = round(_num(v.get("range"), 3.0, 24.0, cfg["range"]), 1)
+        if v.get("tap") in ("pre", "post"):
+            cfg["tap"] = v["tap"]
+        try:
+            sc = int(v.get("sidechain") or 0)
+            if 0 <= sc <= MAX_CH:
+                cfg["sidechain"] = sc
+        except (TypeError, ValueError):
+            pass
+        cfg["curve"] = _clean_curve(v.get("curve"))
         clean[str(i)] = cfg
     RIDER["ch"] = clean

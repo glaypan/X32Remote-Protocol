@@ -318,6 +318,16 @@ WEB_PAGE = r"""<!DOCTYPE html>
 .rmeter{height:10px;background:var(--track);border-radius:6px;overflow:hidden;margin:8px 0 4px}
 .rmeter span{display:block;height:100%;width:0;border-radius:6px;
   background:linear-gradient(90deg,var(--green),#eab308,var(--red));transition:width .12s linear}
+
+/* ---- 目标曲线编辑器 ---- */
+.rrow2{margin-top:6px}
+.curvebox{margin:8px 0 2px}
+.curvesvg{width:100%;height:84px;display:block;background:var(--track);border-radius:10px;touch-action:none}
+.cgrid{fill:transparent}
+.cline{fill:none;stroke:var(--accent);stroke-width:2}
+.cdot{fill:var(--accent);stroke:#0b0d11;stroke-width:1.5;cursor:grab}
+.cfn{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:12px;color:var(--sub);margin:4px 0}
+.cbtn{background:#565d6d;color:#fff;font-size:12px;padding:5px 9px}
 </style>
 </head>
 <body>
@@ -2745,9 +2755,18 @@ function renderRider(cfg){
       +     '<option value="gain"'+(c.mode==='gain'?' selected':'')+'>增益</option></select>'
       +   '<select onchange="riderSet('+k+',{speed:this.value})">'+opts+'</select>'
       +   '<label class="rtarget">目标 <input type="number" step="0.5" min="-60" max="0" value="'+c.target+'"'
+      +     (c.curve?' disabled title="已启用目标曲线，固定目标不生效"':'')
       +     ' onchange="riderSet('+k+',{target:this.value})"> dBFS</label>'
       +   '<button class="rdel" onclick="riderDel('+k+')">删除</button>'
       + '</div>'
+      + '<div class="rrow rrow2">'
+      +   '<label class="rtarget">表源 <select onchange="riderSet('+k+',{tap:this.value})">'
+      +     '<option value="post"'+(c.tap!=='pre'?' selected':'')+'>推子后</option>'
+      +     '<option value="pre"'+(c.tap==='pre'?' selected':'')+'>推子前</option></select></label>'
+      +   '<label class="rtarget">侧链 <input type="number" min="0" max="32" step="1" value="'+(c.sidechain||0)+'"'
+      +     ' onchange="riderSet('+k+',{sidechain:this.value})"> <span class="ds">0=本通道</span></label>'
+      + '</div>'
+      + curveArea(k, c)
       + '<div class="rmeter"><span id="rbar-'+k+'"></span></div>'
       + '<div class="ds" id="rlv-'+k+'">等待电平…</div>'
       + '</div>';
@@ -2771,9 +2790,100 @@ function riderLive(){
     bar.style.width=pct.toFixed(1)+'%';
     const app=(x.applied===null||x.applied===undefined)?'—':(+x.applied).toFixed(1);
     lv.textContent='电平 '+(+x.level).toFixed(1)+' dBFS · 修正 '+app+' dB · 目标 '+(+x.target).toFixed(1)
+                  +(x.curve?'（曲线）':'')
+                  +(x.sidechain?' · 侧链 CH'+String(x.sidechain).padStart(2,'0'):'')
+                  +(x.tap==='pre'?' · 推子前':'')
                   +(x.paused?' · 人工接管中':'');
   });
 }
+
+
+// ---------- 目标曲线编辑器（点击加点 / 拖动改点 / 双击删点）----------
+const CURVE_W=300, CURVE_H=84;
+function curveArea(ch, c){
+  const cv=c.curve||null, pts=(cv&&cv.points)||[];
+  const last=pts.length?pts[pts.length-1][0]:60;
+  const T=Math.max(10, (cv&&cv.loop)||last);
+  const pos=(t,db)=>[ (t/T)*CURVE_W, CURVE_H-((db+60)/60)*CURVE_H ];
+  const poly=pts.map(p=>{const q=pos(p[0],p[1]);return q[0].toFixed(1)+','+q[1].toFixed(1);}).join(' ');
+  const dots=pts.map((p,i)=>{const q=pos(p[0],p[1]);
+    return '<circle class="cdot" data-ch="'+ch+'" data-i="'+i+'" cx="'+q[0].toFixed(1)+'" cy="'+q[1].toFixed(1)+'" r="5"></circle>';}).join('');
+  return '<div class="curvebox">'
+    +  '<div class="cfn"><span>目标曲线'+(pts.length?' · '+pts.length+' 点 · 循环 '+(cv.loop||0)+'s':'（点图加点，双击点删除）')+'</span>'
+    +    '<button class="cbtn" onclick="riderCurveClear('+ch+')">清除</button></div>'
+    +  '<svg class="curvesvg" data-ch="'+ch+'" data-t="'+T+'" viewBox="0 0 '+CURVE_W+' '+CURVE_H+'">'
+    +    '<rect x="0" y="0" width="'+CURVE_W+'" height="'+CURVE_H+'" class="cgrid"></rect>'
+    +    (poly?'<polyline class="cline" points="'+poly+'"></polyline>':'')
+    +    dots
+    +  '</svg>'
+    +  '<div class="cfn"><span class="ds">横轴 0-'+(+T).toFixed(0)+'s · 纵轴 -60..0 dBFS</span>'
+    +    '<label class="rtarget">循环 <input type="number" min="0" max="3600" step="1" value="'+((cv&&cv.loop)||0)+'"'
+    +      ' onchange="riderCurveLoop('+ch+',this.value)"> s</label></div>'
+    + '</div>';
+}
+function curveOf(ch){
+  const c=window._rider&&window._rider.channels&&window._rider.channels[String(ch)];
+  return (c&&c.curve)||null;
+}
+function riderCurveClear(ch){ riderSet(ch,{curve:null}); }
+function riderCurveLoop(ch,v){
+  const cv=curveOf(ch); if(!cv) return;
+  riderSet(ch,{curve:{loop:parseFloat(v)||0, points:cv.points}});
+}
+const RCURVE_DRAG={ch:0,i:-1};
+function curveXY(svg,e){
+  const r=svg.getBoundingClientRect();
+  const T=parseFloat(svg.dataset.t)||60;
+  const t=Math.max(0,Math.min(T,(e.clientX-r.left)/r.width*T));
+  // 上边 = 0 dBFS, 下边 = -60 dBFS（绘制时 db=0 在顶部，这里必须同向）
+  const db=Math.max(-60,Math.min(0,-(e.clientY-r.top)/r.height*60));
+  return [Math.round(t*10)/10, Math.round(db*10)/10];
+}
+function curveApply(ch, pts, loop){
+  const c=window._rider.channels[String(ch)];
+  c.curve={loop:loop||0, points:pts};
+  renderRider(window._rider);
+}
+document.addEventListener('pointerdown', e=>{
+  const dot=e.target.closest('.cdot');
+  if(dot){ RCURVE_DRAG.ch=+dot.dataset.ch; RCURVE_DRAG.i=+dot.dataset.i; e.preventDefault(); return; }
+  const svg=e.target.closest('.curvesvg');
+  if(!svg) return;
+  const ch=+svg.dataset.ch, cv=curveOf(ch);
+  const [t,db]=curveXY(svg,e);
+  const pts=(cv&&cv.points?cv.points.map(p=>[p[0],p[1]]):[]).concat([[t,db]]);
+  pts.sort((a,b)=>a[0]-b[0]);
+  curveApply(ch, pts, (cv&&cv.loop)||0);
+  riderSet(ch,{curve:{loop:(cv&&cv.loop)||0, points:pts}});
+});
+document.addEventListener('pointermove', e=>{
+  if(!RCURVE_DRAG.ch) return;
+  const svg=document.querySelector('.curvesvg[data-ch="'+RCURVE_DRAG.ch+'"]');
+  if(!svg) return;
+  const cv=curveOf(RCURVE_DRAG.ch); if(!cv||!cv.points) return;
+  const [t,db]=curveXY(svg,e);
+  const pts=cv.points.map(p=>[p[0],p[1]]);
+  const i=RCURVE_DRAG.i; if(i<0||i>=pts.length) return;
+  pts[i]=[t,db];
+  curveApply(RCURVE_DRAG.ch, pts, cv.loop||0);
+});
+document.addEventListener('pointerup', ()=>{
+  if(!RCURVE_DRAG.ch) return;
+  const ch=RCURVE_DRAG.ch; RCURVE_DRAG.ch=0; RCURVE_DRAG.i=-1;
+  const cv=curveOf(ch);
+  if(cv&&cv.points&&cv.points.length>=2){
+    // 拖动时本地已渲染，这里只把结果落库
+    riderPost({channel:ch, curve:{loop:cv.loop||0, points:cv.points}});
+  }
+});
+document.addEventListener('dblclick', e=>{
+  const dot=e.target.closest('.cdot'); if(!dot) return;
+  const ch=+dot.dataset.ch, cv=curveOf(ch); if(!cv||!cv.points) return;
+  const pts=cv.points.filter((_,idx)=>idx!==+dot.dataset.i);
+  if(pts.length>=2) riderSet(ch,{curve:{loop:cv.loop||0, points:pts}});
+  else riderSet(ch,{curve:null});
+});
+
 loadRider();
 setInterval(riderLive, 300);
 

@@ -25,9 +25,9 @@ import zipfile
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 OUT = ROOT / "outputs"
 
-DEFAULT_VERSION = "1.3.1"
+DEFAULT_VERSION = "1.4.0"
 # 本版要随包发布的 Android 产物（相对 outputs/ 的文件名）
-DEFAULT_APK = "X32Remote-1.1.0.apk"
+DEFAULT_APK = "X32Remote-1.2.0.apk"
 DEFAULT_IPA = "X32Remote-unsigned.ipa"
 # 网页试用版（单文件零依赖，v1.2.0 起随包发布）
 DEFAULT_WEBDEMO = "X32Remote-WebDemo.html"
@@ -103,17 +103,18 @@ iOS    ：读 docs/iOS-真机直装指南.md。IPA 未签名，需用 Sideloadly
 网页试用：双击 artifacts/{webdemo}（或 python X32Simulator/x32_simulator.py
          --web-port 8080 后打开 http://localhost:8080 玩完整控制台）。
 
-本版重点（v1.3.1）
+本版重点（v1.4.0）
 --------
-在 v1.3.0 基础上补齐「手机扫码进入网页控制台」，服务端仍只依赖标准库：
-  1. 扫码进入：启动时终端打印二维码，网页「设置 → 手机/安卓平板连接」里也有；
-     手机扫一下直达控制台，不用再手输 IP。二维码内容就是页面显示的那个地址
-  2. 自研二维码编码器（纯标准库）：字节模式 / 纠错 M / 版本 1-10，按 ISO 18004 选掩码；
-     /qr.svg 只渲染地址、不请求它（非 http(s) 或超长直接 400）
-  3. 修单文件形态的别名导入丢失：`import svg as qr_svg` 被剥掉后 NameError，
-     包形态正常、单文件 500 —— 合成工具已保留别名，双形态差分加了守护
-  4. 新增 qr 测试组（把矩阵解回原文 + RS 校验位全零），回归 10 组
-  另：v1.3.0 的通道参数 75 项、/subscribe、161 档、dB 4 段曲线、台面预设全部保留
+自动增益 / 自动推子（Vocal Rider 式），并把这套能力接到 iOS / Android：
+  1. 目标电平（默认 -18 dBFS）+ 双执行器：推子模式真的动推子，增益模式动数字增益
+  2. 三档速度 = 平均窗口 / 死区 / 每秒最大修正
+     （0.9/0.35/0.12 s · 0.6/0.4/0.3 dB · 1.5/5/15 dB/s）
+  3. 目标曲线（riding target）：时间-电平点列，可循环；主歌 -24、副歌 -16 这类段落差
+  4. 侧链触发：看另一路电平、修这一路（主持人说话 → 音乐自动让开）
+  5. 表源可切：推子后（闭环）/ 推子前（开环，推子怎么动都不影响测量）
+  6. iOS「自动」页签 + Android 菜单入口：两端只做配置与显示，控制律在电脑端服务
+  7. 电平模型重做：信号源与推子位置拆开，避免自动推子自激塌陷
+另：v1.3.x 的扫码进入、75 项通道参数、/subscribe、161 档、dB 4 段曲线全部保留
 App 两端（iOS / Android）本版无代码变动，安装包为同源码重新构建。
 
 已知限制

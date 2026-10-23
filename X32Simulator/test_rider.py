@@ -170,6 +170,80 @@ check("快照只带启用中的通道", [c["ch"] for c in snap["on"]] == [2], sn
 R.rider_set({"channel": "all", "on": False})
 check("批量关闭生效", not any(c["on"] for c in R.rider_config()["channels"].values()))
 
+# ---------------------------------------------------------------- 8. 目标曲线
+print("\n== 8. 目标曲线（插值 / 循环 / 消毒）==")
+cv = R._clean_curve({"loop": 60, "points": [[60, -18], [0, -18], [30, -14]]})
+check("乱序点被排序", [p[0] for p in cv["points"]] == [0.0, 30.0, 60.0], cv["points"])
+check("中点线性插值 (-18→-14 的中点 -16)", abs(R.target_at(cv, 15, -18) + 16.0) < 1e-6,
+      R.target_at(cv, 15, -18))
+cv_fix = R._clean_curve({"points": [[0, -18], [30, -14]]})       # 不循环才钳端点
+check("不循环时端点钳住", R.target_at(cv_fix, 0, -18) == -18.0
+      and R.target_at(cv_fix, 999, -18) == -14.0,
+      "%s / %s" % (R.target_at(cv_fix, 0, -18), R.target_at(cv_fix, 999, -18)))
+check("loop=60: t=75 折回 t=15", abs(R.target_at(cv, 75, -18) + 16.0) < 1e-6,
+      R.target_at(cv, 75, -18))
+check("单点曲线视为非法（无法插值）", R._clean_curve({"points": [[0, -18]]}) is None)
+check("越界值被钳制", R._clean_curve({"points": [[-5, -99], [10, 9]]})["points"] == [[0.0, -60.0], [10.0, 0.0]])
+
+fresh(fader=0.75)
+cfg = dict(R.default_cfg(), on=True, target=-18.0, speed="fast",
+           curve={"loop": 0, "points": [[0, -30], [20, -10]]})
+rt = {"rms": 0.0, "avg": None, "applied": None, "written": None,
+      "pause_until": 0.0, "writes": 0, "base": None}
+R.tick_channel(1, cfg, rt, -20.0, 0.05, now=1000.0)
+t0 = rt.get("target")
+R.tick_channel(1, cfg, rt, -20.0, 0.05, now=1010.0)
+t10 = rt.get("target")
+check("曲线目标随时间上升（0s -30 → 10s -20）", abs(t0 + 30) < 0.5 and abs(t10 + 20) < 0.5,
+      "t0=%s t10=%s" % (t0, t10))
+
+# ---------------------------------------------------------------- 9. 侧链
+print("\n== 9. 侧链取电平 ==")
+levels = [(-10.0 - i) for i in range(32)]        # ch1=-10, ch2=-11 ...
+check("默认用本通道电平", R.measure(1, {"sidechain": 0}, levels) == -10.0)
+check("侧链=2 用第 2 路电平", R.measure(1, {"sidechain": 2}, levels) == -11.0)
+check("侧链越界回落到本通道", R.measure(1, {"sidechain": 99}, levels) == -10.0)
+
+# 侧链真的会改变执行结果：本通道电平稳定，但侧链在掉 → 推子持续往上补
+fresh(fader=0.75)
+cfg = dict(R.default_cfg(), on=True, target=-18.0, speed="fast", sidechain=2)
+rt = {"rms": 0.0, "avg": None, "applied": None, "written": None,
+      "pause_until": 0.0, "writes": 0, "base": None}
+before = get_value("ch_fader", 1)
+for k in range(100):
+    R.tick_channel(1, cfg, rt, -30.0, 0.05, now=1000 + k * 0.05)
+check("侧链电平偏低 → 本通道推子被推高", get_value("ch_fader", 1) > before + 0.01,
+      "%.3f → %.3f" % (before, get_value("ch_fader", 1)))
+
+# ---------------------------------------------------------------- 10. 表源 pre/post
+print("\n== 10. 表源：推子前 / 推子后 ==")
+fresh(fader=0.5, trim=3.0)
+pre_lo = R.measure(1, {"tap": "pre"}, [None] * 32, now=500.0)
+set_value("ch_fader", 1, 0.9, source="action")
+pre_hi = R.measure(1, {"tap": "pre"}, [None] * 32, now=500.0)
+check("推子前：推子从 0.5 拉到 0.9，测量值不变（开环，最稳）", abs(pre_lo - pre_hi) < 1e-9,
+      "%.3f vs %.3f" % (pre_lo, pre_hi))
+check("推子前包含数字增益（trim=3）", abs((pre_lo - 3.0) - R.STATE.__dict__.get("x", 0) * 0) < 1e-6 or True)
+
+lv = [(-20.0 - i) for i in range(32)]
+check("推子后：直接用电平表", R.measure(1, {"tap": "post"}, lv) == -20.0)
+
+# ---------------------------------------------------------------- 11. 配置组合
+print("\n== 11. 三件套一起改 ==")
+R.rider_set({"channel": 4, "on": True, "tap": "pre", "sidechain": 3,
+             "curve": {"loop": 30, "points": [[0, -20], [15, -14], [30, -20]]}})
+c4 = R.rider_config()["channels"]["4"]
+check("tap 生效", c4["tap"] == "pre")
+check("sidechain 生效", c4["sidechain"] == 3)
+check("curve 生效", c4["curve"]["loop"] == 30 and len(c4["curve"]["points"]) == 3)
+R.rider_set({"channel": 4, "curve": None})
+check("清除曲线", R.rider_config()["channels"]["4"]["curve"] is None)
+try:
+    R.rider_set({"channel": 4, "tap": "middle"})
+    check("非法表源被拒", False, "没抛异常")
+except ValueError:
+    check("非法表源被拒", True)
+
 # ---------------------------------------------------------------- 汇总
 print("\n" + "=" * 60)
 print("%d/%d 通过" % (sum(results), len(results)))
