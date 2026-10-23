@@ -1,9 +1,24 @@
-import zipfile, hashlib, os, sys
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""校验发布包：CRC / 结构 / 大小 / 关键产物 / sha256。
+
+用法:
+    python tools/verify_zips.py                    # 默认版本（见 --version 默认值）
+    python tools/verify_zips.py --version 1.3.0
+"""
+import argparse
+import hashlib
+import os
+import zipfile
 
 OUT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "outputs")
 
-for name in ("X32Remote-v1.1.0-full.zip", "X32Remote-v1.1.0-assets.zip"):
+
+def check(name: str) -> None:
     p = os.path.join(OUT, name)
+    if not os.path.isfile(p):
+        print("%s\n  !! 文件不存在" % name)
+        return
     z = zipfile.ZipFile(p)
     bad = z.testzip()
     ipa = [n for n in z.namelist() if n.endswith(".ipa")]
@@ -17,3 +32,16 @@ for name in ("X32Remote-v1.1.0-full.zip", "X32Remote-v1.1.0-assets.zip"):
     print("  APK     : %s" % apk)
     print("  sha256  : %s" % hashlib.sha256(open(p, "rb").read()).hexdigest())
     print()
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--version", default="1.3.0")
+    args = ap.parse_args()
+    for suffix in ("full", "assets"):
+        check("X32Remote-v%s-%s.zip" % (args.version, suffix))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

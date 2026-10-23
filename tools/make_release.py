@@ -25,7 +25,7 @@ import zipfile
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 OUT = ROOT / "outputs"
 
-DEFAULT_VERSION = "1.2.0"
+DEFAULT_VERSION = "1.3.0"
 # 本版要随包发布的 Android 产物（相对 outputs/ 的文件名）
 DEFAULT_APK = "X32Remote-1.1.0.apk"
 DEFAULT_IPA = "X32Remote-unsigned.ipa"
@@ -103,16 +103,21 @@ iOS    ：读 docs/iOS-真机直装指南.md。IPA 未签名，需用 Sideloadly
 网页试用：双击 artifacts/{webdemo}（或 python X32Simulator/x32_simulator.py
          --web-port 8080 后打开 http://localhost:8080 玩完整控制台）。
 
-本版重点（v1.2.0）
+本版重点（v1.3.0）
 --------
-契约三连升（规范 v1.3 → v1.5），全部落地于服务端 + 网页试用版：
-  1. v1.3 混响控制与同步：FX 参数地址 / Tap 定拍 / 时值换算 / 三种模式 / 防回环双闸门
-  2. v1.4 控台驱动层：(kind, idx) 语义管道与协议地址解耦；动作 12 → 14 种（set / osc）；
-     M32 与 X32 同协议；Wing / Yamaha / A&H 仅骨架，未标定拒绝写入
-  3. v1.5 输入消毒与「假成功」防线：NaN 双闸、卡片 API 显式校验、丢弃明细透出、
-     esc() + CSP；效果库归属控台驱动（fx_algos 唯一取数口）
-  另修一个真实缺陷：桥接冲突检测的节流改为「值 + 时间」双判定
-  （原先只看时间，真台面板干预会被渐变转发挤掉，冲突永远检测不到）。
+全部为服务端 + 网页控制台的能力补齐与缺陷修复，App 两端零代码改动：
+  1. 通道参数建模 75 项：前置（增益/反相/延时/低切/插入）+ 噪声门 10 项 +
+     动态 18 项 + 均衡 16 项 + 发送 3 项（二维 通道×Bus），贯通 /api/set、卡片、预设
+  2. /subscribe 按地址订阅：首轮立即回值、50ms 倍数、10s 过期；
+     修掉「后加入的订阅者收不到变化」
+  3. 枚举双形式：取点等参数同时接受索引与字符串枚举，真台回字符串不再被静默落回默认值
+  4. 电平按真台 161 档量化（f = k/160）；推子 dB 曲线改为 4 段伪对数
+     （旧式在 0.25 处给出 -9.5 dB，真台是 -30 dB，偏 20.5 dB）
+  5. 台面预设（规范 v1.6）：可选范围快照 + 场景全局/局部 recall + 预设动作
+  6. 五项 P0 修复：卡片竞态（按代运行）、配置原子写、写风暴合并器、
+     渐变打断双拦截、recall 代号
+  7. 模块化拆包：x32sim/ 24 模块 + 合成单文件双形态分发（差分回归 16 项）
+  8. 4G 流量：条件轮询 + gzip + CSP 只对 HTML + 后台降频，实测 22.5 → 11.7 MB/h
 App 两端（iOS / Android）本版无代码变动，安装包为同源码重新构建。
 
 已知限制
@@ -123,6 +128,11 @@ App 两端（iOS / Android）本版无代码变动，安装包为同源码重新
 4. Wing / Yamaha / A&H 仅有驱动骨架（ready=false），写入被拒并记日志。
 5. Android 签名密钥（x32release.jks）与 local.properties 按惯例不入包；
    如需自行重编 Android，请用自己的密钥配置签名。
+6. 网页试用版（artifacts/ 下的 WebDemo.html）是 2026-10-18 的纯前端虚拟台快照，
+   自带演示引擎、不依赖服务端，但**不含本版新增的通道参数页签**；
+   要看完整新界面请用在线版，或本地跑 X32Simulator 后开 http://localhost:8080。
+7. 26 项参数出厂默认值仍待真机核对（/api/info.calibration 会列出，
+   tools/verify_defaults.py 可一键比对），未核对前不参与回归断言。
 """
 
 
