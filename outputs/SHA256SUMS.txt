@@ -1,24 +1,21 @@
-1c04d7f5b4fab1c61274da2a5a61d2c0b447ed4e6ad424ba6afd263dbcf49762 *X32Remote-v1.3.0-full.zip
-cd0c12a2bc13dd74c0d6c3b1900f544bad2d91cc7f6b3e077badde537e30c545 *X32Remote-v1.3.0-assets.zip
+621aa1a52116ef4ddde74d3a5ec4ee9e042e71a18c8ed704f9dc40bd28df1be3 *X32Remote-v1.3.1-full.zip
+598c8182f223bc6e69eb3617787913e08c717f967056261aea6d651094e3c4c6 *X32Remote-v1.3.1-assets.zip
 e6c2c459d31750ae4104e6d9b56ca438e05966916fa1bb763849e7fa5e6fd31b *X32Remote-1.1.0.apk
 548f4f6b1a8a2ee4849e62fe3b202ec0ee8705b34efff49b3d00dc5e516f7e08 *X32Remote-unsigned.ipa
 21095074d2764dce6cff290ff1ff04eb3efe1b46c984fcdd69b46e101e97771e *X32Remote-WebDemo.html
-# X32 Remote v1.3.0 发布包校验和 (SHA256)
+# X32 Remote v1.3.1 发布包校验和 (SHA256)
 # 生成时间: 2026-10-23
 # 校验方式: sha256sum -c SHA256SUMS.txt
-#
 # 说明:
-#   X32Remote-v1.3.0-full.zip      完整发布包（全部源码 + 产物 + 文档）
-#   X32Remote-v1.3.0-assets.zip    仅产物（Android APK + iOS IPA + 网页试用版 + 发布说明）
+#   X32Remote-v1.3.1-full.zip      完整发布包（全部源码 + 产物 + 文档）
+#   X32Remote-v1.3.1-assets.zip    仅产物（Android APK + iOS IPA + 网页试用版 + 发布说明）
 #   X32Remote-1.1.0.apk            Android 安装包（versionName 1.1.0 / versionCode 2）
 #   X32Remote-unsigned.ipa         iOS 未签名包（需 Sideloadly 签名，要求 iOS 17+）
 #   X32Remote-WebDemo.html         网页试用版（单文件，浏览器直接打开）
 #
-# Android APK: 版本 1.1.0 (versionCode 2) / minSdk 26 / targetSdk 35
-#   源码自 v1.1.1 起零变动，本包为同源码重新构建（版本号不涨，避免无变化涨版本）
-#   签名 DN: CN=X32 Remote（与上一版同密钥，可覆盖安装升级）
-# iOS IPA:     版本 1.1.0 (build 2) / MinimumOSVersion 17.0（同源码重建，无代码变动）
+# Android APK: 1.1.0 (versionCode 2) / minSdk 26 / targetSdk 35（同源码重建，版本不涨）
+# iOS IPA:     1.1.0 (build 2) / MinimumOSVersion 17.0（同源码重建，无代码变动）
 #
-# 测试: 服务端回归 9/9 组通过（params 375 项 / subscribe 13 项 / 其余 7 组 16-18 项）
-#       pyflakes 净 / check_layers 无环 / make_single --check 同步（8918 行）
-#       WebDemo 为 2026-10-18 纯前端虚拟台快照（不含本版新增通道参数页签）
+# 测试: 回归 10/10 组（新增 qr 组 25 项：解回原文 + RS 校验位全零）
+#       二维码另用 python-qrcode 做同版本同掩码逐位比对（开发环境，5/5 一致）
+#       pyflakes 净 / check_layers 无环 / 单文件 25 模块 9383 行与包同步
