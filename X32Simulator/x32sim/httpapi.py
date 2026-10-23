@@ -17,6 +17,7 @@ from .persist import CONFIG_PATH, ID_SEQ, clear_console, next_id, recall_last, s
 from .presets import AUTO_SNAPS, SNAPSHOTS, _recall_stop_current, preset_scope_text, recall_snapshot, save_snapshot, start_recall
 from .profiles import profile, set_profile
 from .qr import svg as qr_svg
+from .rider import rider_config, rider_set
 from .quickkeys import KEY_CFG, QUICK_KEYS, apply_key
 from .runtime import DEF_UDP_PORT, DEF_WEB_PORT, ENV_WEB_PORT, LAN_IP, PORT_CFG, UDP_PORT, WEB_PORT, ports_pending_restart, valid_port
 from .scan import scan_consoles
@@ -140,6 +141,9 @@ class WebHandler(BaseHTTPRequestHandler):
             self._send(200, "application/json; charset=utf-8",
                        json.dumps({"meters": compute_levels()},
                                   allow_nan=False).encode("utf-8"))
+        elif path == "/api/rider":
+            self._send(200, "application/json; charset=utf-8",
+                       json.dumps(rider_config(), allow_nan=False).encode("utf-8"))
         elif path == "/api/info":
             # trimRange: 控台实际接受的数字增益量程 (12=旧固件 / 18=新固件)。
             # 界面用它设滑块范围 —— 不让用户拖到 18 再被服务端弹回 12。
@@ -254,7 +258,12 @@ class WebHandler(BaseHTTPRequestHandler):
                 pass
 
     def _dispatch(self, path, data):
-        if path == "/api/set":
+        if path == "/api/rider":
+            # 自动增益/推子的配置入口（实时生效，下一拍就按新参数跑）
+            self._send(200, "application/json; charset=utf-8",
+                       json.dumps({"ok": True, "rider": rider_set(data)},
+                                  allow_nan=False).encode("utf-8"))
+        elif path == "/api/set":
             # kind 是**组名**（ch/bus/dca/main/auxin/usb/fxret/mtx），param 是 fader/on。
             # idx 用 target_exists 预检：越界时给明确的 400，而不是 KeyError 撞全局兜底。
             grp = data.get("kind")

@@ -604,8 +604,30 @@ def meter_streamer(sock):
             log("推送台面变更出错: %r" % e)
 
 
+def source_level_db(i, t=None):
+    """**话筒信号本身**的电平 (dBFS, 增益与推子之前)。
+
+    为什么要把"信号"和"推子位置"拆开: 自动增益/自动推子靠电平做判断,
+    若电平表 = 推子位置 × 信号, 自动推子往下拉 → 表跟着掉 → 再往下拉,
+    变成自激塌陷。有了独立的信号源, 电平表 = 信号 + 增益 + 推子, 才是
+    真实调音台的叠加关系, 控制器才有稳定的被控对象。
+
+    波形是"音乐化"的: 0.7 Hz 慢起伏 + 3.1 Hz 快起伏 + 0.15 Hz 段落起伏,
+    每路相位错开, 幅度约 ±8 dB —— 足够让自动推子有活干, 又不会一帧跳变。
+    """
+    if t is None:
+        t = time.time() - START_TIME
+    base = -20.0 + 4.0 * math.sin(t * 0.7 + i * 1.3) + 1.5 * math.sin(t * 3.1 + i * 2.1)
+    phrase = 3.0 * math.sin(t * 0.15 + i * 0.37)
+    return base + phrase
+
+
 def compute_levels():
-    """返回当前电平 dB 列表:32 输入通道 + 16 输出 Bus (UDP 推送与 Web 界面共用)。"""
+    """返回当前电平 dB 列表:32 输入通道 + 16 输出 Bus (UDP 推送与 Web 界面共用)。
+
+    通道电平 = 信号源 + 数字增益 + 推子 (真台的叠加关系), 静音为 -∞。
+    Bus 仍沿用推子位置(虚拟混音无法逐路求和, 这里只求"看着像")。
+    """
     t = time.time() - START_TIME
     floats = []
     with STATE.lock:
@@ -615,12 +637,15 @@ def compute_levels():
                 if not ch["on"]:
                     floats.append(-32768.0)  # -∞
                     continue
-                db = STATE.fader_to_db(ch["fader"])
-                # 模拟动态信号: 正弦 + 伪随机起伏
-                wiggle = 4.0 * math.sin(t * 1.7 + i * 0.9) + 2.0 * math.sin(t * 4.3 + i * 2.3)
+                if group is STATE.ch:
+                    db = (source_level_db(i, t) + float(ch.get("trim") or 0.0)
+                          + STATE.fader_to_db(ch["fader"]))
+                else:
+                    # Bus: 沿用推子位置 + 轻微起伏 (无逐路求和, 不求精确)
+                    db = STATE.fader_to_db(ch["fader"]) + 1.5 * math.sin(t * 0.9 + i)
                 # 0.1 dB 足够画表 (屏幕上一个像素约 0.5 dB)。保留全精度会让
                 # 每轮多传 350 B —— 4 Hz 下就是 5 MB/h, 换来的是看不见的精度。
-                floats.append(round(max(-60.0, min(0.0, db + wiggle)), 1))
+                floats.append(round(max(-60.0, min(0.0, db)), 1))
     return floats
 NOTIFY_LAST = {}     # 手动变更推送节流: (kind, idx) -> [上次推送的值, 时间]
                      # ⚠️ 必须**连同值一起**判断"是否重复": 只看时间会把真台的面板干预挤掉。

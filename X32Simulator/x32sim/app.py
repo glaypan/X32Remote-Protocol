@@ -19,6 +19,7 @@ from .persist import CONFIG_PATH, load_user_config
 from .params import set_enum_wire, set_param_limits
 from .profiles import profile
 from .qr import block_lines as qr_block
+from .rider import rider_loop
 from .runtime import DEF_WEB_PORT, ENV_WEB_PORT, LAN_IP, MAIN_SOCK, PORT_CFG, UDP_PORT, WEB_PORT, get_lan_ip, resolve_ports
 from .state import meter_streamer
 
@@ -163,6 +164,8 @@ def main():
     log("等待指令... Ctrl+C 退出\n")
 
     threading.Thread(target=meter_streamer, args=(sock,), daemon=True).start()
+    # 自动增益/推子: 50ms 一拍, 默认总开关开但单通道都要显式启用
+    threading.Thread(target=rider_loop, daemon=True).start()
 
     try:
         while True:

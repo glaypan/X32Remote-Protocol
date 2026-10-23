@@ -9,6 +9,7 @@ import time
 
 from .bridge import BRIDGE_TARGET
 from .cards import SHOW_CARDS
+from .rider import rider_dump, rider_load
 from .consts import FX_COUNT, PRESET_DEFAULT_SCOPE
 from .fx import FX_SYNC, FX_SYNC_LOCK, fx_algos
 from .logbus import log
@@ -63,6 +64,7 @@ def save_user_config():
                                "bridgeTarget": BRIDGE_TARGET[0],
                                "fxSync": dict(FX_SYNC),
                                "console": CTRL_PROFILE_ID[0],
+                               "rider": rider_dump(),
                                "ports": {"udp": PORT_CFG["udp"], "web": PORT_CFG["web"]},
                                "fxSlots": {str(s): {"type": STATE.fx[s]["type"],
                                                     "name": STATE.fx[s]["name"],
@@ -120,6 +122,7 @@ def load_user_config():
         if isinstance(p, dict):
             PORT_CFG["udp"] = valid_port(p.get("udp"))
             PORT_CFG["web"] = valid_port(p.get("web"), allow_zero=True)
+        rider_load(d.get("rider"))
         if isinstance(d.get("quickKeys"), list):
             # ⚠️ 控制键也要消毒：配置文件是用户可编辑的 JSON，一个 idx=99 的条目
             #    会让 /api/key 在 apply_key 里 KeyError（早年就是这么崩的）。

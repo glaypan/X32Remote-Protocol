@@ -2024,3 +2024,83 @@ loadInfo();
 if ('serviceWorker' in navigator) {
   try { navigator.serviceWorker.register('/sw.js').catch(()=>{}); } catch(e) {}
 }
+
+
+// ==================== 自动增益 / 自动推子 ====================
+// 控制律在服务端 (x32sim/rider.py)，这里只管配置与显示。
+// 速度三档: 慢/中/快 = 平均窗口 0.9/0.35/0.12 s、死区 0.6/0.4/0.3 dB、
+// 每秒最大修正 1.5/5/15 dB —— 页面只暴露"体感"，不暴露这些数字。
+const RIDER_SPD=[['slow','慢'],['medium','中'],['fast','快']];
+
+function loadRider(){
+  fetch('/api/rider').then(r=>r.json()).then(renderRider).catch(()=>{});
+}
+function riderPost(body){
+  fetch('/api/rider',{method:'POST',headers:{'Content-Type':'application/json'},
+                      body:JSON.stringify(body)})
+    .then(r=>r.json()).then(d=>{ if(d && d.rider) renderRider(d.rider); }).catch(()=>{});
+}
+function riderGlobal(on){ riderPost({enabled:!!on}); }
+function riderReset(){ riderPost({action:'reset'}); }
+function riderAdd(){
+  const el=$('#riderCh'); const v=parseInt(el && el.value, 10);
+  if(!(v>=1 && v<=32)){ if(el) el.focus(); return; }
+  riderPost({channel:v, on:true, target:-18, mode:'fader', speed:'medium'});
+  if(el) el.value='';
+}
+function riderSet(ch,patch){ riderPost(Object.assign({channel:ch}, patch)); }
+function riderDel(ch){ riderPost({channel:ch, remove:true}); }
+
+function renderRider(cfg){
+  window._rider=cfg;
+  const sw=$('#riderOn'); if(sw) sw.checked=!!cfg.enabled;
+  const box=$('#riderlist'); if(!box) return;
+  const ks=Object.keys(cfg.channels||{}).sort((a,b)=>(+a)-(+b));
+  const hint=$('#riderHint');
+  if(hint) hint.textContent = ks.length
+    ? '改动立即生效（下一拍 50ms 内按新参数跑）。电平取通道表，写入走台面同一条管道。'
+    : '还没配置通道。填通道号（1-32）→ 添加 → 打开「启用」。';
+  box.innerHTML = ks.map(k=>{
+    const c=cfg.channels[k];
+    const opts=RIDER_SPD.map(([v,l])=>`<option value="${v}"`+(c.speed===v?' selected':'')+`>${l}</option>`).join('');
+    return '<div class="card ridercard" data-ch="'+k+'">'
+      + '<div class="nm">CH'+String(k).padStart(2,'0')+' · '+(c.mode==='fader'?'自动推子':'自动增益')+'</div>'
+      + '<div class="rrow">'
+      +   '<label class="rsw"><input type="checkbox" '+(c.on?'checked':'')+' onchange="riderSet('+k+',{on:this.checked})"> 启用</label>'
+      +   '<select onchange="riderSet('+k+',{mode:this.value})">'
+      +     '<option value="fader"'+(c.mode==='fader'?' selected':'')+'>推子</option>'
+      +     '<option value="gain"'+(c.mode==='gain'?' selected':'')+'>增益</option></select>'
+      +   '<select onchange="riderSet('+k+',{speed:this.value})">'+opts+'</select>'
+      +   '<label class="rtarget">目标 <input type="number" step="0.5" min="-60" max="0" value="'+c.target+'"'
+      +     ' onchange="riderSet('+k+',{target:this.value})"> dBFS</label>'
+      +   '<button class="rdel" onclick="riderDel('+k+')">删除</button>'
+      + '</div>'
+      + '<div class="rmeter"><span id="rbar-'+k+'"></span></div>'
+      + '<div class="ds" id="rlv-'+k+'">等待电平…</div>'
+      + '</div>';
+  }).join('');
+  riderLive();
+}
+
+function riderLive(){
+  const r=(S && S.rider)||null; if(!r) return;   // ⚠️ S 是 let，不在 window 上
+  const map={}; (r.on||[]).forEach(x=>{ map[x.ch]=x; });
+  document.querySelectorAll('.ridercard').forEach(card=>{
+    const ch=+card.dataset.ch, x=map[ch];
+    const bar=document.getElementById('rbar-'+ch), lv=document.getElementById('rlv-'+ch);
+    if(!bar||!lv) return;
+    if(!r.enabled){ bar.style.width='0%'; lv.textContent='总开关已关'; return; }
+    if(!x){ bar.style.width='0%'; lv.textContent='未启用'; return; }
+    if(x.level===null||x.level===undefined){
+      bar.style.width='0%'; lv.textContent='无信号（冻结中 · 不会往上推）'; return;
+    }
+    const pct=Math.max(0,Math.min(100,(x.level+60)/60*100));
+    bar.style.width=pct.toFixed(1)+'%';
+    const app=(x.applied===null||x.applied===undefined)?'—':(+x.applied).toFixed(1);
+    lv.textContent='电平 '+(+x.level).toFixed(1)+' dBFS · 修正 '+app+' dB · 目标 '+(+x.target).toFixed(1)
+                  +(x.paused?' · 人工接管中':'');
+  });
+}
+loadRider();
+setInterval(riderLive, 300);
+

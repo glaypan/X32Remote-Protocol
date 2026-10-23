@@ -224,10 +224,30 @@
   </div>
 </div>
 
+
+<div class="page" id="pg-rider">
+  <div class="infobox">
+    <b>自动增益 / 自动推子</b>：把通道电平稳在目标值（默认 -18 dBFS），可以边演边调。
+    <b>推子</b>模式动的是推子（接真台时电动推子看得见它在走）；<b>增益</b>模式动数字增益，推子不动。<br>
+    三档速度改的是「平均窗口 / 死区 / 每秒最大修正」——所以它不是每个字都拉一下，而是平滑地跟着走。
+  </div>
+  <div class="card">
+    <div class="rrow">
+      <label class="rsw"><input type="checkbox" id="riderOn" onchange="riderGlobal(this.checked)"> 总开关</label>
+      <input id="riderCh" class="nkin" style="width:76px" inputmode="numeric" placeholder="1-32">
+      <button onclick="riderAdd()">➕ 添加通道</button>
+      <button style="background:#565d6d;color:#fff" onclick="riderReset()">↺ 清空修正</button>
+    </div>
+    <div class="ds" id="riderHint">还没配置通道。填通道号（1-32）→ 添加 → 打开「启用」。</div>
+  </div>
+  <div id="riderlist"></div>
+</div>
+
 <nav>
   <button class="on" data-p="cards"><span class="ic">🎬</span>卡片</button>
   <button data-p="fx"><span class="ic">🎛</span>混响</button>
   <button data-p="keys"><span class="ic">⚡</span>控制键</button>
+  <button data-p="rider"><span class="ic">🎚</span>自动</button>
   <button data-p="mix"><span class="ic">🎚</span>调音台</button>
   <button data-p="set"><span class="ic">⚙️</span>设置</button>
 </nav>

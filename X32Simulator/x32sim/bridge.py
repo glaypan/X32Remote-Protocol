@@ -421,7 +421,7 @@ FWD_RECENT = {}      # (kind, idx) -> [value, time] 最近转发记录, 用于�
 #      - 包数降一个量级 (真台每包只 recvfrom + 解析一次);
 #      - **最后一个值一定送达**: pending 始终只留最新值, 渐变到点/被停止后,
 #        一拍 (≤20ms + 间隔) 内一定发出, 不会卡在中间值上。
-BRIDGE_FWD_MIN_GAP = {"manual": 0.05, "fade": 0.25, "action": 0.25, "dca": 0.1}
+BRIDGE_FWD_MIN_GAP = {"manual": 0.05, "fade": 0.25, "action": 0.25, "dca": 0.1, "auto": 0.1}
 BRIDGE_FWD_GAP_DEFAULT = 0.1
 BRIDGE_FWD_TICK = 0.02       # 合并器轮询间隔
 BRIDGE_FWD_MAX_BATCH = 256   # 单拍最多发出条数 (防极端堆积把 UDP 包撑爆)
@@ -437,7 +437,7 @@ class _BridgeSink(WriteSink):
     """
 
     def on_write(self, kind, idx, value, source):
-        if BRIDGE["addr"] is None or source not in ("manual", "action", "dca", "fade"):
+        if BRIDGE["addr"] is None or source not in ("manual", "action", "dca", "fade", "auto"):
             return
         _bridge_forward(kind, idx, value, source)
 

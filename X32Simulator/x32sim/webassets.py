@@ -305,6 +305,19 @@ WEB_PAGE = r"""<!DOCTYPE html>
 .qrhint{flex:1;min-width:210px}
 .qrurl{font-size:16px;font-weight:700;user-select:all;word-break:break-all;margin:6px 0 2px}
 .qracts{margin:8px 0 4px}
+
+/* ---- 自动增益 / 自动推子 ---- */
+.rrow{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.rrow select,.rrow input[type=number]{padding:7px 8px;border-radius:8px;border:1px solid var(--line);
+  background:var(--card2);color:var(--txt);font-size:13px}
+.rrow input[type=number]{width:76px}
+.rsw{display:flex;gap:6px;align-items:center;font-size:13px}
+.rtarget{font-size:13px;display:flex;gap:6px;align-items:center}
+.rdel{margin-left:auto;background:#565d6d;color:#fff;font-size:12px;padding:6px 10px}
+.ridercard{margin-top:10px}
+.rmeter{height:10px;background:var(--track);border-radius:6px;overflow:hidden;margin:8px 0 4px}
+.rmeter span{display:block;height:100%;width:0;border-radius:6px;
+  background:linear-gradient(90deg,var(--green),#eab308,var(--red));transition:width .12s linear}
 </style>
 </head>
 <body>
@@ -517,10 +530,30 @@ WEB_PAGE = r"""<!DOCTYPE html>
   </div>
 </div>
 
+
+<div class="page" id="pg-rider">
+  <div class="infobox">
+    <b>自动增益 / 自动推子</b>：把通道电平稳在目标值（默认 -18 dBFS），可以边演边调。
+    <b>推子</b>模式动的是推子（接真台时电动推子看得见它在走）；<b>增益</b>模式动数字增益，推子不动。<br>
+    三档速度改的是「平均窗口 / 死区 / 每秒最大修正」——所以它不是每个字都拉一下，而是平滑地跟着走。
+  </div>
+  <div class="card">
+    <div class="rrow">
+      <label class="rsw"><input type="checkbox" id="riderOn" onchange="riderGlobal(this.checked)"> 总开关</label>
+      <input id="riderCh" class="nkin" style="width:76px" inputmode="numeric" placeholder="1-32">
+      <button onclick="riderAdd()">➕ 添加通道</button>
+      <button style="background:#565d6d;color:#fff" onclick="riderReset()">↺ 清空修正</button>
+    </div>
+    <div class="ds" id="riderHint">还没配置通道。填通道号（1-32）→ 添加 → 打开「启用」。</div>
+  </div>
+  <div id="riderlist"></div>
+</div>
+
 <nav>
   <button class="on" data-p="cards"><span class="ic">🎬</span>卡片</button>
   <button data-p="fx"><span class="ic">🎛</span>混响</button>
   <button data-p="keys"><span class="ic">⚡</span>控制键</button>
+  <button data-p="rider"><span class="ic">🎚</span>自动</button>
   <button data-p="mix"><span class="ic">🎚</span>调音台</button>
   <button data-p="set"><span class="ic">⚙️</span>设置</button>
 </nav>
@@ -2664,6 +2697,86 @@ loadInfo();
 if ('serviceWorker' in navigator) {
   try { navigator.serviceWorker.register('/sw.js').catch(()=>{}); } catch(e) {}
 }
+
+
+// ==================== 自动增益 / 自动推子 ====================
+// 控制律在服务端 (x32sim/rider.py)，这里只管配置与显示。
+// 速度三档: 慢/中/快 = 平均窗口 0.9/0.35/0.12 s、死区 0.6/0.4/0.3 dB、
+// 每秒最大修正 1.5/5/15 dB —— 页面只暴露"体感"，不暴露这些数字。
+const RIDER_SPD=[['slow','慢'],['medium','中'],['fast','快']];
+
+function loadRider(){
+  fetch('/api/rider').then(r=>r.json()).then(renderRider).catch(()=>{});
+}
+function riderPost(body){
+  fetch('/api/rider',{method:'POST',headers:{'Content-Type':'application/json'},
+                      body:JSON.stringify(body)})
+    .then(r=>r.json()).then(d=>{ if(d && d.rider) renderRider(d.rider); }).catch(()=>{});
+}
+function riderGlobal(on){ riderPost({enabled:!!on}); }
+function riderReset(){ riderPost({action:'reset'}); }
+function riderAdd(){
+  const el=$('#riderCh'); const v=parseInt(el && el.value, 10);
+  if(!(v>=1 && v<=32)){ if(el) el.focus(); return; }
+  riderPost({channel:v, on:true, target:-18, mode:'fader', speed:'medium'});
+  if(el) el.value='';
+}
+function riderSet(ch,patch){ riderPost(Object.assign({channel:ch}, patch)); }
+function riderDel(ch){ riderPost({channel:ch, remove:true}); }
+
+function renderRider(cfg){
+  window._rider=cfg;
+  const sw=$('#riderOn'); if(sw) sw.checked=!!cfg.enabled;
+  const box=$('#riderlist'); if(!box) return;
+  const ks=Object.keys(cfg.channels||{}).sort((a,b)=>(+a)-(+b));
+  const hint=$('#riderHint');
+  if(hint) hint.textContent = ks.length
+    ? '改动立即生效（下一拍 50ms 内按新参数跑）。电平取通道表，写入走台面同一条管道。'
+    : '还没配置通道。填通道号（1-32）→ 添加 → 打开「启用」。';
+  box.innerHTML = ks.map(k=>{
+    const c=cfg.channels[k];
+    const opts=RIDER_SPD.map(([v,l])=>`<option value="${v}"`+(c.speed===v?' selected':'')+`>${l}</option>`).join('');
+    return '<div class="card ridercard" data-ch="'+k+'">'
+      + '<div class="nm">CH'+String(k).padStart(2,'0')+' · '+(c.mode==='fader'?'自动推子':'自动增益')+'</div>'
+      + '<div class="rrow">'
+      +   '<label class="rsw"><input type="checkbox" '+(c.on?'checked':'')+' onchange="riderSet('+k+',{on:this.checked})"> 启用</label>'
+      +   '<select onchange="riderSet('+k+',{mode:this.value})">'
+      +     '<option value="fader"'+(c.mode==='fader'?' selected':'')+'>推子</option>'
+      +     '<option value="gain"'+(c.mode==='gain'?' selected':'')+'>增益</option></select>'
+      +   '<select onchange="riderSet('+k+',{speed:this.value})">'+opts+'</select>'
+      +   '<label class="rtarget">目标 <input type="number" step="0.5" min="-60" max="0" value="'+c.target+'"'
+      +     ' onchange="riderSet('+k+',{target:this.value})"> dBFS</label>'
+      +   '<button class="rdel" onclick="riderDel('+k+')">删除</button>'
+      + '</div>'
+      + '<div class="rmeter"><span id="rbar-'+k+'"></span></div>'
+      + '<div class="ds" id="rlv-'+k+'">等待电平…</div>'
+      + '</div>';
+  }).join('');
+  riderLive();
+}
+
+function riderLive(){
+  const r=(S && S.rider)||null; if(!r) return;   // ⚠️ S 是 let，不在 window 上
+  const map={}; (r.on||[]).forEach(x=>{ map[x.ch]=x; });
+  document.querySelectorAll('.ridercard').forEach(card=>{
+    const ch=+card.dataset.ch, x=map[ch];
+    const bar=document.getElementById('rbar-'+ch), lv=document.getElementById('rlv-'+ch);
+    if(!bar||!lv) return;
+    if(!r.enabled){ bar.style.width='0%'; lv.textContent='总开关已关'; return; }
+    if(!x){ bar.style.width='0%'; lv.textContent='未启用'; return; }
+    if(x.level===null||x.level===undefined){
+      bar.style.width='0%'; lv.textContent='无信号（冻结中 · 不会往上推）'; return;
+    }
+    const pct=Math.max(0,Math.min(100,(x.level+60)/60*100));
+    bar.style.width=pct.toFixed(1)+'%';
+    const app=(x.applied===null||x.applied===undefined)?'—':(+x.applied).toFixed(1);
+    lv.textContent='电平 '+(+x.level).toFixed(1)+' dBFS · 修正 '+app+' dB · 目标 '+(+x.target).toFixed(1)
+                  +(x.paused?' · 人工接管中':'');
+  });
+}
+loadRider();
+setInterval(riderLive, 300);
+
 </script>
 </body>
 </html>

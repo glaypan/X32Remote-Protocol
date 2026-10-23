@@ -261,3 +261,16 @@
 .qrhint{flex:1;min-width:210px}
 .qrurl{font-size:16px;font-weight:700;user-select:all;word-break:break-all;margin:6px 0 2px}
 .qracts{margin:8px 0 4px}
+
+/* ---- 自动增益 / 自动推子 ---- */
+.rrow{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.rrow select,.rrow input[type=number]{padding:7px 8px;border-radius:8px;border:1px solid var(--line);
+  background:var(--card2);color:var(--txt);font-size:13px}
+.rrow input[type=number]{width:76px}
+.rsw{display:flex;gap:6px;align-items:center;font-size:13px}
+.rtarget{font-size:13px;display:flex;gap:6px;align-items:center}
+.rdel{margin-left:auto;background:#565d6d;color:#fff;font-size:12px;padding:6px 10px}
+.ridercard{margin-top:10px}
+.rmeter{height:10px;background:var(--track);border-radius:6px;overflow:hidden;margin:8px 0 4px}
+.rmeter span{display:block;height:100%;width:0;border-radius:6px;
+  background:linear-gradient(90deg,var(--green),#eab308,var(--red));transition:width .12s linear}

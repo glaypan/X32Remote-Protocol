@@ -15,6 +15,7 @@ from .presets import AUTO_SNAPS, RECALL_STATE, SNAPSHOTS, preset_scope_text
 from .profiles import console_listing, profile
 from .quickkeys import KEY_CFG, QUICK_KEYS
 from .runtime import DEF_UDP_PORT, DEF_WEB_PORT, ENV_WEB_PORT, PORT_CFG, UDP_PORT, WEB_PORT, ports_pending_restart
+from .rider import rider_snapshot
 from .state import METER_SUBSCRIBERS, STATE, compute_levels
 from .timeline import SCHEDULES, SHOW_STATE
 
@@ -78,6 +79,8 @@ def snapshot_state(since_log=None):
                        "scopeText": preset_scope_text(s.get("scope") or {})}
                       for s in SNAPSHOTS],
         "recall": dict(RECALL_STATE),
+        # 自动增益/推子: 只带启用中的通道（通常 1-4 路），不把 32 路塞进状态包
+        "rider": rider_snapshot(),
         "quickKeys": QUICK_KEYS,
         "keyCfg": dict(KEY_CFG),
         "names": names,
