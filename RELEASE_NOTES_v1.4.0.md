@@ -1,8 +1,9 @@
 # X32 Remote v1.4.0 发布说明
 
 > 发布日期：2026-10-24
-> 服务端规范：**v1.7**（协议仓 tag `spec-v1.7`，v1.4.0 为增量功能）
-> 新增：**自动增益 / 自动推子（Vocal Rider 式）**，并接入 iOS / Android
+> 服务端规范：**v1.8**（协议仓 tag `spec-v1.8`）
+> 新增：**自动增益 / 自动推子（Vocal Rider 式）**，接入 iOS / Android，
+> 并首次提供 **macOS（10.14.6+ Commander）** 与 **Windows** 桌面版
 
 ## 一句话
 
@@ -75,6 +76,38 @@
    若 CI 未完成则以旧包为准（见产物表）。
 5. 网页试用版仍是 2026-10-18 纯前端虚拟台快照，不含自动页签。
 
+### 6. 桌面版：macOS Commander 与 Windows 便携版
+
+两端都是**自带运行时**的成品，装上就能当演出主机：
+
+| | macOS | Windows |
+|---|---|---|
+| 包 | `X32Remote-macOS-1.1.0-unsigned.zip`（35 MB） | `X32Remote-1.1.0-windows-x64.zip`（7.9 MB） |
+| 最低系统 | **10.14.6**（Mojave），仅 Intel | Windows 10 / 11 64 位 |
+| 形态 | `.app`，内置 Python 3.14.8（源码编译，部署目标 10.14.6） | 单 exe（PyInstaller），内置 Python 运行时 |
+| 启动 | 双击 → 原生窗口 + 内置网页控制台 | 双击 → 控制台窗口显示局域网地址与二维码，并自动开浏览器 |
+| 停止 | 关窗口 | **关那个黑窗口**（无后台残留） |
+
+macOS 版这次不只是换了内核 —— 它的定位是 **Commander（演出主机）**：
+先在本机把服务跑起来，再把地址/二维码给手机，手机扫码进入的就是同一块控制台、同一份状态。
+
+**硬门槛是验过的**：`.app` 内 **66 个 Mach-O** 逐个解析 `LC_BUILD_VERSION`，
+最高 `minos` 恰好 **10.14.6**、架构全为 `x86_64`（CI 冒烟 + 离线复验双重）。
+
 ## 产物与校验
+
+按平台下载：
+
+| 平台 | 文件 | 要求 |
+|---|---|---|
+| **macOS（Commander）** | `X32Remote-macOS-1.1.0-unsigned.zip` | **macOS 10.14.6+ / Intel(x86_64)**，Apple Silicon 走 Rosetta 2；解压后拖进「应用程序」，首次右键打开 |
+| **Windows** | `X32Remote-1.1.0-windows-x64.zip` | Windows 10 / 11 **64 位**；解压双击 `X32Remote.exe`，**免装 Python**；关窗口即停服务 |
+| **Android** | `X32Remote-1.2.0.apk` | Android 8.0+，直接安装（v2/v3 签名，可覆盖升级） |
+| **iOS** | `X32Remote-unsigned.ipa` | iOS 17+，未签名，需用 Sideloadly 自签 |
+| **网页试用** | `X32Remote-WebDemo.html` | 任意现代浏览器双击即开（纯前端快照，不含自动页签） |
+
+macOS 版就是「Commander」形态：**它在本机跑完整服务端**，自己是一块控制台，
+同时把局域网地址与二维码显示出来，手机扫一下接入；Windows 版同构，双击即得同样一台主机。
+
 
 见 `SHA256SUMS.txt`；安装与排错见 `outputs/发布流程与全平台安装指南-2026-10-23.md`。

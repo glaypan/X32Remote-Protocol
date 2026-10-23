@@ -31,6 +31,11 @@ DEFAULT_APK = "X32Remote-1.2.0.apk"
 DEFAULT_IPA = "X32Remote-unsigned.ipa"
 # 网页试用版（单文件零依赖，v1.2.0 起随包发布）
 DEFAULT_WEBDEMO = "X32Remote-WebDemo.html"
+# 桌面版产物（可选）：存在就并入 full / assets 包，缺失不报错。
+# 命名带版本号 —— 同一个 Release 里既有 macOS 又有 Windows 时，
+# 不带版本的 zip 名称会让人分不清是哪个平台的哪一版。
+MACOS_ZIP = "X32Remote-macOS-{ver}-unsigned.zip"
+WIN_ZIP = "X32Remote-{ver}-windows-x64.zip"
 # Android 工程在本仓库外（与 x32遥控/ 同级），存在才纳入 full 包
 ANDROID_SRC = ROOT.parent / "X32RemoteAndroid"
 
@@ -65,12 +70,23 @@ def full_items(apk: str, ipa: str, notes: str, ver: str) -> list:
 
 
 def asset_items(apk: str, ipa: str, notes: str) -> list:
+    # 桌面版不进 assets.zip：它是几万兆的二进制，作为独立附件更省下载
     return [
         (f"outputs/{apk}",  apk),
         (f"outputs/{ipa}",  ipa),
         (f"outputs/{DEFAULT_WEBDEMO}", DEFAULT_WEBDEMO),
         (notes,             pathlib.Path(notes).name),
     ]
+
+
+def desktop_artifacts(ver: str) -> list:
+    """outputs/ 里真实存在的桌面版 zip（macOS 在前：体积大、优先被看到）。"""
+    out = []
+    for pat in (MACOS_ZIP, WIN_ZIP):
+        name = pat.format(ver=ver)
+        if (OUT / name).is_file():
+            out.append(name)
+    return out
 
 
 def make_readme(ver: str, apk: str, ipa: str, webdemo: str) -> str:
@@ -90,6 +106,8 @@ def make_readme(ver: str, apk: str, ipa: str, webdemo: str) -> str:
     {ipa}     iOS（需自行签名，见 docs）
     {apk}        Android（直接安装）
     {webdemo}  网页试用版（单文件，浏览器直接打开，零依赖）
+  桌面版（macOS / Windows）单独发布，见 Release 附件 —— 它们是几十 MB 的
+  自带运行时二进制，塞进这里只会让同一个 Release 重复下载两次。
   X32Remote-ios/  iOS 工程源码（SwiftUI + SwiftPM 本地包）
   X32RemoteAndroid/ Android 工程源码（Kotlin）
   X32Simulator/   服务端 + Web 控制台（Python 单文件）

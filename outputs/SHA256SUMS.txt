@@ -1,20 +1,23 @@
-21f1733674a9b12e39472f0985909b665b2ef240fdd51a513b7e245b36e90fa4 *X32Remote-v1.4.0-full.zip
+# X32 Remote v1.4.0 发布物校验和 (SHA256)
+# 生成时间: 2026-10-24
+# 校验方式: sha256sum -c SHA256SUMS.txt
+# 服务端规范: v1.8 (tag spec-v1.8)
+# 说明:
+#   X32Remote-v1.4.0-full.zip                完整发布包（全部源码 + 移动端产物 + 文档）
+#   X32Remote-v1.4.0-assets.zip              仅移动端成品（APK + IPA + 网页试用版 + 发布说明）
+#   X32Remote-macOS-1.1.0-unsigned.zip       macOS Commander 版（10.14.6+ / Intel，内置 Python 3.14.8）
+#   X32Remote-1.1.0-windows-x64.zip          Windows 便携版（Win10/11 64 位，单 exe 自带运行时）
+#   X32Remote-1.2.0.apk                      Android 安装包（1.2.0 / versionCode 3，v2/v3 签名）
+#   X32Remote-unsigned.ipa                   iOS 未签名包（1.2.0 / build 3，iOS 17+）
+#   X32Remote-WebDemo.html                   网页试用版（单文件，纯前端快照）
+#
+# macOS  : 10.14.6+ / Intel(x86_64)；66 个 Mach-O 最高 minos=10.14.6（CI + 离线复验）
+# Windows: Win10/11 64 位；PyInstaller 单 exe，内置 Python 运行时
+# 回归   : 11/11 组（rider 42 项）；pyflakes 净；check_layers 无环
+6392ec52718c96068828967a6a19ad09177bf2ee23066722125b656e407238c4 *X32Remote-v1.4.0-full.zip
 b111e891f0ba2b21c88bd54f7440ed3c4a4d47ae5b26d7bd0a00d9d6fb680c17 *X32Remote-v1.4.0-assets.zip
+476e5daf117b5431a495bb5a5b2025c83e70d95195c92429676b3474e6d1e377 *X32Remote-macOS-1.1.0-unsigned.zip
+8b14bacbc3d513152328011f10f4c0d4fac2dfc5f5bbb5ec38ebb4872e4b3e96 *X32Remote-1.1.0-windows-x64.zip
 d62223318183656c24c6758008346700004656dc49b9344d39ef141d94df6b34 *X32Remote-1.2.0.apk
 1bb93b5cc31c0048207279980cd2ac2b613d8bf402e6965985b0d2c65ca0735f *X32Remote-unsigned.ipa
 21095074d2764dce6cff290ff1ff04eb3efe1b46c984fcdd69b46e101e97771e *X32Remote-WebDemo.html
-# X32 Remote v1.4.0 发布包校验和 (SHA256)
-# 生成时间: 2026-10-24
-# 校验方式: sha256sum -c SHA256SUMS.txt
-# 说明:
-#   X32Remote-v1.4.0-full.zip      完整发布包（全部源码 + 产物 + 文档）
-#   X32Remote-v1.4.0-assets.zip    仅产物（APK + IPA + 网页试用版 + 发布说明）
-#   X32Remote-1.2.0.apk            Android 安装包（versionName 1.2.0 / versionCode 3，含自动增益入口）
-#   X32Remote-unsigned.ipa         iOS 未签名包（1.2.0 / build 3，含「自动」页签，需自行签名）
-#   X32Remote-WebDemo.html         网页试用版（单文件；快照，不含自动页签）
-#
-# Android APK: 1.2.0 (versionCode 3) / minSdk 26 / targetSdk 35，v2/v3 签名（CN=X32 Remote）
-# iOS IPA:     1.2.0 (build 3) / iOS 17+，云端编译 run 40009302385
-#
-# 测试: 回归 11/11 组（rider 组 42 项）；pyflakes 净；check_layers 无环；
-#       单文件 26 模块与包同步；iOS CI 含单测全绿

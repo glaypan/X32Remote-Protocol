@@ -1,6 +1,6 @@
 # X32 Remote v1.4.0
 
-服务端规范 **v1.7** · 新增 **自动增益 / 自动推子（Vocal Rider 式）**，并接入 iOS / Android
+服务端规范 **v1.8** · 新增 **自动增益 / 自动推子（Vocal Rider 式）**，接入 iOS / Android，并提供 **macOS 10.14.6+ Commander** 与 **Windows** 桌面版
 
 ## 重点
 
@@ -27,9 +27,26 @@
 桥接实证：A 桥接 B 后两边推子逐秒完全相同 → `source="auto"` 真下发。
 `pyflakes` 净、`check_layers` 无环、单文件 26 模块与包同步。
 
+## 下载（按平台）
+
+| 平台 | 文件 | 要求 |
+|---|---|---|
+| **macOS（Commander）** | `X32Remote-macOS-1.1.0-unsigned.zip` | **macOS 10.14.6+ / Intel(x86_64)**，Apple Silicon 走 Rosetta 2；解压后拖进「应用程序」，首次右键打开 |
+| **Windows** | `X32Remote-1.1.0-windows-x64.zip` | Windows 10 / 11 **64 位**；解压双击 `X32Remote.exe`，**免装 Python**；关窗口即停服务 |
+| **Android** | `X32Remote-1.2.0.apk` | Android 8.0+，直接安装（v2/v3 签名，可覆盖升级） |
+| **iOS** | `X32Remote-unsigned.ipa` | iOS 17+，未签名，需用 Sideloadly 自签 |
+| **网页试用** | `X32Remote-WebDemo.html` | 任意现代浏览器双击即开（纯前端快照，不含自动页签） |
+
+macOS 版就是「Commander」形态：**它在本机跑完整服务端**，自己是一块控制台，
+同时把局域网地址与二维码显示出来，手机扫一下接入；Windows 版同构，双击即得同样一台主机。
+
 ## 产物
 
-`X32Remote-v1.4.0-full.zip` · `X32Remote-v1.4.0-assets.zip` ·
-`X32Remote-1.2.0.apk` · `X32Remote-unsigned.ipa` · `X32Remote-WebDemo.html` · `SHA256SUMS.txt`
+`X32Remote-v1.4.0-full.zip`（全部源码 + 移动端产物 + 文档）·
+`X32Remote-v1.4.0-assets.zip`（移动端成品 + 发布说明）·
+`SHA256SUMS.txt`（7 个文件的 SHA256，`sha256sum -c` 可直接校验）
+
+> 桌面版是几十 MB 的自带运行时二进制，因此**不进** full/assets 包，单独作为附件——
+> 同一个 Release 里重复下载两次没有意义。
 
 安装与排错见 `outputs/发布流程与全平台安装指南-2026-10-23.md`。
