@@ -18,6 +18,7 @@ from .oscsrv import handle
 from .persist import CONFIG_PATH, load_user_config
 from .params import set_enum_wire, set_param_limits
 from .profiles import profile
+from .qr import block_lines as qr_block
 from .runtime import DEF_WEB_PORT, ENV_WEB_PORT, LAN_IP, MAIN_SOCK, PORT_CFG, UDP_PORT, WEB_PORT, get_lan_ip, resolve_ports
 from .state import meter_streamer
 
@@ -71,6 +72,10 @@ def main():
     # 便于自研客户端联调, 但不要依赖它 —— 上真台没有这个行为。
     parser.add_argument("--xremote-snapshot", action="store_true",
                         help="新订阅者首帧补一次全量 (非真台行为, 默认关)")
+    # 启动时在终端打印扫码二维码 (手机扫一下就能进网页控制台, 不用手输 IP)。
+    # 默认开, 但只在真正的终端里打印: 输出重定向到日志文件/在线沙箱时不打。
+    parser.add_argument("--no-qr", action="store_true",
+                        help="启动时不打印扫码二维码 (手机仍可手输 IP 访问)")
     # 发送取点 (enum) 的线上形式。协议规定枚举可以用整数索引或名字符串发送,
     # 真台两种都收; 回包形式随固件而异。默认索引; 若真台回字符串读不回来, 用 label。
     parser.add_argument("--tap-wire", choices=("index", "label"), default="index",
@@ -140,6 +145,17 @@ def main():
             web = WebServer(("0.0.0.0", args.web_port), WebHandler)
             threading.Thread(target=web.serve_forever, daemon=True).start()
             log("网页控制台已启动  http://localhost:%d  (手机/电脑浏览器均可打开)" % args.web_port)
+            # 手机扫码入口: 比让用户在手机上敲 192.168.x.x:8080 省事得多。
+            # 只在交互式终端里打 —— 重定向到日志、或被平台托管时没有意义。
+            if not args.no_qr and sys.stdout.isatty() and not ip.startswith("127."):
+                url = "http://%s:%d/" % (ip, args.web_port)
+                log("手机扫码直达 (同一 WiFi): %s  [--no-qr 可关闭]" % url)
+                try:
+                    for line in qr_block(url, border=2):
+                        print(line)
+                    print()
+                except Exception as e:      # 二维码只是便利功能, 失败不能挡住启动
+                    log("二维码生成失败: %r" % e)
         except OSError as e:
             log("网页控制台启动失败(端口 %d 被占用?): %s" % (args.web_port, e))
 

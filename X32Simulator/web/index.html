@@ -139,10 +139,18 @@
   </div>
   <h3>📱 手机 / 安卓平板连接</h3>
   <div class="card">
-    <div class="nm">手机连同一 WiFi,浏览器打开</div>
-    <div class="ds" style="font-size:16px;font-weight:700;user-select:all" id="lanurl">…</div>
-    <div class="ds">安卓 Chrome 菜单 → <b>添加到主屏幕</b>,即可像 App 一样全屏使用(图标自动生成)<br>
-    其他设备(OSC 客户端)把调音台 IP 填为 <b id="lanip2">…</b>,端口 <b id="pinfoUdp2">10023</b></div>
+    <div class="qrrow">
+      <div class="qrbox"><img id="lanqr" alt="扫码进入网页控制台" width="164" height="164"></div>
+      <div class="qrhint">
+        <div class="nm">手机扫这个码，直接打开控制台</div>
+        <div class="ds">手机连<b>同一个 WiFi</b>，用相机或微信扫一扫即可，不用手输 IP。<br>
+          扫不开就把下面这行地址手动输进手机浏览器。</div>
+        <div class="qrurl" id="lanurl">…</div>
+        <div class="qracts"><button onclick="copyLan()" id="lanCopy">📋 复制地址</button></div>
+        <div class="ds">安卓 Chrome 菜单 → <b>添加到主屏幕</b>，即可像 App 一样全屏使用（图标自动生成）<br>
+          其他设备（OSC 客户端）把调音台 IP 填为 <b id="lanip2">…</b>，端口 <b id="pinfoUdp2">10023</b></div>
+      </div>
+    </div>
   </div>
   <h3>OSC 收发日志 (最近 40 条)</h3><div id="logbox"></div>
   <h3 id="sec-keycfg">🔧 控制键步长与渐变速度</h3>

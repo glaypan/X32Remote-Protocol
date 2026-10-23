@@ -297,6 +297,14 @@ WEB_PAGE = r"""<!DOCTYPE html>
 .chp-v input.chp-in{width:74px;padding:2px 4px;font-size:12px;text-align:right;
   border-radius:6px;border:1px solid var(--accent);background:var(--card2);
   color:var(--txt);font-variant-numeric:tabular-nums}
+
+/* ---- 扫码连接（设置页）: 白底二维码 + 右侧说明 ---- */
+.qrrow{display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start}
+.qrbox{background:#fff;border-radius:14px;padding:10px;line-height:0;box-shadow:0 3px 12px rgba(0,0,0,.28)}
+.qrbox img{display:block;width:164px;height:164px}
+.qrhint{flex:1;min-width:210px}
+.qrurl{font-size:16px;font-weight:700;user-select:all;word-break:break-all;margin:6px 0 2px}
+.qracts{margin:8px 0 4px}
 </style>
 </head>
 <body>
@@ -424,10 +432,18 @@ WEB_PAGE = r"""<!DOCTYPE html>
   </div>
   <h3>📱 手机 / 安卓平板连接</h3>
   <div class="card">
-    <div class="nm">手机连同一 WiFi,浏览器打开</div>
-    <div class="ds" style="font-size:16px;font-weight:700;user-select:all" id="lanurl">…</div>
-    <div class="ds">安卓 Chrome 菜单 → <b>添加到主屏幕</b>,即可像 App 一样全屏使用(图标自动生成)<br>
-    其他设备(OSC 客户端)把调音台 IP 填为 <b id="lanip2">…</b>,端口 <b id="pinfoUdp2">10023</b></div>
+    <div class="qrrow">
+      <div class="qrbox"><img id="lanqr" alt="扫码进入网页控制台" width="164" height="164"></div>
+      <div class="qrhint">
+        <div class="nm">手机扫这个码，直接打开控制台</div>
+        <div class="ds">手机连<b>同一个 WiFi</b>，用相机或微信扫一扫即可，不用手输 IP。<br>
+          扫不开就把下面这行地址手动输进手机浏览器。</div>
+        <div class="qrurl" id="lanurl">…</div>
+        <div class="qracts"><button onclick="copyLan()" id="lanCopy">📋 复制地址</button></div>
+        <div class="ds">安卓 Chrome 菜单 → <b>添加到主屏幕</b>，即可像 App 一样全屏使用（图标自动生成）<br>
+          其他设备（OSC 客户端）把调音台 IP 填为 <b id="lanip2">…</b>，端口 <b id="pinfoUdp2">10023</b></div>
+      </div>
+    </div>
   </div>
   <h3>OSC 收发日志 (最近 40 条)</h3><div id="logbox"></div>
   <h3 id="sec-keycfg">🔧 控制键步长与渐变速度</h3>
@@ -2616,9 +2632,32 @@ function setHTML(id,html){
 }
 function loadInfo(){
   fetch('/api/info').then(r=>r.json()).then(d=>{
-    $('#lanurl').textContent = d.lanUrl;
+    const u = d.lanUrl || '';
+    $('#lanurl').textContent = u;
     $('#lanip2').textContent = d.lanIp;
+    // 二维码内容就是上面显示的地址（所见即所得）；后端只负责渲染，不联网。
+    const img = $('#lanqr');
+    if(img && u) img.src = '/qr.svg?u=' + encodeURIComponent(u.replace(/\/?$/, '/'));
   }).catch(()=>{});
+}
+// 复制连接地址（老浏览器没有 clipboard API 时退回 execCommand）
+function copyLan(){
+  const txt = $('#lanurl').textContent || '';
+  const btn = $('#lanCopy');
+  const flash = () => {
+    if(!btn) return;
+    const old = btn.textContent;
+    btn.textContent = '✓ 已复制';
+    setTimeout(()=>{ btn.textContent = old; }, 1200);
+  };
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(txt).then(flash).catch(()=>{});
+    return;
+  }
+  const ta = document.createElement('textarea');
+  ta.value = txt; document.body.appendChild(ta); ta.select();
+  try{ document.execCommand('copy'); flash(); }catch(e){}
+  document.body.removeChild(ta);
 }
 init();
 loadInfo();

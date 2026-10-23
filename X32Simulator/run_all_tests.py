@@ -160,6 +160,8 @@ GROUPS = [
     ("bridge", ("桥接双实例", group_bridge)),
     ("b3_scan", ("B3 自动发现", group_b3)),
     ("dualform", ("双形态差分 (包 vs 单文件)", group_dual)),
+    # 二维码是纯计算 (不占端口、不起服务), 单独一组跑得快
+    ("qr", ("二维码 (扫码进入网页)", lambda: run("test_qr.py"))),
 ]
 
 

@@ -253,3 +253,11 @@
 .chp-v input.chp-in{width:74px;padding:2px 4px;font-size:12px;text-align:right;
   border-radius:6px;border:1px solid var(--accent);background:var(--card2);
   color:var(--txt);font-variant-numeric:tabular-nums}
+
+/* ---- 扫码连接（设置页）: 白底二维码 + 右侧说明 ---- */
+.qrrow{display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start}
+.qrbox{background:#fff;border-radius:14px;padding:10px;line-height:0;box-shadow:0 3px 12px rgba(0,0,0,.28)}
+.qrbox img{display:block;width:164px;height:164px}
+.qrhint{flex:1;min-width:210px}
+.qrurl{font-size:16px;font-weight:700;user-select:all;word-break:break-all;margin:6px 0 2px}
+.qracts{margin:8px 0 4px}

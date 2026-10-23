@@ -114,6 +114,19 @@ def strip_module(src):
                 raise SystemExit("!! 多行相对导入不支持, 请改成单行: %s" % body)
             if body.count("(") != body.count(")"):
                 raise SystemExit("!! 相对导入括号不配对: %s" % body)
+            # 别名导入 (`from .qr import svg as qr_svg`) 不能一剥了之：拼接后只有
+            # 一个命名空间，`qr_svg` 会变成未定义名 —— 语法检查发现不了，运行时才
+            # NameError（曾让 /qr.svg 线上 500）。这里改写成赋值把别名保留下来。
+            try:
+                node = ast.parse(body).body[0]
+            except SyntaxError:
+                node = None
+            if isinstance(node, ast.ImportFrom):
+                for a in node.names:
+                    if a.name == "*":
+                        raise SystemExit("!! 不支持星号导入: %s" % body)
+                    if a.asname:
+                        out.append("%s = %s" % (a.asname, a.name))
             continue
         out.append(ln)
     text = "\n".join(out)

@@ -1992,9 +1992,32 @@ function setHTML(id,html){
 }
 function loadInfo(){
   fetch('/api/info').then(r=>r.json()).then(d=>{
-    $('#lanurl').textContent = d.lanUrl;
+    const u = d.lanUrl || '';
+    $('#lanurl').textContent = u;
     $('#lanip2').textContent = d.lanIp;
+    // 二维码内容就是上面显示的地址（所见即所得）；后端只负责渲染，不联网。
+    const img = $('#lanqr');
+    if(img && u) img.src = '/qr.svg?u=' + encodeURIComponent(u.replace(/\/?$/, '/'));
   }).catch(()=>{});
+}
+// 复制连接地址（老浏览器没有 clipboard API 时退回 execCommand）
+function copyLan(){
+  const txt = $('#lanurl').textContent || '';
+  const btn = $('#lanCopy');
+  const flash = () => {
+    if(!btn) return;
+    const old = btn.textContent;
+    btn.textContent = '✓ 已复制';
+    setTimeout(()=>{ btn.textContent = old; }, 1200);
+  };
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(txt).then(flash).catch(()=>{});
+    return;
+  }
+  const ta = document.createElement('textarea');
+  ta.value = txt; document.body.appendChild(ta); ta.select();
+  try{ document.execCommand('copy'); flash(); }catch(e){}
+  document.body.removeChild(ta);
 }
 init();
 loadInfo();

@@ -16,6 +16,7 @@ from .params import PARAM_SPECS, SEND_BUS, send_pack, active_limits, unverified_
 from .persist import CONFIG_PATH, ID_SEQ, clear_console, next_id, recall_last, save_user_config
 from .presets import AUTO_SNAPS, SNAPSHOTS, _recall_stop_current, preset_scope_text, recall_snapshot, save_snapshot, start_recall
 from .profiles import profile, set_profile
+from .qr import svg as qr_svg
 from .quickkeys import KEY_CFG, QUICK_KEYS, apply_key
 from .runtime import DEF_UDP_PORT, DEF_WEB_PORT, ENV_WEB_PORT, LAN_IP, PORT_CFG, UDP_PORT, WEB_PORT, ports_pending_restart, valid_port
 from .scan import scan_consoles
@@ -191,6 +192,27 @@ class WebHandler(BaseHTTPRequestHandler):
         elif path == "/sw.js":
             self._send(200, "application/javascript; charset=utf-8",
                        PWA_SERVICE_WORKER.encode("utf-8"))
+        elif path == "/qr.svg":
+            # 手机扫码入口。地址优先用 ?u= 传进来的（页面显示的就是它，所见即所得），
+            # 否则退回请求的 Host（从手机访问时天然是对的），最后才用探测到的局域网 IP。
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            target = (qs.get("u") or [""])[0].strip()
+            if not target:
+                host = (self.headers.get("Host") or "").strip()
+                if host and host.split(":")[0] not in ("localhost", "127.0.0.1", "::1"):
+                    target = "http://%s/" % host
+                else:
+                    target = "http://%s:%d/" % (LAN_IP[0], WEB_PORT[0])
+            # 只做形状校验：本端点只渲染图片，不会去请求这个地址
+            if not target.startswith(("http://", "https://")) or len(target) > 200:
+                self._send(400, "text/plain; charset=utf-8", b"bad url")
+                return
+            try:
+                body = qr_svg(target).encode("utf-8")
+            except ValueError as e:
+                self._send(400, "text/plain; charset=utf-8", str(e).encode("utf-8"))
+                return
+            self._send(200, "image/svg+xml; charset=utf-8", body)
         else:
             self._send(404, "text/plain; charset=utf-8", "not found".encode())
 

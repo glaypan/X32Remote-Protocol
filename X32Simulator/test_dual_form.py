@@ -15,6 +15,7 @@ import struct
 import subprocess
 import sys
 import time
+import urllib.parse
 import urllib.request
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -254,6 +255,16 @@ def main():
               ia.get("udpPort") == A_OSC and ib.get("udpPort") == B_OSC
               and ia.get("webPort") == A_WEB and ib.get("webPort") == B_WEB,
               "A=%r B=%r" % (ia, ib))
+
+        print("== 4b. 扫码接口两种形态一致 (别名导入的守护) ==")
+        # 单文件形态会剥掉相对导入; 若 `import x as y` 的别名没被保留, 这里会 500。
+        qu = "/qr.svg?u=" + urllib.parse.quote("http://192.168.1.5:8080/", safe="")
+        with OPENER.open("http://127.0.0.1:%d%s" % (A_WEB, qu), timeout=5) as r:
+            qa = r.read()
+        with OPENER.open("http://127.0.0.1:%d%s" % (B_WEB, qu), timeout=5) as r:
+            qb = r.read()
+        check("两种形态二维码逐字节一致", qa == qb and qa.startswith(b"<svg") and b"viewBox" in qa,
+              "A=%d B=%d" % (len(qa), len(qb)))
 
         print("== 5. 配置文件可被对方读懂 (同 schema) ==")
         ok = True

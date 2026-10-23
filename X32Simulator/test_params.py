@@ -20,6 +20,7 @@ import socket
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -822,6 +823,28 @@ for sp in [x for x in state()["snapshots"] if x["name"].startswith("ZZ")]:
     post("/api/snapshot", {"action": "delete", "id": sp["id"]})
 left = [c["name"] for c in state()["cards"] if c["name"].startswith("ZZ")]
 check("清理完成", not left, str(left))
+
+print("\n== C1. 扫码入口 /qr.svg ==")
+
+
+def get_raw(path):
+    try:
+        r = urllib.request.urlopen(WEB + path, timeout=5)
+        return r.status, r.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode("utf-8", "replace")
+
+
+code, body = get_raw("/qr.svg?u=" + urllib.parse.quote("http://192.168.1.5:8080/", safe=""))
+check("扫码接口返回 200 + SVG", code == 200 and body.startswith("<svg") and "viewBox" in body,
+      "%s %s" % (code, body[:60]))
+check("扫码 SVG 里带白底（保证深色终端/深色页面也能扫）", 'fill="#ffffff"' in body)
+code2, body2 = get_raw("/qr.svg")
+check("不带 u 参数时回落到本机地址", code2 == 200 and "<svg" in body2, "%s %s" % (code2, body2[:60]))
+code3, body3 = get_raw("/qr.svg?u=" + urllib.parse.quote("javascript:alert(1)", safe=""))
+check("非 http(s) 地址被拒（400）", code3 == 400, "%s %s" % (code3, body3[:40]))
+code4, body4 = get_raw("/qr.svg?u=" + "http://" + "a" * 210)
+check("超长地址被拒（400）", code4 == 400, "%s %s" % (code4, body4[:40]))
 
 fails = results.count(False)
 print("\n%d/%d 通过" % (len(results) - fails, len(results)))
