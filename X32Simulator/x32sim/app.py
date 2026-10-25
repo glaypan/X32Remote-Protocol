@@ -19,6 +19,7 @@ from .persist import CONFIG_PATH, load_user_config
 from .params import set_enum_wire, set_param_limits
 from .profiles import profile
 from .qr import block_lines as qr_block
+from .pair import pair_text
 from .rider import rider_loop
 from .runtime import DEF_WEB_PORT, ENV_WEB_PORT, LAN_IP, MAIN_SOCK, PORT_CFG, UDP_PORT, WEB_PORT, get_lan_ip, resolve_ports
 from .state import meter_streamer
@@ -157,6 +158,11 @@ def main():
                     print()
                 except Exception as e:      # 二维码只是便利功能, 失败不能挡住启动
                     log("二维码生成失败: %r" % e)
+                try:
+                    # App 扫码用：带 OSC 端口，改过端口也不会连错（见 x32sim/pair.py）
+                    log("App 扫码配对码: %s" % pair_text(ip, args.port, args.web_port))
+                except ValueError:
+                    pass
         except OSError as e:
             log("网页控制台启动失败(端口 %d 被占用?): %s" % (args.web_port, e))
 

@@ -846,6 +846,24 @@ check("非 http(s) 地址被拒（400）", code3 == 400, "%s %s" % (code3, body3
 code4, body4 = get_raw("/qr.svg?u=" + "http://" + "a" * 210)
 check("超长地址被拒（400）", code4 == 400, "%s %s" % (code4, body4[:40]))
 
+# 配对码：网页二维码里是 HTTP 端口，App 要的是 OSC(UDP) 端口 —— 两张码不能混
+from x32sim.qr import svg as _qr_svg  # noqa: E402
+code5, body5 = get_raw("/pair.svg?h=192.168.1.5&o=10025&w=8090")
+check("配对码接口返回 200 + SVG", code5 == 200 and body5.startswith("<svg"), "%s %s" % (code5, body5[:40]))
+_want = "x32remote://pair?v=1&host=192.168.1.5&osc=10025&web=8090"
+check("配对码二维码 = 配对码原文（逐字节）", body5 == _qr_svg(_want),
+      "期望 %d 字节, 实得 %d" % (len(_qr_svg(_want)), len(body5)))
+_info = json.loads(get_raw("/api/info")[1])
+_pc = _info.get("pairCode", "")
+check("/api/info 带配对码（含 osc/web 端口）",
+      _pc.startswith("x32remote://pair?v=1&host=") and "&osc=" in _pc and "&web=" in _pc, _pc)
+check("配对码端口与 info 的 udp/web 一致",
+      ("&osc=%d" % _info["udpPort"]) in _pc and ("&web=%d" % _info["webPort"]) in _pc, _pc)
+code6, _ = get_raw("/pair.svg?h=127.0.0.1")
+check("配对码拒绝回环地址（400）", code6 == 400, str(code6))
+code7, _ = get_raw("/pair.svg?o=70000")
+check("配对码拒绝非法端口（400）", code7 == 400, str(code7))
+
 fails = results.count(False)
 print("\n%d/%d 通过" % (len(results) - fails, len(results)))
 for _n, _name, _detail in failed:

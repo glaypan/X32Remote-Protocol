@@ -1998,12 +1998,27 @@ function loadInfo(){
     // 二维码内容就是上面显示的地址（所见即所得）；后端只负责渲染，不联网。
     const img = $('#lanqr');
     if(img && u) img.src = '/qr.svg?u=' + encodeURIComponent(u.replace(/\/?$/, '/'));
+
+    // App 配对码：和网页地址的区别是它带 **OSC 端口**。用户把 UDP 端口改成
+    // 10025 之后，网页地址里的 8080 不能拿来当 OSC 端口用 —— 所以另给一张码。
+    const pc = d.pairCode || '';
+    const pimg = $('#pairqr'), pcell = $('#paircell');
+    if(pc && pimg && pcell){
+      pcell.style.display = '';
+      $('#paircode').textContent = pc;
+      $('#pairhint').textContent = '配对码里带着 OSC 端口，改过端口也能一次连对。';
+      pimg.src = '/pair.svg?h=' + encodeURIComponent(d.lanIp || '') +
+                 '&o=' + (d.udpPort || 10023) + '&w=' + (d.webPort || 8080);
+    }else if(pcell){
+      pcell.style.display = 'none';
+      const code = $('#paircode'); if(code) code.textContent = '';
+      const hint = $('#pairhint');
+      if(hint) hint.textContent = '未探测到局域网地址（断 VPN / 连上 WiFi 后刷新），App 配对码暂不可用。';
+    }
   }).catch(()=>{});
 }
 // 复制连接地址（老浏览器没有 clipboard API 时退回 execCommand）
-function copyLan(){
-  const txt = $('#lanurl').textContent || '';
-  const btn = $('#lanCopy');
+function copyText(txt, btn){
   const flash = () => {
     if(!btn) return;
     const old = btn.textContent;
@@ -2018,6 +2033,12 @@ function copyLan(){
   ta.value = txt; document.body.appendChild(ta); ta.select();
   try{ document.execCommand('copy'); flash(); }catch(e){}
   document.body.removeChild(ta);
+}
+function copyLan(){
+  copyText($('#lanurl').textContent || '', $('#lanCopy'));
+}
+function copyPair(){
+  copyText($('#paircode').textContent || '', $('#pairCopy'));
 }
 init();
 loadInfo();

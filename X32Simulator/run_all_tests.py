@@ -162,6 +162,8 @@ GROUPS = [
     ("dualform", ("双形态差分 (包 vs 单文件)", group_dual)),
     # 二维码是纯计算 (不占端口、不起服务), 单独一组跑得快
     ("qr", ("二维码 (扫码进入网页)", lambda: run("test_qr.py"))),
+    # 配对码同样纯计算: App 扫的码要带 OSC 端口, 与网页地址不是一回事
+    ("pair", ("App 配对码 (手机 App 扫码连接)", lambda: run("test_pair.py"))),
     # 自动增益/推子也是纯逻辑 (模拟"被控对象"跑闭环), 不占端口
     ("rider", ("自动增益/推子 (平滑与安全)", lambda: run("test_rider.py"))),
 ]

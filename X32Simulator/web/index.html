@@ -140,13 +140,24 @@
   <h3>📱 手机 / 安卓平板连接</h3>
   <div class="card">
     <div class="qrrow">
-      <div class="qrbox"><img id="lanqr" alt="扫码进入网页控制台" width="164" height="164"></div>
+      <div class="qrdual">
+        <div class="qrcell">
+          <div class="qrbox sm"><img id="lanqr" alt="浏览器扫码进入控制台" width="118" height="118"></div>
+          <div class="qrcap"><b>浏览器</b> · 扫码即开</div>
+        </div>
+        <div class="qrcell" id="paircell">
+          <div class="qrbox sm"><img id="pairqr" alt="手机 App 扫码配对" width="118" height="118"></div>
+          <div class="qrcap"><b>App</b> · 扫码配对</div>
+        </div>
+      </div>
       <div class="qrhint">
-        <div class="nm">手机扫这个码，直接打开控制台</div>
-        <div class="ds">手机连<b>同一个 WiFi</b>，用相机或微信扫一扫即可，不用手输 IP。<br>
-          扫不开就把下面这行地址手动输进手机浏览器。</div>
+        <div class="nm">手机连<b>同一个 WiFi</b>，扫任意一张</div>
+        <div class="ds">左：相机 / 微信扫 → 直接打开网页控制台，不装 App 也能全功能操作。<br>
+          右：iOS / Android App 里点「扫码连接」→ 自动填好 IP 与端口。</div>
         <div class="qrurl" id="lanurl">…</div>
-        <div class="qracts"><button onclick="copyLan()" id="lanCopy">📋 复制地址</button></div>
+        <div class="qracts"><button onclick="copyLan()" id="lanCopy">📋 复制地址</button><button onclick="copyPair()" id="pairCopy" style="margin-left:8px">📋 复制配对码</button></div>
+        <div class="pairsmall" id="paircode">…</div>
+        <div class="ds" id="pairhint">配对码里带着 OSC 端口，改过端口也能一次连对。</div>
         <div class="ds">安卓 Chrome 菜单 → <b>添加到主屏幕</b>，即可像 App 一样全屏使用（图标自动生成）<br>
           其他设备（OSC 客户端）把调音台 IP 填为 <b id="lanip2">…</b>，端口 <b id="pinfoUdp2">10023</b></div>
       </div>

@@ -261,6 +261,14 @@
 .qrhint{flex:1;min-width:210px}
 .qrurl{font-size:16px;font-weight:700;user-select:all;word-break:break-all;margin:6px 0 2px}
 .qracts{margin:8px 0 4px}
+/* 两张码并排：左浏览器、右 App。窄屏换行也不会挤成一条 */
+.qrdual{display:flex;gap:12px;flex:0 0 auto}
+.qrcell{text-align:center;min-width:0}
+.qrcap{font-size:11px;color:var(--sub);margin-top:6px;line-height:1.4}
+.qrcap b{color:var(--txt)}
+.qrbox.sm{padding:8px;border-radius:11px;box-shadow:0 2px 8px rgba(0,0,0,.26)}
+.qrbox.sm img{width:118px;height:118px}
+.pairsmall{font-size:11px;color:var(--sub);word-break:break-all;margin:2px 0 6px;user-select:all;opacity:.9}
 
 /* ---- 自动增益 / 自动推子 ---- */
 .rrow{display:flex;gap:8px;flex-wrap:wrap;align-items:center}

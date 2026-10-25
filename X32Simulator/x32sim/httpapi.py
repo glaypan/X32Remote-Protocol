@@ -12,6 +12,7 @@ from .cards import SHOW_CARDS
 from .consts import FX_COUNT, NAME_COUNTS, NOTE_BEATS, SET_KINDMAP
 from .fx import FX_MODE_LABEL, FX_SYNC, FX_SYNC_LOCK, fx_set_param, fx_tap_apply, tap_register, tap_reset
 from .logbus import EVENTS, EVT_SEQ, log
+from .pair import pair_text
 from .params import PARAM_SPECS, SEND_BUS, send_pack, active_limits, unverified_kinds
 from .persist import CONFIG_PATH, ID_SEQ, clear_console, next_id, recall_last, save_user_config
 from .presets import AUTO_SNAPS, SNAPSHOTS, _recall_stop_current, preset_scope_text, recall_snapshot, save_snapshot, start_recall
@@ -152,9 +153,16 @@ class WebHandler(BaseHTTPRequestHandler):
             # 不把假设当事实 —— 界面可以据此显示"未标定"角标, 核对工具据此逐条比对。
             # 只回 kind 列表 (不回 note), 否则 /api/info 会被 26 条注释撑到 5KB。
             _unv = [sp.kind for sp in unverified_kinds()]
+            # App 配对码：探测不到局域网地址（离线/只剩回环）时留空 —— 手机扫到
+            # 127.0.0.1 只会连到它自己，前端据此隐藏那张码并说明原因。
+            try:
+                _pair = pair_text(LAN_IP[0], UDP_PORT[0], WEB_PORT[0])
+            except ValueError:
+                _pair = ""
             self._send(200, "application/json; charset=utf-8", json.dumps({
                 "lanIp": LAN_IP[0], "udpPort": UDP_PORT[0], "webPort": WEB_PORT[0],
                 "lanUrl": "http://%s:%d" % (LAN_IP[0], WEB_PORT[0]),
+                "pairCode": _pair, "pairQr": "/pair.svg",
                 "trimRange": abs(_lim[1]) if _lim else 18,
                 "xremoteSnapshot": bool(XREMOTE_SNAPSHOT[0]),
                 "tapWire": PARAM_SPECS["send_tap"].enum_wire,
@@ -213,6 +221,29 @@ class WebHandler(BaseHTTPRequestHandler):
                 return
             try:
                 body = qr_svg(target).encode("utf-8")
+            except ValueError as e:
+                self._send(400, "text/plain; charset=utf-8", str(e).encode("utf-8"))
+                return
+            self._send(200, "image/svg+xml; charset=utf-8", body)
+        elif path == "/pair.svg":
+            # 手机 App 的配对码：与 /qr.svg 的区别是**带 OSC 端口**。
+            # 网页码里的端口是 HTTP 的；用户改过 UDP 端口后 App 按 10023 猜就会连错，
+            # 所以 App 码把 host / osc / web 三个都写进去（格式见 x32sim/pair.py）。
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            host = (qs.get("h") or [LAN_IP[0]])[0].strip() or LAN_IP[0]
+            try:
+                osc = int((qs.get("o") or [UDP_PORT[0]])[0])
+                web = int((qs.get("w") or [WEB_PORT[0]])[0])
+            except (TypeError, ValueError):
+                self._send(400, "text/plain; charset=utf-8", b"bad port")
+                return
+            try:
+                code = pair_text(host, osc, web)
+            except ValueError as e:
+                self._send(400, "text/plain; charset=utf-8", str(e).encode("utf-8"))
+                return
+            try:
+                body = qr_svg(code).encode("utf-8")
             except ValueError as e:
                 self._send(400, "text/plain; charset=utf-8", str(e).encode("utf-8"))
                 return
