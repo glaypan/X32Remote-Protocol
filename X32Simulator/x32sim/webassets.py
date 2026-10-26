@@ -477,7 +477,8 @@ WEB_PAGE = r"""<!DOCTYPE html>
       <div class="qrhint">
         <div class="nm">手机连<b>同一个 WiFi</b>，扫任意一张</div>
         <div class="ds">左：相机 / 微信扫 → 直接打开网页控制台，不装 App 也能全功能操作。<br>
-          右：iOS / Android App 里点「扫码连接」→ 自动填好 IP 与端口。</div>
+          右：iOS / Android App 里点「扫码连接」→ 自动填好 IP 与端口；<br>
+          也可以让<b>系统相机 / 微信直接扫右边这张</b> → 自动打开 App 并连上。</div>
         <div class="qrurl" id="lanurl">…</div>
         <div class="qracts"><button onclick="copyLan()" id="lanCopy">📋 复制地址</button><button onclick="copyPair()" id="pairCopy" style="margin-left:8px">📋 复制配对码</button></div>
         <div class="pairsmall" id="paircode">…</div>
