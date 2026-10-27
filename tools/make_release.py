@@ -25,9 +25,9 @@ import zipfile
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 OUT = ROOT / "outputs"
 
-DEFAULT_VERSION = "1.5.0"
+DEFAULT_VERSION = "1.5.1"
 # 本版要随包发布的 Android 产物（相对 outputs/ 的文件名）
-DEFAULT_APK = "X32Remote-1.3.0.apk"
+DEFAULT_APK = "X32Remote-1.3.1.apk"
 DEFAULT_IPA = "X32Remote-unsigned.ipa"
 # 网页试用版（单文件零依赖，v1.2.0 起随包发布）
 DEFAULT_WEBDEMO = "X32Remote-WebDemo.html"
@@ -121,20 +121,23 @@ iOS    ：读 docs/iOS-真机直装指南.md。IPA 未签名，需用 Sideloadly
 网页试用：双击 artifacts/{webdemo}（或 python X32Simulator/x32_simulator.py
          --web-port 8080 后打开 http://localhost:8080 玩完整控制台）。
 
-本版重点（v1.5.0）
+本版重点（v1.5.1）
 --------
-手机遥控电脑端，两条路都补齐了：
-  1. **App 扫码配对码**：新增 `x32remote://pair?v=1&host&osc&web` 载荷与
-     `GET /pair.svg`。网页码里是 HTTP 端口（8080），App 走 OSC/UDP（10023），
-     改过端口后两者分叉且错得安静——所以分两张码，各扫各的
-  2. **设置页双二维码**：「浏览器」码给相机/微信，「App」码给 App 内扫码连接，并排展示
-  3. **iOS / Android 内置扫码**：设置页/菜单「扫码连接」，AVFoundation / ZXing 取景，
-     扫到即填 IP 与端口并连上；识别失败不动当前地址
-  4. 三端解析器同一套规则：接受配对码 / `http(s)://host:port` / `host:port`；
+手机遥控电脑端，两条路真正打通，外加一个必须升级的修复：
+  1. **系统级 Deep Link**：`x32remote://` 注册为系统 URL scheme
+     （iOS `CFBundleURLTypes` / Android intent-filter + singleTask）。
+     系统相机或微信扫电脑端右边那张 App 码，直接打开 App 并连上；
+     冷启动深链优先于自动重连。解析规则与 App 内扫码完全一致
+  2. **macOS 1.1.3 紧急修复**：v1.1.0~1.1.2 的内置 Python 链了构建机上
+     Homebrew 的 keg-only 库（/usr/local/opt/... 绝对路径），干净 Mac 上
+     dyld: Library not loaded，模拟器起不来。已从构建层根治并加硬闸
+  3. **设置页双二维码**：「浏览器」码给相机/微信，「App」码给 App 内扫码连接，并排展示
+  4. **iOS / Android 内置扫码**：AVFoundation / ZXing 取景，扫到即连；
+     识别失败不动当前地址
+  5. 三端解析器同一套规则：接受配对码 / `http(s)://host:port` / `host:port`；
      回环地址、越界端口一律拒，不猜地址
-  5. 终端横幅多打一行配对码原文，可复制转发
 另：v1.4.0 的自动增益/自动推子、目标曲线、侧链、v1.3.x 的扫码进入、
-75 项通道参数全部保留。规范升 **v1.9**（§16.9）。
+75 项通道参数全部保留。规范 **v1.9**（§16.9）。
 
 已知限制
 --------
@@ -145,11 +148,13 @@ iOS    ：读 docs/iOS-真机直装指南.md。IPA 未签名，需用 Sideloadly
 5. Android 签名密钥（x32release.jks）与 local.properties 按惯例不入包；
    如需自行重编 Android，请用自己的密钥配置签名。
 6. 网页试用版（artifacts/ 下的 WebDemo.html）是 2026-10-18 的纯前端虚拟台快照，
-   自带演示引擎、不依赖服务端，但**不含**本版的扫码配对、设置页双二维码，
-   也不含 v1.4.0 的自动增益页签与通道参数页签；
+   自带演示引擎、不依赖服务端，但**不含**本版的系统级深链、扫码配对、
+   设置页双二维码，也不含 v1.4.0 的自动增益页签与通道参数页签；
    要看完整新界面请用在线版，或本地跑 X32Simulator 后开 http://localhost:8080。
 7. 26 项参数出厂默认值仍待真机核对（/api/info.calibration 会列出，
    tools/verify_defaults.py 可一键比对），未核对前不参与回归断言。
+8. macOS / Windows 桌面版未签名：首次需右键打开（macOS 还需在
+   系统设置 → 隐私与安全性 点「仍要打开」）。
 """
 
 

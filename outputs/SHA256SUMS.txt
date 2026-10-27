@@ -1,24 +1,24 @@
-# X32 Remote v1.5.0 发布物校验和 (SHA256)
+# X32 Remote v1.5.1 发布物校验和 (SHA256)
 # 生成时间: 2026-10-27
 # 校验方式: sha256sum -c SHA256SUMS.txt
 # 服务端规范: v1.9 (tag spec-v1.9)
 # 说明:
-#   X32Remote-v1.5.0-full.zip          完整发布包（全部源码 + 移动端产物 + 文档）
-#   X32Remote-v1.5.0-assets.zip        仅移动端成品（APK + IPA + 网页试用版 + 发布说明）
-#   X32Remote-macOS-1.1.1-unsigned.zip macOS Commander 版（10.14.6+ / Intel，内置 Python 3.14.8，内核 spec-v1.9）
-#   X32Remote-1.1.1-windows-x64.zip    Windows 便携版（Win10/11 64 位，单 exe 自带运行时）
-#   X32Remote-1.3.0.apk                Android 安装包（1.3.0 / versionCode 4，v2/v3 签名，含扫码连接）
-#   X32Remote-unsigned.ipa             iOS 未签名包（1.3.0 / build 4，iOS 17+，含扫码连接）
+#   X32Remote-v1.5.1-full.zip          完整发布包（全部源码 + 移动端产物 + 文档）
+#   X32Remote-v1.5.1-assets.zip        仅移动端成品（APK + IPA + 网页试用版 + 发布说明）
+#   X32Remote-macOS-1.1.3-unsigned.zip macOS Commander 版（10.14.6+ / Intel，内置 Python 3.14.8，内核 spec-v1.9；
+#                                     Homebrew 依赖修复版：外部私有动态库引用 0）
+#   X32Remote-1.1.2-windows-x64.zip    Windows 便携版（Win10/11 64 位，单 exe 自带运行时）
+#   X32Remote-1.3.1.apk                Android 安装包（1.3.1 / versionCode 5，含系统级 deep link）
+#   X32Remote-unsigned.ipa             iOS 未签名包（1.3.1 / build 5，iOS 17+，含系统级 deep link）
 #   X32Remote-WebDemo.html             网页试用版（单文件，纯前端快照，2026-10-18）
 #
-# macOS  : 10.14.6+ / Intel(x86_64)；65 个 Mach-O 最高 minos=10.14.6（CI + 离线复验）
+# macOS  : 10.14.6+ / Intel(x86_64)；60 个 Mach-O 最高 minos=10.14.6、外部私有动态库引用 0（CI + 离线复验）
 # Windows: Win10/11 64 位；PyInstaller 单 exe，内置 Python 运行时
-# 回归   : 12/12 组（pair 29 项 + params 386 项）；pyflakes 净；check_layers 无环
-
-bfc10b224611eb9666145b662f589474fb8a7c906891d083477a3b5978d6d4b9 *X32Remote-v1.5.0-full.zip
-540e6cb741ff231d2a55747a6a2b72660d7b24bbd25dc0f07fd4a6683f6f69af *X32Remote-v1.5.0-assets.zip
-96d3deebfb901420d1a0ec779bb2ca9bc02873670d68c0e006259d611a23a3f0 *X32Remote-macOS-1.1.1-unsigned.zip
-d22f0ca35f8741eca44bf82bc390ed52d31a79103c36e16193a06138d55258d1 *X32Remote-1.1.1-windows-x64.zip
-c0b4711572ca2e0d96565ae6e9bff84598baa7b57ba81b79a18923dc09d1f220 *X32Remote-1.3.0.apk
-231e16aa8217a3bc38ec293cc6596d4e714454ff61cd17f879d0241567a25285 *X32Remote-unsigned.ipa
+# 回归   : 12/12 组（pair 29 项 + params 386 项）；Android PairCodeTest 10 项；iOS/Android 深链已进包
+e4efb1c8d1a8b1e4cdc604a7257f93cd72ce4350a58e758686cecdb0f111549d *X32Remote-v1.5.1-full.zip
+ece4405df6adcfd4d42da8ddcb8423e6b104aa619b14e8a54183cef53d17636f *X32Remote-v1.5.1-assets.zip
+e7e6a3fabee90d77f5da89d0428c2c07d5b27554d283ca7e4e996b58b71dfb9c *X32Remote-macOS-1.1.3-unsigned.zip
+46a9b00f34ef4f4135f5c1ebf3157f9efc75283d999100176c29422ef2cfad45 *X32Remote-1.1.2-windows-x64.zip
+b8d19702f46766c493e7fbd89c40ec68290aa84a29e74f2a5bc57083cbb3691e *X32Remote-1.3.1.apk
+ee310f8811e441ef86476115267b0b7503f3d29c8bc1441226b62bd6e245305d *X32Remote-unsigned.ipa
 21095074d2764dce6cff290ff1ff04eb3efe1b46c984fcdd69b46e101e97771e *X32Remote-WebDemo.html

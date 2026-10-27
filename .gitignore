@@ -33,6 +33,8 @@ outputs/*.zip
 # 二进制产物走 GitHub Release 附件，不入库（避免仓库体积膨胀）
 outputs/*.apk
 outputs/*.ipa
+# 旧版桌面版包归档（已被新版 Release 附件取代，仅本地留存）
+outputs/archive/
 
 # ---- 目视验证截图（本地截图存档，非交付物）----
 outputs/verify/
