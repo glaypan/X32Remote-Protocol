@@ -46,6 +46,11 @@ outputs/*页-*.png
 # ---- iOS 工程是独立 git 仓库（github.com/glaypan/X32Remote），此处不重复纳入 ----
 /X32Remote-ios/
 
+# ---- Android 工程是独立 git 仓库（ASCII 路径，在工作区之外），此处不重复纳入 ----
+# （tools/export_fx_calibration.py 早年把 Android assets 误写到工作区内，
+#  误建过只有 assets 的幽灵目录；工具已修，这里再兜一层）
+/X32RemoteAndroid/
+
 # ---- 会话/工具状态 ----
 .workbuddy/
 *.genie

@@ -510,6 +510,46 @@ check("FX mix 仍是 float 回包 (旧行为未回归)",
       osc_get("/fx/1/mix") is not None
       and abs(osc_get("/fx/1/mix") - 0.55) < 1e-4, str(osc_get("/fx/1/mix")))
 
+print("== B3b. FX 返回地址 fxrtn (真台拼写) + FX 机架槽名 ==")
+# 真台 FX 返回推子/静音的组名是 **fxrtn** (Maillot 协议原文:
+# /fxrtn/[01...08]/mix/fader); fxret 是本模拟器早年的拼写变体。
+# 两个拼写都必须收且落在同一份状态上, 回包/推送一律 fxrtn。
+_fdr0, _on0 = osc_get("/fxret/01/mix/fader"), osc_get("/fxret/01/mix/on")
+check("legacy 拼写 /fxret/01/mix/fader 仍可读 (旧客户端兼容)",
+      _fdr0 is not None, str(_fdr0))
+_r1 = osc_get("/fxrtn/01/mix/fader")
+check("真台拼写 /fxrtn/01/mix/fader 可读且与 fxret 同值",
+      _r1 is not None and _fdr0 is not None and abs(_r1 - _fdr0) < 1e-6,
+      "fxret=%r fxrtn=%r" % (_fdr0, _r1))
+_replies = rpc("/fxrtn/01/mix/fader")
+check("fxrtn 查询的回包地址就是 fxrtn (对外与真台逐字一致, 不吐内部拼写)",
+      len(_replies) == 1 and _replies[0].address == "/fxrtn/01/mix/fader",
+      str(_replies[0].address if _replies else None))
+rpc("/fxrtn/01/mix/fader", 0.5, reply=False)
+check("写 /fxrtn/01/mix/fader → legacy 拼写读到同一个值 (同一命名空间)",
+      abs(osc_get("/fxret/01/mix/fader") - 0.5) < 1e-6,
+      str(osc_get("/fxret/01/mix/fader")))
+rpc("/fxrtn/01/mix/on", 0, reply=False)
+check("写 /fxrtn/01/mix/on=0 → fxret 拼写静音态一致",
+      osc_get("/fxret/01/mix/on") == 0, str(osc_get("/fxret/01/mix/on")))
+rpc("/fxret/01/mix/fader", _fdr0, reply=False)
+rpc("/fxret/01/mix/on", int(_on0 or 1), reply=False)
+
+# FX 机架槽名 /fx/<槽>/config/name: 早年被 oscsrv 名称处理器拦死
+# (NAME_COUNTS 没有 "fx"), fx_name kind 齐全却从来是哑的。
+_nm = osc_get("/fx/1/config/name")
+check("FX 槽名 /fx/1/config/name 可读 (默认「主厅堂」)", _nm == "主厅堂", str(_nm))
+rpc("/fx/1/config/name", "测试混响", reply=False)
+check("FX 槽名可写并回读", osc_get("/fx/1/config/name") == "测试混响",
+      str(osc_get("/fx/1/config/name")))
+check("FX 槽名与 /api/state 一致 (fx.slots[].name)",
+      fx_slot(1)["name"] == "测试混响", str(fx_slot(1)["name"]))
+_nr = osc_get("/fxrtn/01/config/name")
+check("/fxrtn/01/config/name 与 /fxret/01/config/name 同一命名空间",
+      _nr is not None and _nr == osc_get("/fxret/01/config/name"),
+      "fxrtn=%r" % (_nr,))
+rpc("/fx/1/config/name", "主厅堂", reply=False)   # 还原
+
 print("== B4. 快照一致性 (state 与 OSC 冷读逐参数对齐) ==")
 _ok_all, _bad_list = True, []
 for _sl in (1, 2):

@@ -2092,12 +2092,17 @@ class ParamSpec:
 _FADER_OSC = {"ch": "/ch/%02d/mix/fader", "bus": "/bus/%02d/mix/fader",
               "dca": "/dca/%02d/fader",                     # DCA 没有 /mix/ 一级
               "auxin": "/auxin/%02d/mix/fader", "usb": "/usb/%02d/mix/fader",
-              "fxret": "/fxret/%02d/mix/fader", "mtx": "/mtx/%02d/mix/fader",
+              # ⚠️ FX 返回组真台拼写是 **fxrtn** (Maillot 协议原文:
+              #    "/fxrtn/[01...08]/mix/fader", FX Return (/fxrtn) data 章)。
+              #    fxret 是本模拟器早年的拼写变体: match_address 两个拼写都收
+              #    (旧客户端兼容), 但对外回包/推送一律 fxrtn, 与真台逐字一致。
+              #    内部组名/kind 保持 fxret (卡片配置存的是 kind, 改名炸存档)。
+              "fxret": "/fxrtn/%02d/mix/fader", "mtx": "/mtx/%02d/mix/fader",
               "main": "/main/st/mix/fader"}                 # main 无 %02d！
 _ON_OSC = {"ch": "/ch/%02d/mix/on", "bus": "/bus/%02d/mix/on",
            "dca": "/dca/%02d/on",
            "auxin": "/auxin/%02d/mix/on", "usb": "/usb/%02d/mix/on",
-           "fxret": "/fxret/%02d/mix/on", "mtx": "/mtx/%02d/mix/on",
+           "fxret": "/fxrtn/%02d/mix/on", "mtx": "/mtx/%02d/mix/on",
            "main": "/main/st/mix/on"}
 # 顺序即 consts.FADER_ADDR/ON_ADDR 的推导顺序（与历史上的字面字典一致）
 _LEGACY_GROUPS = ("ch", "bus", "dca", "auxin", "usb", "fxret", "mtx", "main")
@@ -3299,11 +3304,16 @@ def match_address(pattern: str):
                 for i in sorted(STATE.dca):
                     if seg_match(segs[1], "%02d" % i):
                         results.append((kind, i))
-        elif len(segs) == 4 and segs[2] == "mix" and segs[0] in ("auxin", "usb", "fxret", "mtx"):
-            kind = {"fader": segs[0] + "_fader", "on": segs[0] + "_on"}.get(segs[3])
+        elif len(segs) == 4 and segs[2] == "mix" \
+                and segs[0] in ("auxin", "usb", "fxret", "fxrtn", "mtx"):
+            # ⚠️ fxrtn 是真台拼写 (Maillot: /fxrtn/[01..08]/mix/fader);
+            #    fxret 是早年的拼写变体 —— 两个都收, 归一到同一份 STATE.fxret。
+            #    内部 kind 仍是 fxret_fader/fxret_on (卡片配置存 kind, 不能改)。
+            grp = "fxret" if segs[0] == "fxrtn" else segs[0]
+            kind = {"fader": grp + "_fader", "on": grp + "_on"}.get(segs[3])
             if kind:
                 group = {"auxin": STATE.auxin, "usb": STATE.usb,
-                         "fxret": STATE.fxret, "mtx": STATE.mtx}[segs[0]]
+                         "fxret": STATE.fxret, "mtx": STATE.mtx}[grp]
                 val = segs[1].rstrip("LR")            # 真台 FX 返回常用 01L/01R 写法
                 for i in sorted(group):
                     if seg_match(val, "%02d" % i):
@@ -7240,8 +7250,14 @@ def handle(msg: OscMsg, addr, sock):
 
     # 通道/输出名称读写: /ch/01/config/name (字符串参数, 真台同款地址)
     segs = a.strip("/").split("/")
-    if len(segs) == 4 and segs[2] == "config" and segs[3] == "name":
-        g = segs[0]
+    # ⚠️ /fx/<槽>/config/name (FX 机架槽名) 故意排除在外: NAME_COUNTS 没有
+    #    "fx", 早年它在这里被静默 return, 导致 state 里的 fx_name kind 虽然
+    #    齐全却永远收不到查询 (iOS 从 v1.3 起就在问这个地址, 一直是哑的)。
+    #    放它走下面 match_address 的 fx_name 分支, 回包地址由 profiles 给。
+    # ⚠️ fxrtn 是真台拼写 (Maillot: /fxrtn/[01..08]/config/name), 与 fxret
+    #    同一个命名空间, 这里归一并收。
+    if len(segs) == 4 and segs[2] == "config" and segs[3] == "name" and segs[0] != "fx":
+        g = "fxret" if segs[0] == "fxrtn" else segs[0]
         if g == "main" and segs[1] == "st":
             idx = 0
         else:

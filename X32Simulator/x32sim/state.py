@@ -166,11 +166,16 @@ def match_address(pattern: str):
                 for i in sorted(STATE.dca):
                     if seg_match(segs[1], "%02d" % i):
                         results.append((kind, i))
-        elif len(segs) == 4 and segs[2] == "mix" and segs[0] in ("auxin", "usb", "fxret", "mtx"):
-            kind = {"fader": segs[0] + "_fader", "on": segs[0] + "_on"}.get(segs[3])
+        elif len(segs) == 4 and segs[2] == "mix" \
+                and segs[0] in ("auxin", "usb", "fxret", "fxrtn", "mtx"):
+            # ⚠️ fxrtn 是真台拼写 (Maillot: /fxrtn/[01..08]/mix/fader);
+            #    fxret 是早年的拼写变体 —— 两个都收, 归一到同一份 STATE.fxret。
+            #    内部 kind 仍是 fxret_fader/fxret_on (卡片配置存 kind, 不能改)。
+            grp = "fxret" if segs[0] == "fxrtn" else segs[0]
+            kind = {"fader": grp + "_fader", "on": grp + "_on"}.get(segs[3])
             if kind:
                 group = {"auxin": STATE.auxin, "usb": STATE.usb,
-                         "fxret": STATE.fxret, "mtx": STATE.mtx}[segs[0]]
+                         "fxret": STATE.fxret, "mtx": STATE.mtx}[grp]
                 val = segs[1].rstrip("LR")            # 真台 FX 返回常用 01L/01R 写法
                 for i in sorted(group):
                     if seg_match(val, "%02d" % i):

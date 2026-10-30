@@ -91,8 +91,14 @@ def handle(msg: OscMsg, addr, sock):
 
     # 通道/输出名称读写: /ch/01/config/name (字符串参数, 真台同款地址)
     segs = a.strip("/").split("/")
-    if len(segs) == 4 and segs[2] == "config" and segs[3] == "name":
-        g = segs[0]
+    # ⚠️ /fx/<槽>/config/name (FX 机架槽名) 故意排除在外: NAME_COUNTS 没有
+    #    "fx", 早年它在这里被静默 return, 导致 state 里的 fx_name kind 虽然
+    #    齐全却永远收不到查询 (iOS 从 v1.3 起就在问这个地址, 一直是哑的)。
+    #    放它走下面 match_address 的 fx_name 分支, 回包地址由 profiles 给。
+    # ⚠️ fxrtn 是真台拼写 (Maillot: /fxrtn/[01..08]/config/name), 与 fxret
+    #    同一个命名空间, 这里归一并收。
+    if len(segs) == 4 and segs[2] == "config" and segs[3] == "name" and segs[0] != "fx":
+        g = "fxret" if segs[0] == "fxrtn" else segs[0]
         if g == "main" and segs[1] == "st":
             idx = 0
         else:

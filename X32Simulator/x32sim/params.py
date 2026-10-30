@@ -113,12 +113,17 @@ class ParamSpec:
 _FADER_OSC = {"ch": "/ch/%02d/mix/fader", "bus": "/bus/%02d/mix/fader",
               "dca": "/dca/%02d/fader",                     # DCA 没有 /mix/ 一级
               "auxin": "/auxin/%02d/mix/fader", "usb": "/usb/%02d/mix/fader",
-              "fxret": "/fxret/%02d/mix/fader", "mtx": "/mtx/%02d/mix/fader",
+              # ⚠️ FX 返回组真台拼写是 **fxrtn** (Maillot 协议原文:
+              #    "/fxrtn/[01...08]/mix/fader", FX Return (/fxrtn) data 章)。
+              #    fxret 是本模拟器早年的拼写变体: match_address 两个拼写都收
+              #    (旧客户端兼容), 但对外回包/推送一律 fxrtn, 与真台逐字一致。
+              #    内部组名/kind 保持 fxret (卡片配置存的是 kind, 改名炸存档)。
+              "fxret": "/fxrtn/%02d/mix/fader", "mtx": "/mtx/%02d/mix/fader",
               "main": "/main/st/mix/fader"}                 # main 无 %02d！
 _ON_OSC = {"ch": "/ch/%02d/mix/on", "bus": "/bus/%02d/mix/on",
            "dca": "/dca/%02d/on",
            "auxin": "/auxin/%02d/mix/on", "usb": "/usb/%02d/mix/on",
-           "fxret": "/fxret/%02d/mix/on", "mtx": "/mtx/%02d/mix/on",
+           "fxret": "/fxrtn/%02d/mix/on", "mtx": "/mtx/%02d/mix/on",
            "main": "/main/st/mix/on"}
 # 顺序即 consts.FADER_ADDR/ON_ADDR 的推导顺序（与历史上的字面字典一致）
 _LEGACY_GROUPS = ("ch", "bus", "dca", "auxin", "usb", "fxret", "mtx", "main")
