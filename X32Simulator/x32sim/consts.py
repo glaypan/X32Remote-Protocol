@@ -6,39 +6,40 @@
 # ------------------------------------------------------------
 
 from .params import CH_PARAM_SPECS, PARAM_SPECS, SEND_PARAM_SPECS
+# ⚠️ make_single.py 只认单行相对导入 (多行会被判"不支持"直接拒生成)
+from .fxlib import FX_CAT_LABEL, FX_ENUM_14, FX_ENUM_58, FX_SLOTS_HEAVY, FX_TYPE_ALIAS, M32_FX_ALGOS, X32_FX_ALGOS, algo_names, param_spec, slot_allows  # noqa: E501
 
 # ---------------------------------------------------------------- 混响 / FX 机架
-# X32 有 8 个 FX 槽. 混响类算法的参数**索引随算法变化**(官方文档里 Hall/Plate/Room/
-# Chamber/Vintage 各有自己的参数页), 因此这里把"时间/预延迟/阻尼"抽象出来, 索引集中
-# 在这一张表里 —— 真机联调时只需改这张表, 不用动逻辑。
-#   time     混响时间 (RT) 的参数索引, 值单位 = 秒
-#   predelay 预延迟的参数索引,       值单位 = 毫秒
-#   damp     阻尼/高频衰减的参数索引, 值单位 = 0..1
-#   tmin/tmax 该算法混响时间的合法范围 (秒), Tap 换算结果按此钳制
-FX_COUNT = 8
-# ⚠️ 效果库**属于控台驱动**，不是全局表（见「控台驱动层」一节）。
-#    同一个算法名在不同控台上参数索引可能不同，所以任何"按算法查参数索引"的
-#    地方都必须走 fx_algos()（= 当前控台的库），不能直接读某一张表 —— 否则
-#    换控台后就会出现"参数串味"（把 A 台的时间参数写到了 B 台的别的位置）。
+# X32 有 8 个 FX 槽. 效果库（算法 → 参数表）已全量标定，见 **fxlib.py**：
+#   * 61 种算法（FX 1–4 全量；FX 5–8 仅 34 种轻量算法，DSP 算力限制）；
+#   * 每种算法的 par 号顺序、参数名、类型（linf/logf/enum）、量程，全部来自
+#     Patrick-Gilles Maillot《UNOFFICIAL X32/M32 OSC REMOTE PROTOCOL》
+#     Effects Parameters 章 —— 与真台 OSC 地址逐条对齐；
+#   * 参数地址 = `/fx/<槽>/par/<两位补零参数号>`，槽号不补零。
 #
-#    X32 与 M32 使用**同一套效果引擎**（M32 是 Midas 贴牌的同代产品，固件效果器
-#    为同一 Klark Teknik 引擎），因此两张表当前内容一致；但**分别持有**，将来
-#    某一版固件效果库出现出入时，只需改对应的那一张，公共代码与卡片动作都不动。
-X32_FX_ALGOS = {
-    "HALL":    {"label": "大厅混响", "time": 1, "predelay": 2, "damp": 4, "tmin": 0.4, "tmax": 10.0},
-    "PLATE":   {"label": "板式混响", "time": 1, "predelay": 2, "damp": 4, "tmin": 0.3, "tmax": 8.0},
-    "ROOM":    {"label": "房间混响", "time": 1, "predelay": 2, "damp": 4, "tmin": 0.2, "tmax": 5.0},
-    "CHAMBER": {"label": "密室混响", "time": 1, "predelay": 2, "damp": 4, "tmin": 0.3, "tmax": 6.0},
-    "VINTAGE": {"label": "复古混响", "time": 1, "predelay": 2, "damp": 4, "tmin": 0.3, "tmax": 6.0},
-}
-M32_FX_ALGOS = {k: dict(v) for k, v in X32_FX_ALGOS.items()}   # 独立副本，便于日后分化
-# 出厂默认混响参数 (秒 / 毫秒 / 0..1), 索引与上面的表对应
+# ⚠️ 与 v1.5.x 旧标定的差异（旧表缺真机验证，已证实不准确）：
+#   * 混响 par01 = **Pre Delay**，par02 才是 **Decay**（旧表 time/predelay 弄反了）；
+#   * Damping 在真台是 **1k–20k Hz**（旧表当成 0–1 归一化值）。
+#   type 名迁移：PLATE→PLAT / CHAMBER→CHAM / VINTAGE→VREV（persist 层别名表）。
+#
+# ⚠️ 效果库**属于控台驱动**，不是全局表（见「控台驱动层」一节）。
+#    X32 与 M32 使用**同一套效果引擎**（M32 是 Midas 贴牌的同代产品），因此
+#    两张表当前内容一致；但**分别持有**，将某一版固件效果库出现出入时，只需改
+#    对应的那一张，公共代码与卡片动作都不动。
+FX_COUNT = 8
+# 出厂默认混响参数。索引 = par 号（按 fxlib 正确映射：predelay=01, decay=02, damp=04）。
+# 数值为工程经验值，**未经真机核对** —— 出厂值核对走 /api/info.calibration 机制。
 REVERB_DEFAULTS = {
-    "HALL":    {1: 2.40, 2: 25.0, 4: 0.45},
-    "PLATE":   {1: 1.80, 2: 15.0, 4: 0.30},
-    "ROOM":    {1: 1.10, 2: 12.0, 4: 0.55},
-    "CHAMBER": {1: 1.60, 2: 20.0, 4: 0.40},
-    "VINTAGE": {1: 1.50, 2: 18.0, 4: 0.35},
+    "HALL":  {1: 25.0, 2: 2.40, 4: 6000.0},
+    "PLAT":  {1: 15.0, 2: 1.80, 4: 6000.0},
+    "ROOM":  {1: 12.0, 2: 1.10, 4: 6000.0},
+    "CHAM":  {1: 20.0, 2: 1.60, 4: 6000.0},
+    "VREV":  {1: 18.0, 2: 1.50},
+    "AMBI":  {1: 20.0, 2: 2.00, 4: 6000.0},
+    "RPLT":  {1: 20.0, 2: 2.60, 4: 6000.0},
+    "VRM":   {1: 5.0, 2: 2.00},
+    "GATE":  {1: 20.0, 2: 400.0},
+    "RVRS":  {1: 20.0, 2: 400.0},
 }
 
 

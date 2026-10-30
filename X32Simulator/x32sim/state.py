@@ -46,7 +46,7 @@ class MixerState:
         # 参数索引随算法变化, 映射表见 X32_FX_ALGOS / M32_FX_ALGOS (默认值需真机标定)
         self.fx = {i: {"type": "", "name": "", "on": 1, "mix": 0.25, "par": {}}
                    for i in range(1, FX_COUNT + 1)}
-        for i, algo in enumerate(("HALL", "PLATE", "ROOM", "CHAMBER")):
+        for i, algo in enumerate(("HALL", "PLAT", "ROOM", "CHAM")):
             if i + 1 <= FX_COUNT:
                 self.fx[i + 1]["type"] = algo
                 self.fx[i + 1]["par"] = dict(REVERB_DEFAULTS[algo])
@@ -305,7 +305,11 @@ def set_value(kind, idx, value, source="manual"):
     p = fx_par_num(kind)
     if p is not None and source in ("manual", "sync"):
         algo = fx_algo(idx)
-        if algo and p == algo["time"]:
+        # ⚠️ "time" in algo: 61 种算法里只有 10 种混响有 time 别名。
+        #    旧库只有 5 种混响, 这个判断看着多余; 全量标定后往 GEQ/P1A 之类
+        #    写参数会在这里 KeyError —— 异常被上层吞掉, 表现成"接口返 ok
+        #    但台子没反应", 只能靠回归组抓。
+        if algo and "time" in algo and p == algo["time"]:
             _fx_time_fanout(idx, get_value(kind, idx), source)
 
 

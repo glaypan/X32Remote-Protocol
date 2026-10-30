@@ -4,7 +4,8 @@
 import threading
 import time
 
-from .consts import FX_COUNT, NOTE_BEATS, TAP_BPM_MAX, TAP_BPM_MIN, TAP_INTERVAL_MIN, TAP_MAX_INTERVALS, TAP_RESET_GAP
+# ⚠️ make_single.py 只认单行相对导入 (多行括注会被判"不支持"直接拒生成)
+from .consts import FX_CAT_LABEL, FX_COUNT, FX_SLOTS_HEAVY, NOTE_BEATS, REVERB_DEFAULTS, TAP_BPM_MAX, TAP_BPM_MIN, TAP_INTERVAL_MIN, TAP_MAX_INTERVALS, TAP_RESET_GAP, slot_allows  # noqa: E501
 from .kinds import fx_par_kind
 from .logbus import log
 from .profiles import profile
@@ -25,14 +26,21 @@ def fx_algos():
 
 
 def fx_lib_meta():
-    """给 UI 的效果库元信息（不含参数细节）。"""
+    """给 UI 的效果库元信息（含分类与槽位约束，供算法下拉分组渲染）。"""
     p = profile()
     lib = p.fx_algos
+    cats = {}
+    for k, v in lib.items():
+        cats.setdefault(v.get("cat", "misc"), []).append(k)
     return {"id": p.id, "label": p.label, "vendor": p.vendor,
             "ready": p.ready, "verified": p.verified,
             "slots": int(p.counts.get("fx", 0)), "libCount": len(lib),
             "locked": (not p.ready) or ("fx" not in p.caps),
-            "algos": {k: {"label": v["label"], "tmin": v["tmin"], "tmax": v["tmax"]}
+            "catLabel": FX_CAT_LABEL,
+            "cats": cats,
+            "heavySlots": list(FX_SLOTS_HEAVY),
+            "algos": {k: {"label": v["label"], "cat": v.get("cat", "misc"),
+                          "heavy": bool(v.get("heavy")), "n": v.get("n", 0)}
                       for k, v in lib.items()}}
 
 
@@ -42,18 +50,53 @@ def fx_algo(slot):
     return fx_algos().get(t)
 
 
-def fx_par_clamp(slot, pnum, value):
-    """按参数语义钳制: 时间夹到算法范围, 预延迟 0-200ms, 阻尼 0..1, 其余 0..1。"""
-    v = _finite(value, 0.0)
+def fx_par_spec(slot, pnum):
+    """(slot, par 号) → 参数规格 dict；未装载算法或号越界 → None。"""
     algo = fx_algo(slot)
-    if algo:
-        if pnum == algo["time"]:
-            return min(max(v, algo["tmin"]), algo["tmax"])
-        if pnum == algo["predelay"]:
-            return min(max(v, 0.0), 200.0)
-        if pnum == algo["damp"]:
-            return min(max(v, 0.0), 1.0)
-    return min(max(v, 0.0), 1.0)
+    if not algo:
+        return None
+    try:
+        pnum = int(pnum)
+    except (TypeError, ValueError):
+        return None
+    for p in algo["params"]:
+        if p["p"] == pnum:
+            return p
+    return None
+
+
+def fx_field_par(slot, field):
+    """field 名 → par 号。支持三类：
+      1. 算法参数 field（如 'decay'）—— 按当前槽算法的参数表查；
+      2. 'parNN' 直接寻址（如 'par07'）；
+      3. 语义别名 time/predelay/damp —— 按算法里的别名映射。
+    槽级字段 type/on/mix/name 不适用（返回 None，由调用方处理）。
+    """
+    field = str(field)
+    algo = fx_algo(slot)
+    if not algo:
+        return None
+    if field.startswith("par") and field[3:].isdigit():
+        n = int(field[3:])
+        return n if any(p["p"] == n for p in algo["params"]) else None
+    for p in algo["params"]:
+        if p["field"] == field:
+            return p["p"]
+    alias = {"time": "time", "predelay": "predelay", "damp": "damp"}.get(field)
+    if alias and alias in algo:
+        return algo[alias]
+    return None
+
+
+def fx_par_clamp(slot, pnum, value):
+    """按**该算法该参数**的量程钳制（表驱动，取代旧的 time/predelay/damp 特判）。"""
+    v = _finite(value, 0.0)
+    spec = fx_par_spec(slot, pnum)
+    if spec is None:
+        return min(max(v, 0.0), 1.0)
+    if spec["kind"] == "i":
+        return int(round(min(max(v, spec["lo"]), spec["hi"])))
+    return min(max(v, spec["lo"]), spec["hi"])
 
 
 # ---------------------------------------------------------------- 混响同步 / Tap 定拍
@@ -118,14 +161,31 @@ def tap_register(now=None):
     return TAP_STATE["bpm"], TAP_STATE["count"], True
 
 
+def _reverb_slots():
+    """装了**混响类**算法（有 decay 参数）的槽 —— Tap/同步组只对这些槽有意义。"""
+    out = []
+    for s in range(1, FX_COUNT + 1):
+        a = fx_algo(s)
+        if a and a.get("cat") == "reverb" and "time" in a:
+            out.append(s)
+    return out
+
+
 def fx_sync_targets():
     """联动组里的混响槽。组为空时退化为「所有装了混响算法的槽」, 免得 Tap 变成空动作。"""
     with FX_SYNC_LOCK:
         g = [int(s) for s in FX_SYNC.get("group", [])
              if isinstance(s, (int, float)) and 1 <= int(s) <= FX_COUNT]
     if g:
-        return sorted(set(g))
-    return [s for s in range(1, FX_COUNT + 1) if fx_algo(s)]
+        return sorted(set(g) & set(_reverb_slots()))
+    return _reverb_slots()
+
+
+def _time_seconds_to_param(algo, seconds):
+    """Tap 换算出的秒数 → 该算法 decay 参数的原生值（注意 GATE/RVRS 的 decay 是毫秒）。"""
+    if algo.get("tunit") == "ms":
+        return float(seconds) * 1000.0
+    return float(seconds)
 
 
 def _fx_time_fanout(src_slot, seconds, source):
@@ -138,32 +198,41 @@ def _fx_time_fanout(src_slot, seconds, source):
     if mode == "console" and source == "manual":
         return                      # 台面主导: 软件改动不外扩
     algo = fx_algo(src_slot)
-    if not algo:
+    if not algo or "time" not in algo:
         return
-    kind = fx_par_kind(algo["time"])
+    target_val = _time_seconds_to_param(algo, seconds)
     spread = []
     for s in fx_sync_targets():
-        if s == src_slot or not fx_algo(s):
+        if s == src_slot:
             continue
-        cur = get_value(kind, s)
-        if cur is not None and abs(float(cur) - float(seconds)) < 1e-4:
+        a = fx_algo(s)
+        if not a or "time" not in a:
+            continue
+        cur = get_value(fx_par_kind(a["time"]), s)
+        if cur is not None and abs(float(cur) - target_val) < 1e-4:
             continue                # 已经一样了, 不写也不转发 (省一次 OSC)
-        set_value(kind, s, float(seconds), source="action")
+        set_value(fx_par_kind(a["time"]), s, target_val, source="action")
         spread.append(s)
     if spread:
-        log("REVERB 同步[%s] FX%d 时间 %.2fs → 组内 %s" % (
+        log("REVERB 同步[%s] FX%d %.2fs → 组内 %s" % (
             FX_MODE_LABEL.get(mode, mode), src_slot, float(seconds),
             "/".join("FX%d" % s for s in spread)))
 
 
 def fx_set_param(slot, field, value, source="manual"):
-    """混响槽的统一写入口。field ∈ type/on/mix/name/time/predelay/damp。
+    """效果槽的统一写入口。
+
+    field ∈ 槽级字段（type/on/mix/name）∪ 当前算法的任意参数 field
+    （如 decay/predelay/damping/speed/…，见 fxlib 标定表）∪ 'parNN' 直接寻址。
+    语义别名 time/predelay/damp 继续可用（按算法别名映射到正确 par 号）。
     返回 (写入后的值, 错误串)。
 
-    ⚠️ 两道控台门禁（与 §4 控台驱动层同一条原则：不支持的写入要**拒绝并记日志**，
+    ⚠️ 三道控台门禁（与 §4 控台驱动层同一条原则：不支持的写入要**拒绝并记日志**，
     而不是静默地写到一个"看起来像"的地方）：
       · 控台未标定 → 整个效果槽不可写
-      · 控台没有 fx_par 能力 → 时间/预延迟/阻尼不可写（槽级 type/on/mix 仍可）
+      · 控台没有 fx_par 能力 → 算法参数不可写（槽级 type/on/mix 仍可）
+      · 算法参数号/field 不在该算法的标定表里 → 拒写（不猜地址）
+      · heavy 算法（混响/延迟/组合/变调）只能进 FX 1–4（真台 DSP 限制）
     """
     try:
         slot = int(slot)
@@ -182,6 +251,9 @@ def fx_set_param(slot, field, value, source="manual"):
         t = str(value).strip().upper()
         if t and t not in fx_algos():
             return None, "算法 %s 不在「%s」的效果库中" % (t, prof.label)
+        if t and not slot_allows(slot, t):
+            return None, ("算法 %s 只能装入 FX %s（真台 DSP 算力限制），"
+                          "FX%d 装不了" % (t, "/".join(map(str, FX_SLOTS_HEAVY)), slot))
         set_value("fx_type", slot, t, source)
         return get_value("fx_type", slot), None
     if field == "name":
@@ -196,12 +268,17 @@ def fx_set_param(slot, field, value, source="manual"):
     if "fx_par" not in prof.caps:
         log("FX 拒绝写入 %s: 控台「%s」未标定效果参数地址" % (field, prof.label))
         return None, "控台「%s」未标定效果参数地址，无法写入 %s" % (prof.label, field)
-    algo = fx_algo(slot)
-    if not algo or field not in ("time", "predelay", "damp"):
-        return None, "slot has no reverb" if not algo else "unknown field"
-    p = algo[field]
-    v = fx_par_clamp(slot, p, value)
-    set_value(fx_par_kind(p), slot, v, source)   # 若是时间参数, set_value 内部会触发铺散
+    pnum = fx_field_par(slot, field)
+    if pnum is None:
+        algo = fx_algo(slot)
+        if not algo:
+            return None, "slot has no effect"
+        return None, "算法 %s 没有参数 %s" % (algo["label"], field)
+    spec = fx_par_spec(slot, pnum)
+    v = fx_par_clamp(slot, pnum, value)
+    if spec["kind"] == "i":
+        v = int(round(v))
+    set_value(fx_par_kind(pnum), slot, v, source)   # 若是时间参数, set_value 内部会触发铺散
     return v, None
 
 
@@ -221,19 +298,34 @@ def fx_tap_apply():
     written = []
     for s in fx_sync_targets():
         algo = fx_algo(s)
-        if not algo:
+        if not algo or "time" not in algo:
             continue
-        clamped = min(max(secs, algo["tmin"]), algo["tmax"])
+        want = _time_seconds_to_param(algo, secs)
+        clamped = min(max(want, algo["tmin"]), algo["tmax"])
         # source="action": 一次性写全部目标, 不再触发铺散 (铺散是给"单点改动"用的)
         set_value(fx_par_kind(algo["time"]), s, clamped, source="action")
-        written.append({"slot": s, "time": clamped, "clamped": abs(clamped - secs) > 1e-4})
+        written.append({"slot": s, "time": clamped, "clamped": abs(clamped - want) > 1e-4})
     log("REVERB Tap %.1f BPM × %s%s = %.2fs → %d 个混响槽" % (
         bpm, note, "(附点)" if dotted else "", secs, len(written)))
     return secs, written
 
 
 def fx_state():
-    """给网页/API 的混响快照。算法库一律来自**当前控台驱动**。"""
+    """给网页/API 的效果器快照。算法库一律来自**当前控台驱动**。
+
+    每槽返回：槽级字段（type/label/name/on/mix/cat/heavy/loaded/known）+
+    该算法**全部参数**的当前值（按 fxlib 标定表的 par 号顺序，含
+    field/label/unit/kind/lo/hi/opts/value/unset），前端据此动态渲染控件，
+    不需要为每种算法写死 UI。
+
+    ⚠️ 未设置语义：换算法后 par 只播种标定过的默认值（REVERB_DEFAULTS），
+    其余参数保持"未设置"—— value=None / unset=True。**不拿 0.0 冒充**：
+    大量参数 lo>0（频率/时间），0 越界会把滑杆骗到一端，还让人以为台子
+    真是那个值。OSC 线上对未设置参数仍回 0.0（get_value 的既有行为）。
+
+    遗留键 time/predelay/damp/tmin/tmax/tunit: 旧版 UI 与三端过渡用，
+    按 alias 从 params 推导；算法没有对应别名（非混响类）时为 None。
+    """
     lib = fx_algos()
     slots = []
     with STATE.lock:
@@ -243,17 +335,40 @@ def fx_state():
             algo = lib.get(t)
             item = {"slot": s, "type": t, "label": algo["label"] if algo else "",
                     "name": fx["name"], "on": int(fx["on"]), "mix": float(fx["mix"]),
-                    "time": None, "predelay": None, "damp": None,
-                    "tmin": algo["tmin"] if algo else None,
-                    "tmax": algo["tmax"] if algo else None,
+                    "cat": algo.get("cat", "") if algo else "",
+                    "heavy": bool(algo.get("heavy")) if algo else False,
                     # loaded = 槽里有东西；known = 这个算法属于**本控台**的效果库。
                     # 两者必须分开：真台上可能装着本库没有的算法，那叫"未知"，
                     # 不叫"空槽" —— 页面要能区分，否则用户看不到真台上发生了什么。
-                    "loaded": bool(t), "known": bool(algo)}
+                    "loaded": bool(t), "known": bool(algo),
+                    "params": [], "alias": {},
+                    "time": None, "predelay": None, "damp": None,
+                    "tmin": None, "tmax": None, "tunit": None}
             if algo:
-                item["time"] = float(fx["par"].get(algo["time"], 0.0))
-                item["predelay"] = float(fx["par"].get(algo["predelay"], 0.0))
-                item["damp"] = float(fx["par"].get(algo["damp"], 0.0))
+                for p in algo["params"]:
+                    raw = fx["par"].get(p["p"])
+                    if raw is None:
+                        v, unset = None, True
+                    else:
+                        v, unset = float(raw), False
+                        if p["kind"] == "i":
+                            v = int(round(v))
+                    item["params"].append({
+                        "p": p["p"], "field": p["field"], "label": p["label"],
+                        "unit": p["unit"], "kind": p["kind"],
+                        "lo": p["lo"], "hi": p["hi"], "opts": p["opts"],
+                        "value": v, "unset": unset})
+                for a in ("time", "predelay", "damp"):
+                    if a in algo:
+                        item["alias"][a] = algo[a]
+                        # 遗留键: 未设置的参数同样给 None (旧 UI 靠它显示"空槽")
+                        raw = fx["par"].get(algo[a])
+                        if raw is not None:
+                            item[a] = float(raw)
+                if "time" in algo:
+                    item["tmin"] = algo.get("tmin")
+                    item["tmax"] = algo.get("tmax")
+                    item["tunit"] = algo.get("tunit", "s")
             slots.append(item)
     with FX_SYNC_LOCK:
         sync = dict(FX_SYNC)

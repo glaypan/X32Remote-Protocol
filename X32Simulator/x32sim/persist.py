@@ -10,8 +10,9 @@ import time
 from .bridge import BRIDGE_TARGET
 from .cards import SHOW_CARDS
 from .rider import rider_dump, rider_load
-from .consts import FX_COUNT, PRESET_DEFAULT_SCOPE
-from .fx import FX_SYNC, FX_SYNC_LOCK, fx_algos
+from .consts import FX_COUNT, FX_SLOTS_HEAVY, PRESET_DEFAULT_SCOPE
+from .fx import FX_SYNC, FX_SYNC_LOCK, fx_algos, fx_par_clamp
+from .fxlib import FX_TYPE_ALIAS, slot_allows
 from .logbus import log
 from .presets import RECALL_STOP, SNAPSHOTS, SNAP_ID, clean_preset_scope, recall_snapshot
 from .profiles import CONSOLE_PROFILES, CTRL_PROFILE_ID
@@ -153,9 +154,13 @@ def load_user_config():
             SHOW_CARDS[:] = d["cards"]
         # 预设（台面快照）: 以前只存在内存里重启即丢，现在跟配置一起落盘。
         # 配置文件可手改 → 必须逐条消毒，脏数据最多被丢弃，不能把回归变成乱写。
+        # ⚠️ skipped_bad_scope 在条件块**外面**初始化: 缺 presets 键的配置
+        #    (手写/旧版) 以前会在这里 UnboundLocalError → 被外层 except 当成
+        #    "文件损坏"备份+重置, 用户数据静默全丢。出厂示例卡自带 legacy
+        #    fades, 迁移段每次启动都会跑到这个变量, 撞上的概率并不低。
+        skipped_bad_scope = 0
         if isinstance(d.get("presets"), list):
             loaded = []
-            skipped_bad_scope = 0
             for s in d["presets"][:8]:
                 if not isinstance(s, dict) or not isinstance(s.get("data"), dict):
                     continue
@@ -252,7 +257,17 @@ def load_user_config():
                     if not (1 <= s <= FX_COUNT) or not isinstance(sv, dict):
                         continue
                     t = str(sv.get("type", "")).upper()
+                    # 旧版配置存的是旧枚举名 (PLATE/CHAMBER/VINTAGE), v1.6 起
+                    # 枚举名迁移为 PLAT/CHAM/VREV —— 按 par 号存的**数值**不用动,
+                    # 只把 type 名过一道别名表, 否则合法数据会被判"未知算法"丢掉。
+                    t = FX_TYPE_ALIAS.get(t, t)
                     if t and t not in fx_algos():
+                        continue
+                    # 手改/旧配置可能把 heavy 算法塞进 FX5-8 (API 层拦得住,
+                    # 配置文件拦不住) —— 真台 DSP 装不下的状态不该被恢复出来。
+                    if t and not slot_allows(s, t):
+                        log("配置里的 FX%d 算法 %s 只能装入 FX %s, 已跳过该槽"
+                            % (s, t, "/".join(map(str, FX_SLOTS_HEAVY))))
                         continue
                     STATE.fx[s]["type"] = t
                     STATE.fx[s]["name"] = str(sv.get("name", ""))[:12]
@@ -263,18 +278,31 @@ def load_user_config():
                     par = sv.get("par")
                     if isinstance(par, dict):
                         STATE.fx[s]["par"] = {}
+                        algo = fx_algos().get(t)
                         for pk, pv in par.items():
                             try:
-                                # ⚠️ _finite: 旧版配置可能已被 NaN 污染（Python 的
-                                #    json.load 默认接受字面量 NaN），不清洗就带着毒进 STATE
-                                STATE.fx[s]["par"][int(pk)] = _finite(pv, 0.0)
+                                pn = int(pk)
                             except (TypeError, ValueError):
-                                pass
+                                continue
+                            if algo is not None and not any(
+                                    q["p"] == pn for q in algo["params"]):
+                                continue   # 该算法没这个参数号 (旧数据/手改)
+                            # ⚠️ _finite: 旧版配置可能已被 NaN 污染（Python 的
+                            #    json.load 默认接受字面量 NaN），不清洗就带着毒进 STATE。
+                            #    再按**新标定量程**钳一回: 旧表把阻尼当 0–1 存,
+                            #    新标定是 1000–20000 Hz, 不钳就会有个越界值卡在
+                            #    状态里 (界面滑杆直接飞到一端)。
+                            v = _finite(pv, 0.0)
+                            if algo is not None:
+                                v = fx_par_clamp(s, pn, v)
+                            STATE.fx[s]["par"][pn] = v
         if isinstance(d.get("bridgeTarget"), str) and d["bridgeTarget"].strip():
             BRIDGE_TARGET[0] = d["bridgeTarget"].strip()
         log("已加载自定义配置: %d 个控制键, %d 张演出卡片%s"
             % (len(QUICK_KEYS), len(SHOW_CARDS),
                (", 记住的真台地址 %s" % BRIDGE_TARGET[0]) if BRIDGE_TARGET[0] else ""))
+        return True          # ⚠️ 别丢: 成功路径曾经直落结尾返 None, 调用方
+        #                   `if not load_user_config()` 会把"加载成功"当失败
     except FileNotFoundError:
         return True          # 没有配置文件 = 全新装机, 正常
     except Exception as e:

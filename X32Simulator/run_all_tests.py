@@ -155,6 +155,8 @@ GROUPS = [
         "presets", "test_presets.py", ["--port", str(OSC_PORT), "--web-port", "28080"], 28080))),
     ("params", ("通道参数建模 (增益/反相/延时/低切/插入/门)", lambda: group_single(
         "params", "test_params.py", ["--port", str(OSC_PORT), "--web-port", "28080"], 28080))),
+    ("fx", ("效果库标定 (61 算法/槽位/钳制/同步)", lambda: group_single(
+        "fx", "test_fx.py", ["--port", str(OSC_PORT), "--web-port", "28080"], 28080))),
     # 订阅自带实例 (要控制"谁先连、缓存冷热"), 端口固定 21041/28141, 不占 OSC_PORT
     ("subscribe", ("订阅语义 (/xremote vs /subscribe)", lambda: run("test_subscribe.py"))),
     ("bridge", ("桥接双实例", group_bridge)),

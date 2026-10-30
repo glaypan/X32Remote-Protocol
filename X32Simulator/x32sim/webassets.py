@@ -233,6 +233,10 @@ WEB_PAGE = r"""<!DOCTYPE html>
     background:linear-gradient(180deg,#3d4454,#22262f);border:1px solid #4d566b}
   .fxval{font-size:12px;width:70px;text-align:right;flex:none;color:var(--txt);
          font-variant-numeric:tabular-nums}
+  /* 枚举参数用下拉 (选项是真台 enum 索引的中文名, 比滑杆直观) */
+  .fxrow select.fxsel{flex:1;min-width:0;height:28px;border-radius:6px;
+    background:var(--card2);color:var(--txt);border:1px solid var(--line);
+    font-size:12px;padding:0 6px}
   .fx-tag{margin-left:auto;white-space:nowrap}
   #fxGroup .chip{display:inline-flex;align-items:center;gap:5px;padding:6px 10px;
                  border:1px solid var(--line);border-radius:9px;background:var(--card2);font-size:12px}
@@ -1497,7 +1501,7 @@ const ST_PARAMS={ch:['fader','on'].concat(CH_PARAM_UI.map(r=>r.f)),
   send:['send_level','send_on','send_tap']};
 const ST_PLABEL={fader:'推子 %',on:'开关 (1开启/0静音)',mix:'混合比 (0-1)',
   time:'混响时间 (秒)',predelay:'预延迟 (毫秒)',damp:'阻尼 (0-1)',
-  type:'算法 (HALL/PLATE/ROOM/…)',name:'名称 (文本)',load:'切场景'};
+  type:'算法 (效果库 61 种, 见效果器页)',name:'名称 (文本)',load:'切场景'};
 // 12 个通道参数沿用面板里的中文名与单位 (两边只有这一处定义, 不会漂)
 CH_PARAM_UI.forEach(r=>{ ST_PLABEL[r.f]=r.l+(r.u?(' ('+r.u+')'):''); });
 function numIn(id,label,def){
@@ -1991,29 +1995,63 @@ function fxNoteSecs(bpm, note, dotted){
   bpm = Math.min(Math.max(+bpm || 120, 30), 300);
   return beats * 60 / bpm;
 }
+// 参数控件不再为每种算法写死 —— 服务端按标定表下发全部参数 (field/label/
+// unit/lo/hi/kind/opts/value/unset), 这里统一渲染: 数值=滑杆, 枚举=下拉。
+// 未设置 (unset) 的参数不拿 0 冒充: 大量参数 lo>0 (频率/时间), 0 越界会把
+// 滑杆骗到一端 —— 显示"未设置", 拖一下才真正写上台面。
+function fxStep(lo, hi){
+  const span = Math.abs((+hi) - (+lo)) || 1;
+  for (const st of [100, 50, 10, 5, 1, 0.5, 0.1, 0.05, 0.01, 0.001])
+    if (span / st <= 200) return st;
+  return 1000;
+}
+function fxDec(lo, hi){
+  const st = fxStep(lo, hi);
+  return st >= 1 ? 0 : (st >= 0.1 ? 1 : 2);
+}
 function fxParsHTML(s, st){
-  if (!st || st.time === null || st.time === undefined){
-    // ⚠️ 只读服务端下发的 S.fx.console / S.fx.algos —— 本页前端没有 profile()，
-    //    早前这里调了它，直接 ReferenceError 把 updFx 打断。
+  if (!st || !st.loaded){
     const lib = (S && S.fx && S.fx.algos) || {};
     const c = (S && S.fx && S.fx.console) || {};
     if (c.locked || !Object.keys(lib).length)
       return '<div class="ds" style="margin:0">控台「' + esc(c.label || '当前控台')
            + '」的效果库还没标定，这个槽暂时不可用（写入会被拒绝并记日志）。</div>';
     const names = Object.keys(lib).map(k => esc(lib[k].label)).join(' / ');
-    return '<div class="ds" style="margin:0">这个槽没装混响算法 — 把左边的类型选成 '
-         + names + ' 就能调混响。</div>';
+    return '<div class="ds" style="margin:0">空槽 — 把上面的类型选成 ' + names + ' 中的一个。</div>';
   }
-  const row = (f, lab, unit, lo, hi, step, val, fmt) =>
-    `<div class="fxrow"><span class="fxlab">${lab}</span>
-      <input type="range" class="fxsl" data-f="${f}" min="${lo}" max="${hi}" step="${step}" value="${val}"
-        oninput="fxSlide(${s},'${f}',this)">
-      <span class="fxval" data-v="${f}">${fmt(val)}${unit}</span></div>`;
-  const n2 = v => v.toFixed(2), n0 = v => String(Math.round(v));
-  return row('time','混响时间',' s', st.tmin, st.tmax, 0.01, st.time, n2)
-       + row('predelay','预延迟',' ms', 0, 200, 1, st.predelay, n0)
-       + row('damp','阻尼','', 0, 1, 0.01, st.damp, n2)
-       + row('mix','混合比','', 0, 1, 0.01, st.mix, n2);
+  if (!st.known)
+    return '<div class="ds" style="margin:0">⚠ 真台上这个槽装的是「' + esc(st.type)
+         + '」，不在本控台「' + esc(((S.fx.console || {}).label) || '当前')
+         + '」的效果库里 — 没有标定参数，这个槽只能看不能调。</div>';
+  const clamp0 = (lo, hi) => Math.min(Math.max(0, +lo), +hi);
+  const rows = (st.params || []).map(p => {
+    const unit = p.unit ? ' ' + p.unit : '';
+    if (p.kind === 'i'){
+      const opts = (p.opts || []).map((o, i) =>
+        `<option value="${i}">${esc(o)}</option>`).join('');
+      const unset = (p.value === null || p.value === undefined);
+      const shown = unset ? '未设置'
+        : esc(String((p.opts || [])[p.value] != null ? (p.opts)[p.value] : p.value));
+      return `<div class="fxrow"><span class="fxlab">${esc(p.label)}</span>
+        <select class="fxsel" data-f="${p.field}" onchange="fxSet(${s},'${p.field}',+this.value)">
+          ${unset ? '<option value="">未设置</option>' : ''}${opts}</select>
+        <span class="fxval" data-v="${p.field}">${shown}</span></div>`;
+    }
+    const dec = fxDec(p.lo, p.hi), step = fxStep(p.lo, p.hi);
+    const unset = (p.value === null || p.value === undefined);
+    const val = unset ? clamp0(p.lo, p.hi) : +p.value;
+    return `<div class="fxrow"><span class="fxlab">${esc(p.label)}</span>
+      <input type="range" class="fxsl" data-f="${p.field}" data-unit="${esc(p.unit || '')}"
+        data-dec="${dec}" min="${p.lo}" max="${p.hi}" step="${step}" value="${val.toFixed(dec)}"
+        oninput="fxSlide(${s},'${p.field}',this)">
+      <span class="fxval" data-v="${p.field}">${unset ? '未设置' : val.toFixed(dec) + unit}</span></div>`;
+  }).join('');
+  // mix 是槽级字段 (不在算法参数表里), 固定排在最后
+  return rows + `<div class="fxrow"><span class="fxlab">混合比</span>
+      <input type="range" class="fxsl" data-f="mix" data-unit="" data-dec="2"
+        min="0" max="1" step="0.01" value="${(+st.mix).toFixed(2)}"
+        oninput="fxSlide(${s},'mix',this)">
+      <span class="fxval" data-v="mix">${(+st.mix).toFixed(2)}</span></div>`;
 }
 function fxCardHTML(s){
   const opts = fxAlgoOpts();
@@ -2065,9 +2103,12 @@ function updFx(){
     if (document.activeElement !== nm && nm.value !== st.name) nm.value = st.name;
     card.querySelector('.fx-on').classList.toggle('on', !st.on);
     const tag = card.querySelector('.fx-tag');
-    // 下拉里已经有算法名了，这里改显示该算法的时间范围（Tap 换算会被钳制到这个区间）
-    const txt = st.known ? (st.tmin + '–' + st.tmax + ' s')
-                         : (st.loaded ? '⚠ 未知算法（不在本控台效果库）' : '空槽');
+    // 下拉里已经有算法名了，这里显示该算法的时间范围（Tap 换算会被钳制到这个区间）；
+    // 非混响类算法没有时间参数，退而显示参数个数
+    const txt = !st.loaded ? '空槽'
+               : (!st.known ? '⚠ 未知算法（不在本控台效果库）'
+               : (st.time != null ? (st.tmin + '–' + st.tmax + ' ' + (st.tunit || 's'))
+                                  : (((st.params || []).length) + ' 个参数')));
     if (tag.textContent !== txt) tag.textContent = txt;
     // 算法变了就重建这一张卡的参数区 (range 的 min/max 随算法范围变)
     const pars = card.querySelector('.fxpars');
@@ -2078,13 +2119,26 @@ function updFx(){
       pars.dataset.algo = sig;
       pars.innerHTML = fxParsHTML(st.slot, st);
     }
-    const n2 = v => v.toFixed(2), n0 = v => String(Math.round(v));
-    [['time', n2, ' s'], ['predelay', n0, ' ms'], ['damp', n2, ''], ['mix', n2, '']].forEach(([f, fmt, unit]) => {
-      const sl = pars.querySelector(`.fxsl[data-f="${f}"]`); if (!sl) return;
-      const v = st[f]; if (v === null || v === undefined) return;
-      if (document.activeElement !== sl && +sl.value !== +fmt(v)) sl.value = +fmt(v);
-      const ve = pars.querySelector(`.fxval[data-v="${f}"]`);
-      if (ve) ve.textContent = fmt(v) + unit;
+    // 值刷新: 算法参数 + 槽级 mix 一把抓。enum 是下拉, 数值是滑杆;
+    // 未设置 (value=null) 只更新文字, 不动滑杆 (滑杆停在钳制后的 0 位)。
+    (st.params || []).concat([{field: 'mix', unit: '', kind: 'f', lo: 0, hi: 1,
+                               value: st.mix}]).forEach(p => {
+      if (p.kind === 'i'){
+        const sel = pars.querySelector(`.fxsel[data-f="${p.field}"]`);
+        if (sel && document.activeElement !== sel)
+          sel.value = (p.value === null || p.value === undefined) ? '' : p.value;
+        return;
+      }
+      const sl = pars.querySelector(`.fxsl[data-f="${p.field}"]`); if (!sl) return;
+      const ve = pars.querySelector(`.fxval[data-v="${p.field}"]`);
+      if (p.value === null || p.value === undefined){
+        if (ve) ve.textContent = '未设置';
+        return;
+      }
+      const dec = fxDec(p.lo, p.hi);
+      const shown = (+p.value).toFixed(dec);
+      if (document.activeElement !== sl && +sl.value !== +shown) sl.value = shown;
+      if (ve) ve.textContent = shown + (p.unit ? ' ' + p.unit : '');
     });
   });
   const msel = $('#fxMode');
@@ -2188,8 +2242,9 @@ function fxSlide(s, field, el){
   const v = +el.value;
   const card = document.getElementById('fxc-' + s);
   const ve = card && card.querySelector(`.fxval[data-v="${field}"]`);
-  if (ve) ve.textContent = (field === 'predelay' ? String(Math.round(v)) : v.toFixed(2))
-    + (field === 'time' ? ' s' : (field === 'predelay' ? ' ms' : ''));
+  // 小数位/单位在渲染时写进 dataset (不同算法量程差几个数量级, 不能写死)
+  if (ve) ve.textContent = v.toFixed(+(el.dataset.dec === undefined ? 2 : el.dataset.dec))
+    + (el.dataset.unit ? ' ' + el.dataset.unit : '');
   fxPend[s + '|' + field] = {slot:s, field:field, value:v};
   if (!fxPendT) fxPendT = setTimeout(() => {
     fxPendT = null;

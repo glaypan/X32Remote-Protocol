@@ -96,6 +96,925 @@ SHOW_CARDS = [
 
 
 # ==================================================================
+# ==== x32sim/fxlib.py
+# ==================================================================
+# -*- coding: utf-8 -*-
+"""x32sim/fxlib — X32/M32 效果库全量标定表（61 种算法）。
+
+数据来源（权威）：
+  * Patrick-Gilles Maillot《UNOFFICIAL X32/M32 OSC REMOTE PROTOCOL》
+    Effects Parameters 章（文档第 59–86 页）——逐算法列出 par 号顺序、
+    参数名、类型（linf/logf/enum）与量程；附录给出 61 个算法枚举名。
+  * 类型规则（同文档第 8 页）：linf/logf 都是**单个浮点实际值**
+    （如 2000 = 2 kHz），enum 是选项列表的整数索引。
+
+槽位约束（同文档 /fx 节）：
+  * FX 1–4：61 种算法全可用（heavy=True 的 27 种只能进这四槽）；
+  * FX 5–8：仅 34 种轻量算法（DSP 算力限制，混响/延迟类进不去）。
+  ⚠️ 该约束与枚举号分组以文档为准，未经真机核对 —— 见 calibration 机制。
+
+参数地址即 OSC 真台地址：`/fx/<槽>/par/<两位补零参数号>`，槽号不补零。
+field 名是内部/API 用的稳定标识（由文档英文名规范化而来），UI 显示用中文 label。
+
+⚠️ 与旧标定（v1.5.x 及以前）的差异 —— 旧表现在被证实**不准确**（缺真机验证）：
+  * HALL 等混响的 par01 是 **Pre Delay**，par02 才是 **Decay**（旧表把
+    time=1/predelay=2 搞反了，桥接真台时会写错参数）；
+  * Damping 在真台是 **1k–20k Hz 频率**（旧表当成 0–1 归一化值）；
+  * 旧表只有 5 种混响、每种 3 个参数；本表 61 种算法全部参数。
+  迁移：持久化按 par 号存值，不迁移数据；type 名 CHAMBER→CHAM /
+  VINTAGE→VREV / PLATE→PLAT 由 persist 层的别名表转换。
+"""
+
+# ---------------------------------------------------------------- 工具
+
+def _slug(name: str) -> str:
+    """文档英文参数名 → 稳定 field 标识。"""
+    s = "".join(c if (c.isalnum()) else "_" for c in name.lower())
+    while "__" in s:
+        s = s.replace("__", "_")
+    s = s.strip("_")
+    if s and s[0].isdigit():
+        s = "n" + s
+    return s or "par"
+
+
+# 少数需要手工定名的 field（自动 slug 有歧义或不宜作 API 名时）
+_FIELD_OVERRIDE = {
+    "4_pole": "pole4",
+    "env_modulation": "env_mod",
+    "hi_shv_gain": "hi_shelf_gain",
+    "lo_multiply": "lo_multi",
+    "hi_multiply": "hi_multi",
+    "xover_slope": "xover_slope",
+    "sbc_on": "sbc_on",
+    "eq_level": "eq_level",
+}
+
+
+def _f(field, label, unit, lo, hi):
+    """数值参数（linf/logf 都按实际值存取，UI 侧再决定滑杆刻度）。"""
+    return (field, label, unit, "f", float(lo), float(hi), None)
+
+
+def _i(field, label, opts):
+    """枚举参数：opts 顺序即真台 enum 索引。"""
+    return (field, label, "", "i", 0.0, float(len(opts) - 1), list(opts))
+
+
+def _A(label, cat, heavy, params, zh=None):
+    """一个算法条目。params 顺序 = par 号顺序（par01 起）。"""
+    out = []
+    for n, p in enumerate(params, 1):
+        field = _FIELD_OVERRIDE.get(p[0], p[0])
+        kind = p[3]
+        out.append({"p": n, "field": field, "label": p[1], "unit": p[2],
+                    "kind": kind, "lo": p[4], "hi": p[5], "opts": p[6]})
+    fields = [x["field"] for x in out]
+    assert len(set(fields)) == len(fields), "field 重名: %s" % label
+    d = {"label": zh or label, "cat": cat, "heavy": bool(heavy),
+         "params": out, "n": len(out)}
+    # 语义别名（兼容旧结构与 Tap/同步组逻辑）：time=衰减, predelay=预延迟, damp=阻尼
+    for f, alias in (("decay", "time"), ("time", "time"),
+                     ("pre_delay", "predelay"), ("reverb_delay", "predelay"),
+                     ("damping", "damp")):
+        if f in fields:
+            d[alias] = fields.index(f) + 1
+    if "time" in d:
+        tp = out[d["time"] - 1]
+        d["tmin"], d["tmax"], d["tunit"] = tp["lo"], tp["hi"], tp["unit"]
+    return d
+
+
+# 31 段图示 EQ 的 ISO 标准中心频率（仅作 UI 频段标签，不经 OSC 发送）
+GEQ_BANDS_HZ = [20, 25, 31.5, 40, 50, 63, 80, 100, 125, 160, 200, 250,
+                315, 400, 500, 630, 800, 1000, 1250, 1600, 2000, 2500,
+                3150, 4000, 5000, 6300, 8000, 10000, 12500, 16000, 20000]
+
+_FACTOR = ["1/4", "3/8", "1/2", "2/3", "1", "4/3", "3/2", "2", "3"]
+_PATTERN = ["1/4", "1/3", "3/8", "1/2", "2/3", "3/4", "1",
+            "1/4X", "1/3X", "3/8X", "1/2X", "2/3X", "3/4X", "1X"]
+_ONOFF = ["OFF", "ON"]
+_BANDSOLO = ["OFF", "Bd1", "Bd2", "Bd3", "Bd4", "Bd5"]
+_RATIO = ["1.1", "1.2", "1.3", "1.5", "1.7", "2", "2.5", "3", "3.5",
+          "4", "5", "7", "10", "LIM"]
+
+
+def _geq(prefix, count):
+    """GEQ/TEQ 的 31 段 + 主电平参数。"""
+    out = []
+    for i, hz in enumerate(GEQ_BANDS_HZ[:count], 1):
+        lab = ("%g" % hz) if hz < 1000 else ("%gk" % (hz / 1000.0))
+        out.append(_f("%s_%02d" % (prefix, i), lab + " Hz", "dB", -15, 15))
+    out.append(_f("%s_master" % prefix, "总电平", "dB", -15, 15))
+    return out
+
+
+def _dual(prefix, base):
+    """双引擎算法（A/B 两套）的参数拼接。"""
+    out = []
+    for side in ("a", "b"):
+        for p in base:
+            out.append((p[0] + "_" + side, p[1] + " " + side.upper(),
+                        p[2], p[3], p[4], p[5], p[6]))
+    return out
+
+
+# ---------------------------------------------------------------- 标定表
+# heavy=True → 只能进 FX 1–4；False → 8 槽均可。
+
+_RAW = {
+
+# ---- 混响 (10) ----
+"HALL": _A("大厅混响", "reverb", True, [
+    _f("pre_delay", "预延迟", "ms", 0, 200),
+    _f("decay", "混响时间", "s", 0.2, 5),
+    _f("size", "空间大小", "", 2, 100),
+    _f("damping", "阻尼", "Hz", 1000, 20000),
+    _f("diffuse", "扩散", "", 1, 30),
+    _f("level", "电平", "dB", -12, 12),
+    _f("lo_cut", "低切", "Hz", 10, 500),
+    _f("hi_cut", "高切", "Hz", 200, 20000),
+    _f("bass_multi", "低频倍增", "", 0.5, 2),
+    _f("spread", "立体声展开", "", 0, 50),
+    _f("shape", "包络形状", "", 0, 250),
+    _f("mod_speed", "调制速度", "", 0, 100),
+]),
+"PLAT": _A("板式混响", "reverb", True, [
+    _f("pre_delay", "预延迟", "ms", 0, 200),
+    _f("decay", "混响时间", "s", 0.2, 10),
+    _f("size", "空间大小", "", 2, 100),
+    _f("damping", "阻尼", "Hz", 1000, 20000),
+    _f("diffuse", "扩散", "", 1, 30),
+    _f("level", "电平", "dB", -12, 12),
+    _f("lo_cut", "低切", "Hz", 10, 500),
+    _f("hi_cut", "高切", "Hz", 200, 20000),
+    _f("bass_multi", "低频倍增", "", 0.5, 2),
+    _f("xover", "分频点", "Hz", 10, 500),
+    _f("mod", "调制量", "", 0, 50),
+    _f("mod_speed", "调制速度", "", 0, 100),
+]),
+"AMBI": _A("氛围混响", "reverb", True, [
+    _f("pre_delay", "预延迟", "ms", 0, 200),
+    _f("decay", "混响时间", "s", 0.2, 7.3),
+    _f("size", "空间大小", "", 2, 100),
+    _f("damping", "阻尼", "Hz", 1000, 20000),
+    _f("diffuse", "扩散", "", 1, 30),
+    _f("level", "电平", "dB", -12, 12),
+    _f("lo_cut", "低切", "Hz", 10, 500),
+    _f("hi_cut", "高切", "Hz", 200, 20000),
+    _f("modulate", "调制", "", 0, 100),
+    _f("tail_gain", "尾音增益", "", 0, 100),
+]),
+"RPLT": _A("Rich 板式混响", "reverb", True, [
+    _f("pre_delay", "预延迟", "ms", 0, 200),
+    _f("decay", "混响时间", "s", 0.3, 29),
+    _f("size", "空间大小", "", 4, 39),
+    _f("damping", "阻尼", "Hz", 1000, 20000),
+    _f("diffuse", "扩散", "", 1, 30),
+    _f("level", "电平", "dB", -12, 12),
+    _f("lo_cut", "低切", "Hz", 10, 500),
+    _f("hi_cut", "高切", "Hz", 200, 20000),
+    _f("bass_multi", "低频倍增", "", 0.25, 4),
+    _f("spread", "立体声展开", "", 0, 50),
+    _f("attack", "启动", "", 0, 100),
+    _f("spin", "旋转", "", 0, 100),
+    _f("echo_l", "回声 L", "ms", 0, 1200),
+    _f("echo_r", "回声 R", "ms", 0, 1200),
+    _f("echo_feed_l", "回声反馈 L", "", -100, 100),
+    _f("echo_feed_r", "回声反馈 R", "", -100, 100),
+]),
+"ROOM": _A("房间混响", "reverb", True, [
+    _f("pre_delay", "预延迟", "ms", 0, 200),
+    _f("decay", "混响时间", "s", 0.3, 29),
+    _f("size", "空间大小", "", 4, 72),
+    _f("damping", "阻尼", "Hz", 1000, 20000),
+    _f("diffuse", "扩散", "", 1, 30),
+    _f("level", "电平", "dB", -12, 12),
+    _f("lo_cut", "低切", "Hz", 10, 500),
+    _f("hi_cut", "高切", "Hz", 200, 20000),
+    _f("bass_multi", "低频倍增", "", 0.25, 4),
+    _f("spread", "立体声展开", "", 0, 50),
+    _f("shape", "包络形状", "", 0, 250),
+    _f("spin", "旋转", "", 0, 100),
+    _f("echo_l", "回声 L", "ms", 0, 1200),
+    _f("echo_r", "回声 R", "ms", 0, 1200),
+    _f("echo_feed_l", "回声反馈 L", "", -100, 100),
+    _f("echo_feed_r", "回声反馈 R", "", -100, 100),
+]),
+"CHAM": _A("密室混响", "reverb", True, [
+    _f("pre_delay", "预延迟", "ms", 0, 200),
+    _f("decay", "混响时间", "s", 0.3, 29),
+    _f("size", "空间大小", "", 4, 72),
+    _f("damping", "阻尼", "Hz", 1000, 20000),
+    _f("diffuse", "扩散", "", 1, 30),
+    _f("level", "电平", "dB", -12, 12),
+    _f("lo_cut", "低切", "Hz", 10, 500),
+    _f("hi_cut", "高切", "Hz", 200, 20000),
+    _f("bass_multi", "低频倍增", "", 0.25, 4),
+    _f("spread", "立体声展开", "", 0, 50),
+    _f("shape", "包络形状", "", 0, 250),
+    _f("spin", "旋转", "", 0, 100),
+    _f("reflection_l", "早期反射 L", "ms", 0, 500),
+    _f("reflection_r", "早期反射 R", "ms", 0, 500),
+    _f("reflection_gain_l", "反射增益 L", "", 0, 100),
+    _f("reflection_gain_r", "反射增益 R", "", 0, 100),
+]),
+"VREV": _A("复古混响", "reverb", True, [
+    _f("pre_delay", "预延迟", "ms", 0, 120),
+    _f("decay", "混响时间", "s", 0.3, 4.5),
+    _f("modulate", "调制", "", 0, 10),
+    _i("vintage", "复古模式", _ONOFF),
+    _i("position", "位置", ["FRONT", "REAR"]),
+    _f("level", "电平", "dB", -12, 12),
+    _f("lo_cut", "低切", "Hz", 10, 500),
+    _f("hi_cut", "高切", "Hz", 200, 20000),
+    _f("lo_multi", "低频倍增", "", 0.5, 2),
+    _f("hi_multi", "高频倍增", "", 0.25, 1),
+]),
+"VRM": _A("复古房间", "reverb", True, [
+    _f("reverb_delay", "混响延迟", "ms", 0, 20),
+    _f("decay", "混响时间", "s", 0.1, 20),
+    _f("size", "空间大小", "", 0, 10),
+    _f("density", "密度", "", 1, 30),
+    _f("er_level", "早期反射电平", "", 0, 190),
+    _f("level", "电平", "dB", -12, 12),
+    _f("lo_multi", "低频倍增", "", 0.1, 10),
+    _f("hi_multi", "高频倍增", "", 0.1, 10),
+    _f("lo_cut", "低切", "Hz", 10, 500),
+    _f("hi_cut", "高切", "Hz", 200, 20000),
+    _f("er_left", "早期反射 L", "", 0, 10),
+    _f("er_right", "早期反射 R", "", 0, 10),
+    _i("freeze", "冻结", _ONOFF),
+]),
+"GATE": _A("门混响", "reverb", True, [
+    _f("pre_delay", "预延迟", "ms", 0, 200),
+    _f("decay", "混响时间", "ms", 140, 1000),
+    _f("attack", "启动", "", 0, 30),
+    _f("density", "密度", "", 1, 30),
+    _f("spread", "立体声展开", "", 0, 100),
+    _f("level", "电平", "dB", -12, 12),
+    _f("lo_cut", "低切", "Hz", 10, 500),
+    _f("hi_cut", "高切", "Hz", 200, 20000),
+    _f("hi_shelf_gain", "高频增益", "dB", -30, 0),
+    _f("diffuse", "扩散", "", 1, 30),
+]),
+"RVRS": _A("反向混响", "reverb", True, [
+    _f("pre_delay", "预延迟", "ms", 0, 200),
+    _f("decay", "混响时间", "ms", 140, 1000),
+    _f("rise", "上升", "", 0, 50),
+    _f("diffuse", "扩散", "", 1, 30),
+    _f("spread", "立体声展开", "", 1, 100),
+    _f("level", "电平", "dB", -12, 12),
+    _f("lo_cut", "低切", "Hz", 10, 500),
+    _f("hi_cut", "高切", "Hz", 200, 20000),
+    _f("hi_shelf_gain", "高频增益", "dB", -30, 0),
+]),
+
+# ---- 延迟 (3) ----
+"DLY": _A("立体声延迟", "delay", True, [
+    _f("mix", "混合", "%", 0, 100),
+    _f("time", "延迟时间", "ms", 0, 3000),
+    _i("mode", "模式", ["ST", "X", "M"]),
+    _i("factor_l", "左声道因数", _FACTOR),
+    _i("factor_r", "右声道因数", _FACTOR),
+    _f("offset_lr", "左右偏移", "", -100, 100),
+    _f("lo_cut", "低切", "Hz", 10, 500),
+    _f("hi_cut", "高切", "Hz", 200, 20000),
+    _f("feed_lo_cut", "反馈低切", "Hz", 10, 500),
+    _f("feed_left", "左反馈", "%", 1, 100),
+    _f("feed_right", "右反馈", "%", 1, 100),
+    _f("feed_hi_cut", "反馈高切", "Hz", 200, 20000),
+]),
+"3TAP": _A("3 段延迟", "delay", True, [
+    _f("dry", "干声", "ms", 0, 3000),
+    _f("gain_base", "基础增益", "%", 0, 100),
+    _f("pan_base", "基础声像", "", -100, 100),
+    _f("feedback", "反馈量", "%", 0, 100),
+    _f("lo_cut", "低切", "Hz", 10, 500),
+    _f("hi_cut", "高切", "Hz", 200, 20000),
+    _i("factor_a", "A 段因数", _FACTOR),
+    _f("gain_a", "A 段增益", "%", 0, 100),
+    _f("pan_a", "A 段声像", "", -100, 100),
+    _i("factor_b", "B 段因数", _FACTOR),
+    _f("gain_b", "B 段增益", "%", 0, 100),
+    _f("pan_b", "B 段声像", "", -100, 100),
+    _i("cross_feed", "交叉反馈", _ONOFF),
+    _i("mono", "单声道", _ONOFF),
+    _i("dry_on", "干声开关", _ONOFF),
+]),
+"4TAP": _A("节奏延迟", "delay", True, [
+    _f("time", "延迟时间", "ms", 1, 3000),
+    _f("gain_base", "基础增益", "%", 0, 100),
+    _f("feedback", "反馈量", "%", 0, 100),
+    _f("lo_cut", "低切", "Hz", 10, 500),
+    _f("hi_cut", "高切", "Hz", 200, 20000),
+    _f("spread", "立体声展开", "", 0, 6),
+    _i("factor_a", "A 段因数", _FACTOR),
+    _f("gain_a", "A 段增益", "%", 0, 100),
+    _i("factor_b", "B 段因数", _FACTOR),
+    _f("gain_b", "B 段增益", "%", 0, 100),
+    _i("factor_c", "C 段因数", _FACTOR),
+    _f("gain_c", "C 段增益", "%", 0, 100),
+    _i("cross_feed", "交叉反馈", _ONOFF),
+    _i("mono", "单声道", _ONOFF),
+    _i("dry_on", "干声开关", _ONOFF),
+]),
+
+# ---- 组合效果 (6) ----
+"D/RV": _A("延迟+密室", "combo", True, [
+    _f("time", "延迟时间", "ms", 1, 3000),
+    _i("pattern", "模式", _PATTERN),
+    _f("feed_hi_cut", "反馈高切", "Hz", 1000, 20000),
+    _f("feedback", "反馈量", "%", 0, 100),
+    _f("cross_feed", "交叉反馈", "%", 0, 100),
+    _f("balance", "延迟/混响平衡", "", -100, 100),
+    _f("pre_delay", "预延迟", "ms", 0, 200),
+    _f("decay", "混响时间", "s", 0.1, 5),
+    _f("size", "空间大小", "", 2, 100),
+    _f("damping", "阻尼", "Hz", 1000, 20000),
+    _f("lo_cut", "低切", "Hz", 10, 500),
+    _f("mix", "混合", "%", 0, 100),
+]),
+"D/CR": _A("延迟+合唱", "combo", True, [
+    _f("time", "延迟时间", "ms", 1, 3000),
+    _i("pattern", "模式", _PATTERN),
+    _f("feed_hi_cut", "反馈高切", "Hz", 1000, 20000),
+    _f("feedback", "反馈量", "%", 0, 100),
+    _f("cross_feed", "交叉反馈", "%", 0, 100),
+    _f("balance", "延迟/合唱平衡", "", -100, 100),
+    _f("speed", "速度", "Hz", 0.05, 4),
+    _f("depth", "深度", "%", 0, 100),
+    _f("delay", "延迟", "ms", 0.5, 50),
+    _f("phase", "相位", "°", 0, 180),
+    _f("wave", "波形", "%", 0, 100),
+    _f("mix", "混合", "%", 0, 100),
+]),
+"D/FL": _A("延迟+镶边", "combo", True, [
+    _f("time", "延迟时间", "ms", 1, 3000),
+    _i("pattern", "模式", _PATTERN),
+    _f("feed_hi_cut", "反馈高切", "Hz", 1000, 20000),
+    _f("feedback", "反馈量", "%", 0, 100),
+    _f("cross_feed", "交叉反馈", "%", 0, 100),
+    _f("balance", "延迟/镶边平衡", "", -100, 100),
+    _f("speed", "速度", "Hz", 0.05, 4),
+    _f("depth", "深度", "%", 0, 100),
+    _f("delay", "延迟", "ms", 0.5, 20),
+    _f("phase", "相位", "°", 0, 180),
+    _f("feed", "反馈", "", -90, 90),
+    _f("mix", "混合", "%", 0, 100),
+]),
+"CR/R": _A("合唱+密室", "combo", True, [
+    _f("speed", "速度", "Hz", 0.05, 4),
+    _f("depth", "深度", "%", 0, 100),
+    _f("delay", "延迟", "ms", 0.5, 50),
+    _f("phase", "相位", "°", 0, 180),
+    _f("wave", "波形", "%", 0, 100),
+    _f("balance", "合唱/混响平衡", "", -100, 100),
+    _f("pre_delay", "预延迟", "ms", 0, 200),
+    _f("decay", "混响时间", "s", 0.1, 5),
+    _f("size", "空间大小", "", 2, 100),
+    _f("damping", "阻尼", "Hz", 1000, 20000),
+    _f("lo_cut", "低切", "Hz", 10, 500),
+    _f("mix", "混合", "%", 0, 100),
+]),
+"FL/R": _A("镶边+密室", "combo", True, [
+    _f("speed", "速度", "Hz", 0.05, 4),
+    _f("depth", "深度", "%", 0, 100),
+    _f("delay", "延迟", "ms", 0.5, 20),
+    _f("phase", "相位", "°", 0, 180),
+    _f("feed", "反馈", "", -90, 90),
+    _f("balance", "镶边/混响平衡", "", -100, 100),
+    _f("pre_delay", "预延迟", "ms", 0, 200),
+    _f("decay", "混响时间", "s", 0.1, 5),
+    _f("size", "空间大小", "", 2, 100),
+    _f("damping", "阻尼", "Hz", 1000, 20000),
+    _f("lo_cut", "低切", "Hz", 10, 500),
+    _f("mix", "混合", "%", 0, 100),
+]),
+"MODD": _A("调制延迟", "combo", True, [
+    _f("time", "延迟时间", "ms", 1, 3000),
+    _i("delay", "延迟类型", ["1", "1/2", "2/3", "3/2"]),
+    _f("feed", "反馈", "%", 0, 100),
+    _f("lo_cut", "低切", "Hz", 10, 500),
+    _f("hi_cut", "高切", "Hz", 200, 20000),
+    _f("depth_rate", "调制深度速率", "%", 0, 100),
+    _f("rate", "速率", "Hz", 0.05, 10),
+    _i("setup", "结构", ["PAR", "SER"]),
+    _i("type", "混响类型", ["AMB", "CLUB", "HALL"]),
+    _f("decay", "混响时间", "s", 1, 10),
+    _f("damping", "阻尼", "Hz", 1000, 20000),
+    _f("balance", "平衡", "", -100, 100),
+    _f("mix", "混合", "%", 0, 100),
+]),
+
+# ---- 调制 (7) ----
+"CRS": _A("立体声合唱", "mod", True, [
+    _f("speed", "速度", "Hz", 0.05, 5),
+    _f("depth_l", "左深度", "%", 0, 100),
+    _f("depth_r", "右深度", "%", 0, 100),
+    _f("delay_l", "左延迟", "ms", 0.5, 20),
+    _f("delay_r", "右延迟", "ms", 0.5, 20),
+    _f("mix", "混合", "%", 0, 100),
+    _f("lo_cut", "低切", "Hz", 10, 500),
+    _f("hi_cut", "高切", "Hz", 200, 20000),
+    _f("phase", "相位", "°", 0, 180),
+    _f("wave", "波形", "%", 0, 100),
+    _f("spread", "立体声展开", "%", 0, 100),
+]),
+"FLNG": _A("立体声镶边", "mod", True, [
+    _f("speed", "速度", "Hz", 0.05, 5),
+    _f("depth_l", "左深度", "%", 0, 100),
+    _f("depth_r", "右深度", "%", 0, 100),
+    _f("delay_l", "左延迟", "ms", 0.5, 20),
+    _f("delay_r", "右延迟", "ms", 0.5, 20),
+    _f("mix", "混合", "%", 0, 100),
+    _f("lo_cut", "低切", "Hz", 10, 500),
+    _f("hi_cut", "高切", "Hz", 200, 20000),
+    _f("phase", "相位", "°", 0, 180),
+    _f("feed_lo_cut", "反馈低切", "Hz", 10, 500),
+    _f("feed_hi_cut", "反馈高切", "Hz", 200, 20000),
+    _f("feed", "反馈", "", -90, 90),
+]),
+"PHAS": _A("立体声移相", "mod", False, [
+    _f("speed", "速度", "Hz", 0.05, 5),
+    _f("depth", "深度", "%", 0, 100),
+    _f("resonance", "谐振", "", 0, 80),
+    _f("base", "基频", "", 0, 50),
+    _f("stages", "级数", "", 2, 12),
+    _f("mix", "混合", "%", 0, 100),
+    _f("wave", "波形", "", -50, 50),
+    _f("phase", "相位", "°", 0, 180),
+    _f("env_mod", "包络调制", "", -100, 100),
+    _f("attack", "启动", "ms", 10, 1000),
+    _f("hold", "保持", "ms", 1, 2000),
+    _f("release", "释放", "ms", 10, 1000),
+]),
+"DIMC": _A("Dimension-C 合唱", "mod", True, [
+    _i("active", "启用", _ONOFF),
+    _i("mode", "模式", ["M", "ST"]),
+    _i("dry", "干声", _ONOFF),
+    _i("mode_1", "模式 1", _ONOFF),
+    _i("mode_2", "模式 2", _ONOFF),
+    _i("mode_3", "模式 3", _ONOFF),
+    _i("mode_4", "模式 4", _ONOFF),
+]),
+"FILT": _A("情绪滤波", "mod", False, [
+    _f("speed", "速度", "Hz", 0.05, 20),
+    _f("depth", "深度", "%", 0, 100),
+    _f("resonance", "谐振", "", 0, 100),
+    _f("base", "基频", "Hz", 10, 15000),
+    _i("mode", "模式", ["LP", "HP", "BP", "NO"]),
+    _f("mix", "混合", "%", 0, 100),
+    _i("wave", "波形", ["TRI", "SIN", "SAW", "SAW-", "RMP", "SQU/RND"]),
+    _f("phase", "相位", "°", 0, 180),
+    _f("env_mod", "包络调制", "", -100, 100),
+    _f("attack", "启动", "ms", 10, 250),
+    _f("release", "释放", "ms", 10, 500),
+    _f("drive", "驱动", "%", 0, 100),
+    _i("pole4", "4 极点", _ONOFF),
+    _i("side_chain", "侧链", _ONOFF),
+]),
+"ROTA": _A("旋转音箱", "mod", True, [
+    _f("lo_speed", "低速", "Hz", 0.1, 4),
+    _f("hi_speed", "高速", "Hz", 2, 10),
+    _f("accelerate", "加速", "", 0, 100),
+    _f("distance", "距离", "", 0, 100),
+    _f("balance", "平衡", "", -100, 100),
+    _f("mix", "混合", "%", 0, 100),
+    _i("stop", "停止", _ONOFF),
+    _i("slow", "慢速", _ONOFF),
+]),
+"PAN": _A("颤音/声像", "mod", False, [
+    _f("speed", "速度", "Hz", 0.05, 4),
+    _f("phase", "相位", "°", 0, 180),
+    _f("wave", "波形", "", -50, 50),
+    _f("depth", "深度", "%", 0, 100),
+    _f("env_speed", "包络速度", "", 0, 100),
+    _f("env_depth", "包络深度", "", 0, 100),
+    _f("attack", "启动", "ms", 10, 1000),
+    _f("hold", "保持", "ms", 1, 2000),
+    _f("release", "释放", "ms", 10, 1000),
+]),
+
+# ---- 变调 (3) ----
+"SUB": _A("低八度", "pitch", False, [
+    _i("active", "启用", _ONOFF),
+    _i("range", "范围", ["LO", "MID", "HI"]),
+    _f("dry", "干声", "%", 0, 100),
+    _f("octave_1", "低八度 -1", "%", 0, 100),
+    _f("octave_2", "低八度 -2", "%", 0, 100),
+]),
+"PIT": _A("立体声变调", "pitch", True, [
+    _f("semitone", "半音", "", -12, 12),
+    _f("cent", "音分", "", -50, 50),
+    _f("delay", "延迟", "ms", 1, 100),
+    _f("lo_cut", "低切", "Hz", 10, 500),
+    _f("hi_cut", "高切", "Hz", 2000, 20000),
+    _f("mix", "混合", "%", 0, 100),
+]),
+"PIT2": _A("双声道变调", "pitch", True, _dual("", [
+    _f("semitone", "半音", "", -12, 12),
+    _f("cent", "音分", "", -50, 50),
+    _f("delay", "延迟", "ms", 1, 100),
+    _f("lo_cut", "低切", "Hz", 10, 500),
+    _f("hi_cut", "高切", "Hz", 2000, 20000),
+    _f("mix", "混合", "%", 0, 100),
+])),
+
+# ---- 均衡 (8) ----
+"GEQ2": _A("双通道图示 EQ", "eq", False,
+           _geq("eq_a", 31) + _geq("eq_b", 31)),
+"GEQ": _A("立体声图示 EQ", "eq", False, _geq("eq_lr", 31)),
+"TEQ2": _A("双通道 True EQ", "eq", False,
+           _geq("eq_a", 31) + _geq("eq_b", 31)),
+"TEQ": _A("立体声 True EQ", "eq", False, _geq("eq_lr", 31)),
+"P1A": _A("立体声 Program EQ", "eq", False, [
+    _i("active", "启用", _ONOFF),
+    _f("gain", "增益", "dB", -12, 12),
+    _f("lo_boost", "低频提升", "", 0, 10),
+    _i("lo_freq", "低频频率", ["0", "30", "60", "100"]),
+    _f("mid_width", "中频宽度", "", 0, 10),
+    _f("mid_boost", "中频提升", "", 0, 10),
+    _i("mid_freq", "中频频率", ["3k", "4k", "5k", "8k", "10k", "12k", "16k"]),
+    _f("hi_attenuation", "高频衰减", "", 0, 10),
+    _i("hi_freq", "高频频率", ["5k", "10k", "20k"]),
+    _i("transformer", "变压器", _ONOFF),
+]),
+"P1A2": _A("双通道 Program EQ", "eq", False, _dual("", [
+    _i("active", "启用", _ONOFF),
+    _f("gain", "增益", "dB", -12, 12),
+    _f("lo_boost", "低频提升", "", 0, 10),
+    _i("lo_freq", "低频频率", ["0", "30", "60", "100"]),
+    _f("mid_width", "中频宽度", "", 0, 10),
+    _f("mid_boost", "中频提升", "", 0, 10),
+    _i("mid_freq", "中频频率", ["3k", "4k", "5k", "8k", "10k", "12k", "16k"]),
+    _f("hi_attenuation", "高频衰减", "", 0, 10),
+    _i("hi_freq", "高频频率", ["5k", "10k", "20k"]),
+    _i("transformer", "变压器", _ONOFF),
+])),
+"PQ5": _A("立体声 Midrange EQ", "eq", False, [
+    _i("active", "启用", _ONOFF),
+    _f("gain", "增益", "dB", -12, 12),
+    _i("lo_freq", "低频频率", ["200", "300", "500", "700", "1000"]),
+    _f("lo_boost", "低频提升", "", 0, 10),
+    _i("mid_freq", "中频频率", ["200", "300", "500", "700", "1k", "1k5",
+                               "2k", "3k", "4k", "5k", "7k"]),
+    _f("mid_boost", "中频提升", "", 0, 10),
+    _i("hi_freq", "高频频率", ["1k5", "2k", "3k", "4k", "5k"]),
+    _f("hi_boost", "高频提升", "", 0, 10),
+    _i("transformer", "变压器", _ONOFF),
+]),
+"PQ5S": _A("双通道 Midrange EQ", "eq", False, _dual("", [
+    _i("active", "启用", _ONOFF),
+    _f("gain", "增益", "dB", -12, 12),
+    _i("lo_freq", "低频频率", ["200", "300", "500", "700", "1000"]),
+    _f("lo_boost", "低频提升", "", 0, 10),
+    _i("mid_freq", "中频频率", ["200", "300", "500", "700", "1k", "1k5",
+                               "2k", "3k", "4k", "5k", "7k"]),
+    _f("mid_boost", "中频提升", "", 0, 10),
+    _i("hi_freq", "高频频率", ["1k5", "2k", "3k", "4k", "5k"]),
+    _f("hi_boost", "高频提升", "", 0, 10),
+    _i("transformer", "变压器", _ONOFF),
+])),
+
+# ---- 动态 (13) ----
+"DES": _A("立体声去咝声", "dyn", False, [
+    _f("lo_band_l", "左低段", "", 0, 50),
+    _f("hi_band_l", "左高段", "", 0, 50),
+    _f("lo_band_r", "右低段", "", 0, 50),
+    _f("hi_band_r", "右高段", "", 0, 50),
+    _i("voice", "人声", ["FEM", "MALE"]),
+    _i("mode", "模式", ["ST", "M/S"]),
+]),
+"DES2": _A("双通道去咝声", "dyn", False, [
+    _f("lo_band_a", "A 低段", "", 0, 50),
+    _f("hi_band_a", "A 高段", "", 0, 50),
+    _f("lo_band_b", "B 低段", "", 0, 50),
+    _f("hi_band_b", "B 高段", "", 0, 50),
+    _i("voice_a", "A 人声", ["FEM", "MALE"]),
+    _i("voice_b", "B 人声", ["FEM", "MALE"]),
+]),
+"LIM": _A("精密限幅器", "dyn", False, [
+    _f("input_gain", "输入增益", "dB", 0, 18),
+    _f("out_gain", "输出增益", "dB", -18, 18),
+    _f("squeeze", "压缩", "", 0, 100),
+    _f("knee", "膝宽", "", 0, 10),
+    _f("attack", "启动", "ms", 0.05, 1),
+    _f("release", "释放", "ms", 20, 2000),
+    _i("stereo_link", "立体声链接", _ONOFF),
+    _i("auto_gain", "自动增益", _ONOFF),
+]),
+"CMB": _A("立体声 Combinator", "dyn", True, [
+    _i("active", "启用", _ONOFF),
+    _i("band_solo", "频段独奏", _BANDSOLO),
+    _f("mix", "混合", "%", 0, 100),
+    _f("attack", "启动", "", 0, 19),
+    _f("release", "释放", "ms", 20, 3000),
+    _i("autorelease", "自动释放", _ONOFF),
+    _f("sbc_speed", "SBC 速度", "", 0, 10),
+    _i("sbc_on", "SBC 开关", _ONOFF),
+    _f("xover", "分频点", "", -50, 50),
+    _i("xover_slope", "分频斜率", ["12", "48"]),
+    _i("ratio", "比率", _RATIO),
+    _f("threshold", "阈值", "dB", -40, 0),
+    _f("gain", "增益", "dB", -10, 10),
+    _f("band1_threshold", "频段1 阈值", "dB", -10, 10),
+    _f("band1_gain", "频段1 增益", "dB", -10, 10),
+    _i("band1_lock", "频段1 锁定", ["0", "1"]),
+    _f("band2_threshold", "频段2 阈值", "dB", -10, 10),
+    _f("band2_gain", "频段2 增益", "dB", -10, 10),
+    _i("band2_lock", "频段2 锁定", ["0", "1"]),
+    _f("band3_threshold", "频段3 阈值", "dB", -10, 10),
+    _f("band3_gain", "频段3 增益", "dB", -10, 10),
+    _i("band3_lock", "频段3 锁定", ["0", "1"]),
+    _f("band4_threshold", "频段4 阈值", "dB", -10, 10),
+    _f("band4_gain", "频段4 增益", "dB", -10, 10),
+    _i("band4_lock", "频段4 锁定", ["0", "1"]),
+    _f("band5_threshold", "频段5 阈值", "dB", -10, 10),
+    _f("band5_gain", "频段5 增益", "dB", -10, 10),
+    _i("band5_lock", "频段5 锁定", ["0", "1"]),
+    _i("meter_mode", "表头模式", ["GR", "SBC", "PEAK"]),
+]),
+"CMB2": _A("双通道 Combinator", "dyn", True, _dual("", [
+    _i("active", "启用", _ONOFF),
+    _i("band_solo", "频段独奏", _BANDSOLO),
+    _f("mix", "混合", "%", 0, 100),
+    _f("attack", "启动", "", 0, 19),
+    _f("release", "释放", "ms", 20, 3000),
+    _i("autorelease", "自动释放", _ONOFF),
+    _f("sbc_speed", "SBC 速度", "", 0, 10),
+    _i("sbc_on", "SBC 开关", _ONOFF),
+    _f("xover", "分频点", "", -50, 50),
+    _i("xover_slope", "分频斜率", ["12", "48"]),
+    _i("ratio", "比率", _RATIO),
+    _f("threshold", "阈值", "dB", -40, 0),
+    _f("gain", "增益", "dB", -10, 10),
+    _f("band1_threshold", "频段1 阈值", "dB", -10, 10),
+    _f("band1_gain", "频段1 增益", "dB", -10, 10),
+    _i("band1_lock", "频段1 锁定", ["0", "1"]),
+    _f("band2_threshold", "频段2 阈值", "dB", -10, 10),
+    _f("band2_gain", "频段2 增益", "dB", -10, 10),
+    _i("band2_lock", "频段2 锁定", ["0", "1"]),
+    _f("band3_threshold", "频段3 阈值", "dB", -10, 10),
+    _f("band3_gain", "频段3 增益", "dB", -10, 10),
+    _i("band3_lock", "频段3 锁定", ["0", "1"]),
+    _f("band4_threshold", "频段4 阈值", "dB", -10, 10),
+    _f("band4_gain", "频段4 增益", "dB", -10, 10),
+    _i("band4_lock", "频段4 锁定", ["0", "1"]),
+    _f("band5_threshold", "频段5 阈值", "dB", -10, 10),
+    _f("band5_gain", "频段5 增益", "dB", -10, 10),
+    _i("band5_lock", "频段5 锁定", ["0", "1"]),
+    _i("meter_mode", "表头模式", ["GR", "SBC", "PEAK"]),
+])),
+"FAC": _A("立体声 Fair 压缩", "dyn", False, [
+    _i("active", "启用", _ONOFF),
+    _f("input_gain", "输入增益", "dB", -20, 20),
+    _f("threshold", "阈值", "", 0, 10),
+    _f("time", "时间", "", 0, 6),
+    _f("bias", "偏置", "", 0, 100),
+    _f("gain", "增益", "dB", -18, 6),
+    _f("balance", "平衡", "", -100, 100),
+]),
+"FAC1M": _A("M/S Fair 压缩", "dyn", False, [
+    _i("active", "启用", _ONOFF),
+    _f("input_gain", "输入增益", "dB", -20, 20),
+    _f("threshold", "阈值", "", 0, 10),
+    _f("time", "时间", "", 0, 6),
+    _f("bias", "偏置", "", 0, 100),
+    _f("gain", "增益", "dB", -18, 6),
+    _f("balance", "平衡", "", -100, 100),
+]),
+"FAC2": _A("双通道 Fair 压缩", "dyn", False, _dual("", [
+    _i("active", "启用", _ONOFF),
+    _f("input_gain", "输入增益", "dB", -20, 20),
+    _f("threshold", "阈值", "", 0, 10),
+    _f("time", "时间", "", 0, 6),
+    _f("bias", "偏置", "", 0, 100),
+    _f("gain", "增益", "dB", -18, 6),
+    _f("balance", "平衡", "", -100, 100),
+])),
+"LEC": _A("立体声 Leisure 压缩", "dyn", False, [
+    _i("active", "启用", _ONOFF),
+    _f("gain", "增益", "", 0, 100),
+    _f("peak", "峰值", "", 0, 100),
+    _i("mode", "模式", ["COMP", "LIM"]),
+    _f("out_gain", "输出增益", "dB", -18, 6),
+]),
+"LEC2": _A("双通道 Leisure 压缩", "dyn", False, _dual("", [
+    _i("active", "启用", _ONOFF),
+    _f("gain", "增益", "", 0, 100),
+    _f("peak", "峰值", "", 0, 100),
+    _i("mode", "模式", ["COMP", "LIM"]),
+    _f("out_gain", "输出增益", "dB", -18, 6),
+])),
+"ULC": _A("立体声 Ultimo 压缩", "dyn", False, [
+    _i("active", "启用", _ONOFF),
+    _f("input_gain", "输入增益", "dB", -48, 0),
+    _f("out_gain", "输出增益", "dB", -48, 0),
+    _f("attack", "启动", "", 1, 7),
+    _f("release", "释放", "", 1, 7),
+    _i("ratio", "比率", ["4", "8", "12", "20", "ALL"]),
+]),
+"ULC2": _A("双通道 Ultimo 压缩", "dyn", False, _dual("", [
+    _i("active", "启用", _ONOFF),
+    _f("input_gain", "输入增益", "dB", -48, 0),
+    _f("out_gain", "输出增益", "dB", -48, 0),
+    _f("attack", "启动", "", 1, 7),
+    _f("release", "释放", "", 1, 7),
+    _i("ratio", "比率", ["4", "8", "12", "20", "ALL"]),
+])),
+"WAVD": _A("波形设计器", "dyn", False, [
+    _f("attack_a", "A 启动", "", -100, 100),
+    _f("sustain_a", "A 延持", "", -100, 100),
+    _f("gain_a", "A 增益", "dB", -24, 24),
+    _f("attack_b", "B 启动", "", -100, 100),
+    _f("sustain_b", "B 延持", "", -100, 100),
+    _f("gain_b", "B 增益", "dB", -24, 24),
+]),
+
+# ---- 增强/成像 (7) ----
+"ENH": _A("立体声增强器", "enh", False, [
+    _f("out_gain", "输出增益", "dB", -12, 12),
+    _f("speed", "速度", "", 0, 100),
+    _f("bass_gain", "低频增益", "", 0, 100),
+    _f("bass_freq", "低频频率", "", 1, 50),
+    _f("mid_gain", "中频增益", "", 0, 100),
+    _f("mid_freq", "中频频率", "", 1, 50),
+    _f("hi_gain", "高频增益", "", 0, 100),
+    _f("hi_freq", "高频频率", "", 1, 50),
+    _i("solo", "独奏", _ONOFF),
+]),
+"ENH2": _A("双通道增强器", "enh", False, _dual("", [
+    _f("out_gain", "输出增益", "dB", -12, 12),
+    _f("speed", "速度", "", 0, 100),
+    _f("bass_gain", "低频增益", "", 0, 100),
+    _f("bass_freq", "低频频率", "", 1, 50),
+    _f("mid_gain", "中频增益", "", 0, 100),
+    _f("mid_freq", "中频频率", "", 1, 50),
+    _f("hi_gain", "高频增益", "", 0, 100),
+    _f("hi_freq", "高频频率", "", 1, 50),
+    _i("solo", "独奏", _ONOFF),
+])),
+"EXC": _A("立体声激励器", "enh", False, [
+    _f("tune", "调音", "Hz", 1000, 10000),
+    _f("peak", "峰值", "", 0, 100),
+    _f("zero_fill", "零填充", "", 0, 100),
+    _f("timbre", "音色", "", -50, 50),
+    _f("harmonics", "泛音", "", 0, 100),
+    _f("mix", "混合", "%", 0, 100),
+    _i("solo", "独奏", _ONOFF),
+]),
+"EXC2": _A("双通道激励器", "enh", False, _dual("", [
+    _f("tune", "调音", "Hz", 1000, 10000),
+    _f("peak", "峰值", "", 0, 100),
+    _f("zero_fill", "零填充", "", 0, 100),
+    _f("timbre", "音色", "", -50, 50),
+    _f("harmonics", "泛音", "", 0, 100),
+    _f("mix", "混合", "%", 0, 100),
+    _i("solo", "独奏", _ONOFF),
+])),
+"SON": _A("Sound Maxer", "enh", False, [
+    _i("active_a", "A 启用", _ONOFF),
+    _f("lo_contour_a", "A 低频轮廓", "", 0, 10),
+    _f("process_a", "A 处理", "", 0, 10),
+    _f("out_gain_a", "A 输出增益", "dB", -12, 12),
+    _i("active_b", "B 启用", _ONOFF),
+    _f("lo_contour_b", "B 低频轮廓", "", 0, 10),
+    _f("process_b", "B 处理", "", 0, 10),
+    _f("out_gain_b", "B 输出增益", "dB", -12, 12),
+]),
+"IMG": _A("立体声成像", "enh", False, [
+    _f("balance", "平衡", "", -100, 100),
+    _f("mono_pan", "单声道声像", "", -100, 100),
+    _f("stereo_pan", "立体声声像", "", -100, 100),
+    _f("shv_gain", "增益", "dB", 0, 12),
+    _f("shv_freq", "频率", "Hz", 100, 1000),
+    _f("shv_q", "Q 值", "", 1, 10),
+    _f("out_gain", "输出增益", "dB", -12, 12),
+]),
+"EDI": _A("Edison EX1", "enh", False, [
+    _i("active", "启用", _ONOFF),
+    _i("stereo_input", "立体声输入", ["ST", "M/S"]),
+    _i("stereo_output", "立体声输出", ["ST", "M/S"]),
+    _f("st_spread", "立体声展开", "", -50, 50),
+    _f("lmf_spread", "LMF 展开", "", -50, 50),
+    _f("balance", "平衡", "", -50, 50),
+    _f("center_distance", "中心距离", "", -50, 50),
+    _f("out_gain", "输出增益", "dB", -12, 12),
+]),
+
+# ---- 吉他 (4) ----
+"AMP": _A("立体声吉他箱头", "amp", False, [
+    _f("preamp", "前置放大", "", 0, 10),
+    _f("buzz", "噪声", "", 0, 10),
+    _f("punch", "冲击", "", 0, 10),
+    _f("crunch", "碎裂", "", 0, 10),
+    _f("drive", "驱动", "", 0, 10),
+    _f("low", "低音", "", 0, 10),
+    _f("high", "高音", "", 0, 10),
+    _f("level", "电平", "", 0, 10),
+    _i("cabinet", "音箱", _ONOFF),
+]),
+"AMP2": _A("双通道吉他箱头", "amp", False, _dual("", [
+    _f("preamp", "前置放大", "", 0, 10),
+    _f("buzz", "噪声", "", 0, 10),
+    _f("punch", "冲击", "", 0, 10),
+    _f("crunch", "碎裂", "", 0, 10),
+    _f("drive", "驱动", "", 0, 10),
+    _f("low", "低音", "", 0, 10),
+    _f("high", "高音", "", 0, 10),
+    _f("level", "电平", "", 0, 10),
+    _i("cabinet", "音箱", _ONOFF),
+])),
+"DRV": _A("立体声电子管", "amp", False, [
+    _f("drive", "驱动", "", 0, 100),
+    _f("even_ear", "偶次谐波", "", 0, 50),
+    _f("odd_ear", "奇次谐波", "", 0, 50),
+    _f("gain", "增益", "dB", -12, 12),
+    _f("lo_cut", "低切", "Hz", 20, 200),
+    _f("hi_cut", "高切", "Hz", 4000, 20000),
+    _f("lo_gain", "低频增益", "dB", -12, 12),
+    _f("lo_freq", "低频频率", "Hz", 50, 400),
+    _f("hi_gain", "高频增益", "dB", -12, 12),
+    _f("hi_freq", "高频频率", "Hz", 1000, 10000),
+]),
+"DRV2": _A("双通道电子管", "amp", False, _dual("", [
+    _f("drive", "驱动", "", 0, 100),
+    _f("even_ear", "偶次谐波", "", 0, 50),
+    _f("odd_ear", "奇次谐波", "", 0, 50),
+    _f("gain", "增益", "dB", -12, 12),
+    _f("lo_cut", "低切", "Hz", 20, 200),
+    _f("hi_cut", "高切", "Hz", 4000, 20000),
+    _f("lo_gain", "低频增益", "dB", -12, 12),
+    _f("lo_freq", "低频频率", "Hz", 50, 400),
+    _f("hi_gain", "高频增益", "dB", -12, 12),
+    _f("hi_freq", "高频频率", "Hz", 1000, 10000),
+])),
+}
+
+# ---------------------------------------------------------------- 派生表
+
+# FX 1–4 的 type 枚举（int → 算法名），来自协议文档附录
+FX_ENUM_14 = ["HALL", "AMBI", "RPLT", "ROOM", "CHAM", "PLAT", "VREV", "VRM",
+              "GATE", "RVRS", "DLY", "3TAP", "4TAP", "CRS", "FLNG", "PHAS",
+              "DIMC", "FILT", "ROTA", "PAN", "SUB", "D/RV", "CR/R", "FL/R",
+              "D/CR", "D/FL", "MODD", "GEQ2", "GEQ", "TEQ2", "TEQ", "DES2",
+              "DES", "P1A", "P1A2", "PQ5", "PQ5S", "WAVD", "LIM", "CMB",
+              "CMB2", "FAC", "FAC1M", "FAC2", "LEC", "LEC2", "ULC", "ULC2",
+              "ENH2", "ENH", "EXC2", "EXC", "IMG", "EDI", "SON", "AMP2",
+              "AMP", "DRV2", "DRV", "PIT2", "PIT"]
+
+# FX 5–8 的 type 枚举（轻量算法子集，DSP 算力限制）
+FX_ENUM_58 = ["GEQ2", "GEQ", "TEQ2", "TEQ", "DES2", "DES", "P1A", "P1A2",
+              "PQ5", "PQ5S", "WAVD", "LIM", "FAC", "FAC1M", "FAC2", "LEC",
+              "LEC2", "ULC", "ULC2", "ENH2", "ENH", "EXC2", "EXC", "IMG",
+              "EDI", "SON", "AMP2", "AMP", "DRV2", "DRV", "PHAS", "FILT",
+              "PAN", "SUB"]
+
+# 分类中文标签（UI 下拉分组用）
+FX_CAT_LABEL = {"reverb": "混响", "delay": "延迟", "combo": "组合效果",
+                "mod": "调制", "pitch": "变调", "eq": "均衡",
+                "dyn": "动态", "enh": "增强/成像", "amp": "吉他"}
+
+# 槽位约束：heavy 算法只能进 FX 1–4（文档 /fx 节，待真机核对）
+FX_SLOTS_HEAVY = (1, 2, 3, 4)
+
+# 旧 type 名 → 真台枚举名（v1.5.x 及以前的持久化数据迁移用）
+FX_TYPE_ALIAS = {"PLATE": "PLAT", "CHAMBER": "CHAM", "VINTAGE": "VREV",
+                 "ROOM": "ROOM", "HALL": "HALL"}
+
+X32_FX_ALGOS = dict(_RAW)
+# M32 与 X32 同一 Klark Teknik 引擎：独立副本，便于日后分化
+M32_FX_ALGOS = {k: dict(v) for k, v in _RAW.items()}
+
+
+def algo_names():
+    """效果库全部算法名（顺序 = 枚举顺序，便于 UI）。"""
+    return list(FX_ENUM_14)
+
+
+def slot_allows(slot: int, algo: str) -> bool:
+    """该槽位能否装载这个算法（heavy 约束）。"""
+    d = X32_FX_ALGOS.get(algo)
+    if not d:
+        return False
+    if d.get("heavy") and slot not in FX_SLOTS_HEAVY:
+        return False
+    return True
+
+
+def param_spec(algo: str, field: str):
+    """(算法, field) → 参数规格 dict；找不到返回 None。"""
+    d = X32_FX_ALGOS.get(algo)
+    if not d:
+        return None
+    for p in d["params"]:
+        if p["field"] == field:
+            return p
+    return None
+
+
+# ==================================================================
 # ==== x32sim/kinds.py
 # ==================================================================
 # -*- coding: utf-8 -*-
@@ -1774,39 +2693,39 @@ def blank_row(group):
 """x32sim/consts — 数据表: 容量/默认名/地址模板/动作与预设白名单/FX 元数据"""
 
 
+# ⚠️ make_single.py 只认单行相对导入 (多行会被判"不支持"直接拒生成)
 
 # ---------------------------------------------------------------- 混响 / FX 机架
-# X32 有 8 个 FX 槽. 混响类算法的参数**索引随算法变化**(官方文档里 Hall/Plate/Room/
-# Chamber/Vintage 各有自己的参数页), 因此这里把"时间/预延迟/阻尼"抽象出来, 索引集中
-# 在这一张表里 —— 真机联调时只需改这张表, 不用动逻辑。
-#   time     混响时间 (RT) 的参数索引, 值单位 = 秒
-#   predelay 预延迟的参数索引,       值单位 = 毫秒
-#   damp     阻尼/高频衰减的参数索引, 值单位 = 0..1
-#   tmin/tmax 该算法混响时间的合法范围 (秒), Tap 换算结果按此钳制
-FX_COUNT = 8
-# ⚠️ 效果库**属于控台驱动**，不是全局表（见「控台驱动层」一节）。
-#    同一个算法名在不同控台上参数索引可能不同，所以任何"按算法查参数索引"的
-#    地方都必须走 fx_algos()（= 当前控台的库），不能直接读某一张表 —— 否则
-#    换控台后就会出现"参数串味"（把 A 台的时间参数写到了 B 台的别的位置）。
+# X32 有 8 个 FX 槽. 效果库（算法 → 参数表）已全量标定，见 **fxlib.py**：
+#   * 61 种算法（FX 1–4 全量；FX 5–8 仅 34 种轻量算法，DSP 算力限制）；
+#   * 每种算法的 par 号顺序、参数名、类型（linf/logf/enum）、量程，全部来自
+#     Patrick-Gilles Maillot《UNOFFICIAL X32/M32 OSC REMOTE PROTOCOL》
+#     Effects Parameters 章 —— 与真台 OSC 地址逐条对齐；
+#   * 参数地址 = `/fx/<槽>/par/<两位补零参数号>`，槽号不补零。
 #
-#    X32 与 M32 使用**同一套效果引擎**（M32 是 Midas 贴牌的同代产品，固件效果器
-#    为同一 Klark Teknik 引擎），因此两张表当前内容一致；但**分别持有**，将来
-#    某一版固件效果库出现出入时，只需改对应的那一张，公共代码与卡片动作都不动。
-X32_FX_ALGOS = {
-    "HALL":    {"label": "大厅混响", "time": 1, "predelay": 2, "damp": 4, "tmin": 0.4, "tmax": 10.0},
-    "PLATE":   {"label": "板式混响", "time": 1, "predelay": 2, "damp": 4, "tmin": 0.3, "tmax": 8.0},
-    "ROOM":    {"label": "房间混响", "time": 1, "predelay": 2, "damp": 4, "tmin": 0.2, "tmax": 5.0},
-    "CHAMBER": {"label": "密室混响", "time": 1, "predelay": 2, "damp": 4, "tmin": 0.3, "tmax": 6.0},
-    "VINTAGE": {"label": "复古混响", "time": 1, "predelay": 2, "damp": 4, "tmin": 0.3, "tmax": 6.0},
-}
-M32_FX_ALGOS = {k: dict(v) for k, v in X32_FX_ALGOS.items()}   # 独立副本，便于日后分化
-# 出厂默认混响参数 (秒 / 毫秒 / 0..1), 索引与上面的表对应
+# ⚠️ 与 v1.5.x 旧标定的差异（旧表缺真机验证，已证实不准确）：
+#   * 混响 par01 = **Pre Delay**，par02 才是 **Decay**（旧表 time/predelay 弄反了）；
+#   * Damping 在真台是 **1k–20k Hz**（旧表当成 0–1 归一化值）。
+#   type 名迁移：PLATE→PLAT / CHAMBER→CHAM / VINTAGE→VREV（persist 层别名表）。
+#
+# ⚠️ 效果库**属于控台驱动**，不是全局表（见「控台驱动层」一节）。
+#    X32 与 M32 使用**同一套效果引擎**（M32 是 Midas 贴牌的同代产品），因此
+#    两张表当前内容一致；但**分别持有**，将某一版固件效果库出现出入时，只需改
+#    对应的那一张，公共代码与卡片动作都不动。
+FX_COUNT = 8
+# 出厂默认混响参数。索引 = par 号（按 fxlib 正确映射：predelay=01, decay=02, damp=04）。
+# 数值为工程经验值，**未经真机核对** —— 出厂值核对走 /api/info.calibration 机制。
 REVERB_DEFAULTS = {
-    "HALL":    {1: 2.40, 2: 25.0, 4: 0.45},
-    "PLATE":   {1: 1.80, 2: 15.0, 4: 0.30},
-    "ROOM":    {1: 1.10, 2: 12.0, 4: 0.55},
-    "CHAMBER": {1: 1.60, 2: 20.0, 4: 0.40},
-    "VINTAGE": {1: 1.50, 2: 18.0, 4: 0.35},
+    "HALL":  {1: 25.0, 2: 2.40, 4: 6000.0},
+    "PLAT":  {1: 15.0, 2: 1.80, 4: 6000.0},
+    "ROOM":  {1: 12.0, 2: 1.10, 4: 6000.0},
+    "CHAM":  {1: 20.0, 2: 1.60, 4: 6000.0},
+    "VREV":  {1: 18.0, 2: 1.50},
+    "AMBI":  {1: 20.0, 2: 2.00, 4: 6000.0},
+    "RPLT":  {1: 20.0, 2: 2.60, 4: 6000.0},
+    "VRM":   {1: 5.0, 2: 2.00},
+    "GATE":  {1: 20.0, 2: 400.0},
+    "RVRS":  {1: 20.0, 2: 400.0},
 }
 
 
@@ -2250,7 +3169,7 @@ class MixerState:
         # 参数索引随算法变化, 映射表见 X32_FX_ALGOS / M32_FX_ALGOS (默认值需真机标定)
         self.fx = {i: {"type": "", "name": "", "on": 1, "mix": 0.25, "par": {}}
                    for i in range(1, FX_COUNT + 1)}
-        for i, algo in enumerate(("HALL", "PLATE", "ROOM", "CHAMBER")):
+        for i, algo in enumerate(("HALL", "PLAT", "ROOM", "CHAM")):
             if i + 1 <= FX_COUNT:
                 self.fx[i + 1]["type"] = algo
                 self.fx[i + 1]["par"] = dict(REVERB_DEFAULTS[algo])
@@ -2508,7 +3427,11 @@ def set_value(kind, idx, value, source="manual"):
     p = fx_par_num(kind)
     if p is not None and source in ("manual", "sync"):
         algo = fx_algo(idx)
-        if algo and p == algo["time"]:
+        # ⚠️ "time" in algo: 61 种算法里只有 10 种混响有 time 别名。
+        #    旧库只有 5 种混响, 这个判断看着多余; 全量标定后往 GEQ/P1A 之类
+        #    写参数会在这里 KeyError —— 异常被上层吞掉, 表现成"接口返 ok
+        #    但台子没反应", 只能靠回归组抓。
+        if algo and "time" in algo and p == algo["time"]:
             _fx_time_fanout(idx, get_value(kind, idx), source)
 
 
@@ -3366,6 +4289,7 @@ BRIDGE_SINK = _BridgeSink()
 import threading
 import time
 
+# ⚠️ make_single.py 只认单行相对导入 (多行括注会被判"不支持"直接拒生成)
 
 
 def fx_algos():
@@ -3378,14 +4302,21 @@ def fx_algos():
 
 
 def fx_lib_meta():
-    """给 UI 的效果库元信息（不含参数细节）。"""
+    """给 UI 的效果库元信息（含分类与槽位约束，供算法下拉分组渲染）。"""
     p = profile()
     lib = p.fx_algos
+    cats = {}
+    for k, v in lib.items():
+        cats.setdefault(v.get("cat", "misc"), []).append(k)
     return {"id": p.id, "label": p.label, "vendor": p.vendor,
             "ready": p.ready, "verified": p.verified,
             "slots": int(p.counts.get("fx", 0)), "libCount": len(lib),
             "locked": (not p.ready) or ("fx" not in p.caps),
-            "algos": {k: {"label": v["label"], "tmin": v["tmin"], "tmax": v["tmax"]}
+            "catLabel": FX_CAT_LABEL,
+            "cats": cats,
+            "heavySlots": list(FX_SLOTS_HEAVY),
+            "algos": {k: {"label": v["label"], "cat": v.get("cat", "misc"),
+                          "heavy": bool(v.get("heavy")), "n": v.get("n", 0)}
                       for k, v in lib.items()}}
 
 
@@ -3395,18 +4326,53 @@ def fx_algo(slot):
     return fx_algos().get(t)
 
 
-def fx_par_clamp(slot, pnum, value):
-    """按参数语义钳制: 时间夹到算法范围, 预延迟 0-200ms, 阻尼 0..1, 其余 0..1。"""
-    v = _finite(value, 0.0)
+def fx_par_spec(slot, pnum):
+    """(slot, par 号) → 参数规格 dict；未装载算法或号越界 → None。"""
     algo = fx_algo(slot)
-    if algo:
-        if pnum == algo["time"]:
-            return min(max(v, algo["tmin"]), algo["tmax"])
-        if pnum == algo["predelay"]:
-            return min(max(v, 0.0), 200.0)
-        if pnum == algo["damp"]:
-            return min(max(v, 0.0), 1.0)
-    return min(max(v, 0.0), 1.0)
+    if not algo:
+        return None
+    try:
+        pnum = int(pnum)
+    except (TypeError, ValueError):
+        return None
+    for p in algo["params"]:
+        if p["p"] == pnum:
+            return p
+    return None
+
+
+def fx_field_par(slot, field):
+    """field 名 → par 号。支持三类：
+      1. 算法参数 field（如 'decay'）—— 按当前槽算法的参数表查；
+      2. 'parNN' 直接寻址（如 'par07'）；
+      3. 语义别名 time/predelay/damp —— 按算法里的别名映射。
+    槽级字段 type/on/mix/name 不适用（返回 None，由调用方处理）。
+    """
+    field = str(field)
+    algo = fx_algo(slot)
+    if not algo:
+        return None
+    if field.startswith("par") and field[3:].isdigit():
+        n = int(field[3:])
+        return n if any(p["p"] == n for p in algo["params"]) else None
+    for p in algo["params"]:
+        if p["field"] == field:
+            return p["p"]
+    alias = {"time": "time", "predelay": "predelay", "damp": "damp"}.get(field)
+    if alias and alias in algo:
+        return algo[alias]
+    return None
+
+
+def fx_par_clamp(slot, pnum, value):
+    """按**该算法该参数**的量程钳制（表驱动，取代旧的 time/predelay/damp 特判）。"""
+    v = _finite(value, 0.0)
+    spec = fx_par_spec(slot, pnum)
+    if spec is None:
+        return min(max(v, 0.0), 1.0)
+    if spec["kind"] == "i":
+        return int(round(min(max(v, spec["lo"]), spec["hi"])))
+    return min(max(v, spec["lo"]), spec["hi"])
 
 
 # ---------------------------------------------------------------- 混响同步 / Tap 定拍
@@ -3471,14 +4437,31 @@ def tap_register(now=None):
     return TAP_STATE["bpm"], TAP_STATE["count"], True
 
 
+def _reverb_slots():
+    """装了**混响类**算法（有 decay 参数）的槽 —— Tap/同步组只对这些槽有意义。"""
+    out = []
+    for s in range(1, FX_COUNT + 1):
+        a = fx_algo(s)
+        if a and a.get("cat") == "reverb" and "time" in a:
+            out.append(s)
+    return out
+
+
 def fx_sync_targets():
     """联动组里的混响槽。组为空时退化为「所有装了混响算法的槽」, 免得 Tap 变成空动作。"""
     with FX_SYNC_LOCK:
         g = [int(s) for s in FX_SYNC.get("group", [])
              if isinstance(s, (int, float)) and 1 <= int(s) <= FX_COUNT]
     if g:
-        return sorted(set(g))
-    return [s for s in range(1, FX_COUNT + 1) if fx_algo(s)]
+        return sorted(set(g) & set(_reverb_slots()))
+    return _reverb_slots()
+
+
+def _time_seconds_to_param(algo, seconds):
+    """Tap 换算出的秒数 → 该算法 decay 参数的原生值（注意 GATE/RVRS 的 decay 是毫秒）。"""
+    if algo.get("tunit") == "ms":
+        return float(seconds) * 1000.0
+    return float(seconds)
 
 
 def _fx_time_fanout(src_slot, seconds, source):
@@ -3491,32 +4474,41 @@ def _fx_time_fanout(src_slot, seconds, source):
     if mode == "console" and source == "manual":
         return                      # 台面主导: 软件改动不外扩
     algo = fx_algo(src_slot)
-    if not algo:
+    if not algo or "time" not in algo:
         return
-    kind = fx_par_kind(algo["time"])
+    target_val = _time_seconds_to_param(algo, seconds)
     spread = []
     for s in fx_sync_targets():
-        if s == src_slot or not fx_algo(s):
+        if s == src_slot:
             continue
-        cur = get_value(kind, s)
-        if cur is not None and abs(float(cur) - float(seconds)) < 1e-4:
+        a = fx_algo(s)
+        if not a or "time" not in a:
+            continue
+        cur = get_value(fx_par_kind(a["time"]), s)
+        if cur is not None and abs(float(cur) - target_val) < 1e-4:
             continue                # 已经一样了, 不写也不转发 (省一次 OSC)
-        set_value(kind, s, float(seconds), source="action")
+        set_value(fx_par_kind(a["time"]), s, target_val, source="action")
         spread.append(s)
     if spread:
-        log("REVERB 同步[%s] FX%d 时间 %.2fs → 组内 %s" % (
+        log("REVERB 同步[%s] FX%d %.2fs → 组内 %s" % (
             FX_MODE_LABEL.get(mode, mode), src_slot, float(seconds),
             "/".join("FX%d" % s for s in spread)))
 
 
 def fx_set_param(slot, field, value, source="manual"):
-    """混响槽的统一写入口。field ∈ type/on/mix/name/time/predelay/damp。
+    """效果槽的统一写入口。
+
+    field ∈ 槽级字段（type/on/mix/name）∪ 当前算法的任意参数 field
+    （如 decay/predelay/damping/speed/…，见 fxlib 标定表）∪ 'parNN' 直接寻址。
+    语义别名 time/predelay/damp 继续可用（按算法别名映射到正确 par 号）。
     返回 (写入后的值, 错误串)。
 
-    ⚠️ 两道控台门禁（与 §4 控台驱动层同一条原则：不支持的写入要**拒绝并记日志**，
+    ⚠️ 三道控台门禁（与 §4 控台驱动层同一条原则：不支持的写入要**拒绝并记日志**，
     而不是静默地写到一个"看起来像"的地方）：
       · 控台未标定 → 整个效果槽不可写
-      · 控台没有 fx_par 能力 → 时间/预延迟/阻尼不可写（槽级 type/on/mix 仍可）
+      · 控台没有 fx_par 能力 → 算法参数不可写（槽级 type/on/mix 仍可）
+      · 算法参数号/field 不在该算法的标定表里 → 拒写（不猜地址）
+      · heavy 算法（混响/延迟/组合/变调）只能进 FX 1–4（真台 DSP 限制）
     """
     try:
         slot = int(slot)
@@ -3535,6 +4527,9 @@ def fx_set_param(slot, field, value, source="manual"):
         t = str(value).strip().upper()
         if t and t not in fx_algos():
             return None, "算法 %s 不在「%s」的效果库中" % (t, prof.label)
+        if t and not slot_allows(slot, t):
+            return None, ("算法 %s 只能装入 FX %s（真台 DSP 算力限制），"
+                          "FX%d 装不了" % (t, "/".join(map(str, FX_SLOTS_HEAVY)), slot))
         set_value("fx_type", slot, t, source)
         return get_value("fx_type", slot), None
     if field == "name":
@@ -3549,12 +4544,17 @@ def fx_set_param(slot, field, value, source="manual"):
     if "fx_par" not in prof.caps:
         log("FX 拒绝写入 %s: 控台「%s」未标定效果参数地址" % (field, prof.label))
         return None, "控台「%s」未标定效果参数地址，无法写入 %s" % (prof.label, field)
-    algo = fx_algo(slot)
-    if not algo or field not in ("time", "predelay", "damp"):
-        return None, "slot has no reverb" if not algo else "unknown field"
-    p = algo[field]
-    v = fx_par_clamp(slot, p, value)
-    set_value(fx_par_kind(p), slot, v, source)   # 若是时间参数, set_value 内部会触发铺散
+    pnum = fx_field_par(slot, field)
+    if pnum is None:
+        algo = fx_algo(slot)
+        if not algo:
+            return None, "slot has no effect"
+        return None, "算法 %s 没有参数 %s" % (algo["label"], field)
+    spec = fx_par_spec(slot, pnum)
+    v = fx_par_clamp(slot, pnum, value)
+    if spec["kind"] == "i":
+        v = int(round(v))
+    set_value(fx_par_kind(pnum), slot, v, source)   # 若是时间参数, set_value 内部会触发铺散
     return v, None
 
 
@@ -3574,19 +4574,34 @@ def fx_tap_apply():
     written = []
     for s in fx_sync_targets():
         algo = fx_algo(s)
-        if not algo:
+        if not algo or "time" not in algo:
             continue
-        clamped = min(max(secs, algo["tmin"]), algo["tmax"])
+        want = _time_seconds_to_param(algo, secs)
+        clamped = min(max(want, algo["tmin"]), algo["tmax"])
         # source="action": 一次性写全部目标, 不再触发铺散 (铺散是给"单点改动"用的)
         set_value(fx_par_kind(algo["time"]), s, clamped, source="action")
-        written.append({"slot": s, "time": clamped, "clamped": abs(clamped - secs) > 1e-4})
+        written.append({"slot": s, "time": clamped, "clamped": abs(clamped - want) > 1e-4})
     log("REVERB Tap %.1f BPM × %s%s = %.2fs → %d 个混响槽" % (
         bpm, note, "(附点)" if dotted else "", secs, len(written)))
     return secs, written
 
 
 def fx_state():
-    """给网页/API 的混响快照。算法库一律来自**当前控台驱动**。"""
+    """给网页/API 的效果器快照。算法库一律来自**当前控台驱动**。
+
+    每槽返回：槽级字段（type/label/name/on/mix/cat/heavy/loaded/known）+
+    该算法**全部参数**的当前值（按 fxlib 标定表的 par 号顺序，含
+    field/label/unit/kind/lo/hi/opts/value/unset），前端据此动态渲染控件，
+    不需要为每种算法写死 UI。
+
+    ⚠️ 未设置语义：换算法后 par 只播种标定过的默认值（REVERB_DEFAULTS），
+    其余参数保持"未设置"—— value=None / unset=True。**不拿 0.0 冒充**：
+    大量参数 lo>0（频率/时间），0 越界会把滑杆骗到一端，还让人以为台子
+    真是那个值。OSC 线上对未设置参数仍回 0.0（get_value 的既有行为）。
+
+    遗留键 time/predelay/damp/tmin/tmax/tunit: 旧版 UI 与三端过渡用，
+    按 alias 从 params 推导；算法没有对应别名（非混响类）时为 None。
+    """
     lib = fx_algos()
     slots = []
     with STATE.lock:
@@ -3596,17 +4611,40 @@ def fx_state():
             algo = lib.get(t)
             item = {"slot": s, "type": t, "label": algo["label"] if algo else "",
                     "name": fx["name"], "on": int(fx["on"]), "mix": float(fx["mix"]),
-                    "time": None, "predelay": None, "damp": None,
-                    "tmin": algo["tmin"] if algo else None,
-                    "tmax": algo["tmax"] if algo else None,
+                    "cat": algo.get("cat", "") if algo else "",
+                    "heavy": bool(algo.get("heavy")) if algo else False,
                     # loaded = 槽里有东西；known = 这个算法属于**本控台**的效果库。
                     # 两者必须分开：真台上可能装着本库没有的算法，那叫"未知"，
                     # 不叫"空槽" —— 页面要能区分，否则用户看不到真台上发生了什么。
-                    "loaded": bool(t), "known": bool(algo)}
+                    "loaded": bool(t), "known": bool(algo),
+                    "params": [], "alias": {},
+                    "time": None, "predelay": None, "damp": None,
+                    "tmin": None, "tmax": None, "tunit": None}
             if algo:
-                item["time"] = float(fx["par"].get(algo["time"], 0.0))
-                item["predelay"] = float(fx["par"].get(algo["predelay"], 0.0))
-                item["damp"] = float(fx["par"].get(algo["damp"], 0.0))
+                for p in algo["params"]:
+                    raw = fx["par"].get(p["p"])
+                    if raw is None:
+                        v, unset = None, True
+                    else:
+                        v, unset = float(raw), False
+                        if p["kind"] == "i":
+                            v = int(round(v))
+                    item["params"].append({
+                        "p": p["p"], "field": p["field"], "label": p["label"],
+                        "unit": p["unit"], "kind": p["kind"],
+                        "lo": p["lo"], "hi": p["hi"], "opts": p["opts"],
+                        "value": v, "unset": unset})
+                for a in ("time", "predelay", "damp"):
+                    if a in algo:
+                        item["alias"][a] = algo[a]
+                        # 遗留键: 未设置的参数同样给 None (旧 UI 靠它显示"空槽")
+                        raw = fx["par"].get(algo[a])
+                        if raw is not None:
+                            item[a] = float(raw)
+                if "time" in algo:
+                    item["tmin"] = algo.get("tmin")
+                    item["tmax"] = algo.get("tmax")
+                    item["tunit"] = algo.get("tunit", "s")
             slots.append(item)
     with FX_SYNC_LOCK:
         sync = dict(FX_SYNC)
@@ -5729,9 +6767,13 @@ def load_user_config():
             SHOW_CARDS[:] = d["cards"]
         # 预设（台面快照）: 以前只存在内存里重启即丢，现在跟配置一起落盘。
         # 配置文件可手改 → 必须逐条消毒，脏数据最多被丢弃，不能把回归变成乱写。
+        # ⚠️ skipped_bad_scope 在条件块**外面**初始化: 缺 presets 键的配置
+        #    (手写/旧版) 以前会在这里 UnboundLocalError → 被外层 except 当成
+        #    "文件损坏"备份+重置, 用户数据静默全丢。出厂示例卡自带 legacy
+        #    fades, 迁移段每次启动都会跑到这个变量, 撞上的概率并不低。
+        skipped_bad_scope = 0
         if isinstance(d.get("presets"), list):
             loaded = []
-            skipped_bad_scope = 0
             for s in d["presets"][:8]:
                 if not isinstance(s, dict) or not isinstance(s.get("data"), dict):
                     continue
@@ -5828,7 +6870,17 @@ def load_user_config():
                     if not (1 <= s <= FX_COUNT) or not isinstance(sv, dict):
                         continue
                     t = str(sv.get("type", "")).upper()
+                    # 旧版配置存的是旧枚举名 (PLATE/CHAMBER/VINTAGE), v1.6 起
+                    # 枚举名迁移为 PLAT/CHAM/VREV —— 按 par 号存的**数值**不用动,
+                    # 只把 type 名过一道别名表, 否则合法数据会被判"未知算法"丢掉。
+                    t = FX_TYPE_ALIAS.get(t, t)
                     if t and t not in fx_algos():
+                        continue
+                    # 手改/旧配置可能把 heavy 算法塞进 FX5-8 (API 层拦得住,
+                    # 配置文件拦不住) —— 真台 DSP 装不下的状态不该被恢复出来。
+                    if t and not slot_allows(s, t):
+                        log("配置里的 FX%d 算法 %s 只能装入 FX %s, 已跳过该槽"
+                            % (s, t, "/".join(map(str, FX_SLOTS_HEAVY))))
                         continue
                     STATE.fx[s]["type"] = t
                     STATE.fx[s]["name"] = str(sv.get("name", ""))[:12]
@@ -5839,18 +6891,31 @@ def load_user_config():
                     par = sv.get("par")
                     if isinstance(par, dict):
                         STATE.fx[s]["par"] = {}
+                        algo = fx_algos().get(t)
                         for pk, pv in par.items():
                             try:
-                                # ⚠️ _finite: 旧版配置可能已被 NaN 污染（Python 的
-                                #    json.load 默认接受字面量 NaN），不清洗就带着毒进 STATE
-                                STATE.fx[s]["par"][int(pk)] = _finite(pv, 0.0)
+                                pn = int(pk)
                             except (TypeError, ValueError):
-                                pass
+                                continue
+                            if algo is not None and not any(
+                                    q["p"] == pn for q in algo["params"]):
+                                continue   # 该算法没这个参数号 (旧数据/手改)
+                            # ⚠️ _finite: 旧版配置可能已被 NaN 污染（Python 的
+                            #    json.load 默认接受字面量 NaN），不清洗就带着毒进 STATE。
+                            #    再按**新标定量程**钳一回: 旧表把阻尼当 0–1 存,
+                            #    新标定是 1000–20000 Hz, 不钳就会有个越界值卡在
+                            #    状态里 (界面滑杆直接飞到一端)。
+                            v = _finite(pv, 0.0)
+                            if algo is not None:
+                                v = fx_par_clamp(s, pn, v)
+                            STATE.fx[s]["par"][pn] = v
         if isinstance(d.get("bridgeTarget"), str) and d["bridgeTarget"].strip():
             BRIDGE_TARGET[0] = d["bridgeTarget"].strip()
         log("已加载自定义配置: %d 个控制键, %d 张演出卡片%s"
             % (len(QUICK_KEYS), len(SHOW_CARDS),
                (", 记住的真台地址 %s" % BRIDGE_TARGET[0]) if BRIDGE_TARGET[0] else ""))
+        return True          # ⚠️ 别丢: 成功路径曾经直落结尾返 None, 调用方
+        #                   `if not load_user_config()` 会把"加载成功"当失败
     except FileNotFoundError:
         return True          # 没有配置文件 = 全新装机, 正常
     except Exception as e:
@@ -6483,6 +7548,10 @@ WEB_PAGE = r"""<!DOCTYPE html>
     background:linear-gradient(180deg,#3d4454,#22262f);border:1px solid #4d566b}
   .fxval{font-size:12px;width:70px;text-align:right;flex:none;color:var(--txt);
          font-variant-numeric:tabular-nums}
+  /* 枚举参数用下拉 (选项是真台 enum 索引的中文名, 比滑杆直观) */
+  .fxrow select.fxsel{flex:1;min-width:0;height:28px;border-radius:6px;
+    background:var(--card2);color:var(--txt);border:1px solid var(--line);
+    font-size:12px;padding:0 6px}
   .fx-tag{margin-left:auto;white-space:nowrap}
   #fxGroup .chip{display:inline-flex;align-items:center;gap:5px;padding:6px 10px;
                  border:1px solid var(--line);border-radius:9px;background:var(--card2);font-size:12px}
@@ -7747,7 +8816,7 @@ const ST_PARAMS={ch:['fader','on'].concat(CH_PARAM_UI.map(r=>r.f)),
   send:['send_level','send_on','send_tap']};
 const ST_PLABEL={fader:'推子 %',on:'开关 (1开启/0静音)',mix:'混合比 (0-1)',
   time:'混响时间 (秒)',predelay:'预延迟 (毫秒)',damp:'阻尼 (0-1)',
-  type:'算法 (HALL/PLATE/ROOM/…)',name:'名称 (文本)',load:'切场景'};
+  type:'算法 (效果库 61 种, 见效果器页)',name:'名称 (文本)',load:'切场景'};
 // 12 个通道参数沿用面板里的中文名与单位 (两边只有这一处定义, 不会漂)
 CH_PARAM_UI.forEach(r=>{ ST_PLABEL[r.f]=r.l+(r.u?(' ('+r.u+')'):''); });
 function numIn(id,label,def){
@@ -8241,29 +9310,63 @@ function fxNoteSecs(bpm, note, dotted){
   bpm = Math.min(Math.max(+bpm || 120, 30), 300);
   return beats * 60 / bpm;
 }
+// 参数控件不再为每种算法写死 —— 服务端按标定表下发全部参数 (field/label/
+// unit/lo/hi/kind/opts/value/unset), 这里统一渲染: 数值=滑杆, 枚举=下拉。
+// 未设置 (unset) 的参数不拿 0 冒充: 大量参数 lo>0 (频率/时间), 0 越界会把
+// 滑杆骗到一端 —— 显示"未设置", 拖一下才真正写上台面。
+function fxStep(lo, hi){
+  const span = Math.abs((+hi) - (+lo)) || 1;
+  for (const st of [100, 50, 10, 5, 1, 0.5, 0.1, 0.05, 0.01, 0.001])
+    if (span / st <= 200) return st;
+  return 1000;
+}
+function fxDec(lo, hi){
+  const st = fxStep(lo, hi);
+  return st >= 1 ? 0 : (st >= 0.1 ? 1 : 2);
+}
 function fxParsHTML(s, st){
-  if (!st || st.time === null || st.time === undefined){
-    // ⚠️ 只读服务端下发的 S.fx.console / S.fx.algos —— 本页前端没有 profile()，
-    //    早前这里调了它，直接 ReferenceError 把 updFx 打断。
+  if (!st || !st.loaded){
     const lib = (S && S.fx && S.fx.algos) || {};
     const c = (S && S.fx && S.fx.console) || {};
     if (c.locked || !Object.keys(lib).length)
       return '<div class="ds" style="margin:0">控台「' + esc(c.label || '当前控台')
            + '」的效果库还没标定，这个槽暂时不可用（写入会被拒绝并记日志）。</div>';
     const names = Object.keys(lib).map(k => esc(lib[k].label)).join(' / ');
-    return '<div class="ds" style="margin:0">这个槽没装混响算法 — 把左边的类型选成 '
-         + names + ' 就能调混响。</div>';
+    return '<div class="ds" style="margin:0">空槽 — 把上面的类型选成 ' + names + ' 中的一个。</div>';
   }
-  const row = (f, lab, unit, lo, hi, step, val, fmt) =>
-    `<div class="fxrow"><span class="fxlab">${lab}</span>
-      <input type="range" class="fxsl" data-f="${f}" min="${lo}" max="${hi}" step="${step}" value="${val}"
-        oninput="fxSlide(${s},'${f}',this)">
-      <span class="fxval" data-v="${f}">${fmt(val)}${unit}</span></div>`;
-  const n2 = v => v.toFixed(2), n0 = v => String(Math.round(v));
-  return row('time','混响时间',' s', st.tmin, st.tmax, 0.01, st.time, n2)
-       + row('predelay','预延迟',' ms', 0, 200, 1, st.predelay, n0)
-       + row('damp','阻尼','', 0, 1, 0.01, st.damp, n2)
-       + row('mix','混合比','', 0, 1, 0.01, st.mix, n2);
+  if (!st.known)
+    return '<div class="ds" style="margin:0">⚠ 真台上这个槽装的是「' + esc(st.type)
+         + '」，不在本控台「' + esc(((S.fx.console || {}).label) || '当前')
+         + '」的效果库里 — 没有标定参数，这个槽只能看不能调。</div>';
+  const clamp0 = (lo, hi) => Math.min(Math.max(0, +lo), +hi);
+  const rows = (st.params || []).map(p => {
+    const unit = p.unit ? ' ' + p.unit : '';
+    if (p.kind === 'i'){
+      const opts = (p.opts || []).map((o, i) =>
+        `<option value="${i}">${esc(o)}</option>`).join('');
+      const unset = (p.value === null || p.value === undefined);
+      const shown = unset ? '未设置'
+        : esc(String((p.opts || [])[p.value] != null ? (p.opts)[p.value] : p.value));
+      return `<div class="fxrow"><span class="fxlab">${esc(p.label)}</span>
+        <select class="fxsel" data-f="${p.field}" onchange="fxSet(${s},'${p.field}',+this.value)">
+          ${unset ? '<option value="">未设置</option>' : ''}${opts}</select>
+        <span class="fxval" data-v="${p.field}">${shown}</span></div>`;
+    }
+    const dec = fxDec(p.lo, p.hi), step = fxStep(p.lo, p.hi);
+    const unset = (p.value === null || p.value === undefined);
+    const val = unset ? clamp0(p.lo, p.hi) : +p.value;
+    return `<div class="fxrow"><span class="fxlab">${esc(p.label)}</span>
+      <input type="range" class="fxsl" data-f="${p.field}" data-unit="${esc(p.unit || '')}"
+        data-dec="${dec}" min="${p.lo}" max="${p.hi}" step="${step}" value="${val.toFixed(dec)}"
+        oninput="fxSlide(${s},'${p.field}',this)">
+      <span class="fxval" data-v="${p.field}">${unset ? '未设置' : val.toFixed(dec) + unit}</span></div>`;
+  }).join('');
+  // mix 是槽级字段 (不在算法参数表里), 固定排在最后
+  return rows + `<div class="fxrow"><span class="fxlab">混合比</span>
+      <input type="range" class="fxsl" data-f="mix" data-unit="" data-dec="2"
+        min="0" max="1" step="0.01" value="${(+st.mix).toFixed(2)}"
+        oninput="fxSlide(${s},'mix',this)">
+      <span class="fxval" data-v="mix">${(+st.mix).toFixed(2)}</span></div>`;
 }
 function fxCardHTML(s){
   const opts = fxAlgoOpts();
@@ -8315,9 +9418,12 @@ function updFx(){
     if (document.activeElement !== nm && nm.value !== st.name) nm.value = st.name;
     card.querySelector('.fx-on').classList.toggle('on', !st.on);
     const tag = card.querySelector('.fx-tag');
-    // 下拉里已经有算法名了，这里改显示该算法的时间范围（Tap 换算会被钳制到这个区间）
-    const txt = st.known ? (st.tmin + '–' + st.tmax + ' s')
-                         : (st.loaded ? '⚠ 未知算法（不在本控台效果库）' : '空槽');
+    // 下拉里已经有算法名了，这里显示该算法的时间范围（Tap 换算会被钳制到这个区间）；
+    // 非混响类算法没有时间参数，退而显示参数个数
+    const txt = !st.loaded ? '空槽'
+               : (!st.known ? '⚠ 未知算法（不在本控台效果库）'
+               : (st.time != null ? (st.tmin + '–' + st.tmax + ' ' + (st.tunit || 's'))
+                                  : (((st.params || []).length) + ' 个参数')));
     if (tag.textContent !== txt) tag.textContent = txt;
     // 算法变了就重建这一张卡的参数区 (range 的 min/max 随算法范围变)
     const pars = card.querySelector('.fxpars');
@@ -8328,13 +9434,26 @@ function updFx(){
       pars.dataset.algo = sig;
       pars.innerHTML = fxParsHTML(st.slot, st);
     }
-    const n2 = v => v.toFixed(2), n0 = v => String(Math.round(v));
-    [['time', n2, ' s'], ['predelay', n0, ' ms'], ['damp', n2, ''], ['mix', n2, '']].forEach(([f, fmt, unit]) => {
-      const sl = pars.querySelector(`.fxsl[data-f="${f}"]`); if (!sl) return;
-      const v = st[f]; if (v === null || v === undefined) return;
-      if (document.activeElement !== sl && +sl.value !== +fmt(v)) sl.value = +fmt(v);
-      const ve = pars.querySelector(`.fxval[data-v="${f}"]`);
-      if (ve) ve.textContent = fmt(v) + unit;
+    // 值刷新: 算法参数 + 槽级 mix 一把抓。enum 是下拉, 数值是滑杆;
+    // 未设置 (value=null) 只更新文字, 不动滑杆 (滑杆停在钳制后的 0 位)。
+    (st.params || []).concat([{field: 'mix', unit: '', kind: 'f', lo: 0, hi: 1,
+                               value: st.mix}]).forEach(p => {
+      if (p.kind === 'i'){
+        const sel = pars.querySelector(`.fxsel[data-f="${p.field}"]`);
+        if (sel && document.activeElement !== sel)
+          sel.value = (p.value === null || p.value === undefined) ? '' : p.value;
+        return;
+      }
+      const sl = pars.querySelector(`.fxsl[data-f="${p.field}"]`); if (!sl) return;
+      const ve = pars.querySelector(`.fxval[data-v="${p.field}"]`);
+      if (p.value === null || p.value === undefined){
+        if (ve) ve.textContent = '未设置';
+        return;
+      }
+      const dec = fxDec(p.lo, p.hi);
+      const shown = (+p.value).toFixed(dec);
+      if (document.activeElement !== sl && +sl.value !== +shown) sl.value = shown;
+      if (ve) ve.textContent = shown + (p.unit ? ' ' + p.unit : '');
     });
   });
   const msel = $('#fxMode');
@@ -8438,8 +9557,9 @@ function fxSlide(s, field, el){
   const v = +el.value;
   const card = document.getElementById('fxc-' + s);
   const ve = card && card.querySelector(`.fxval[data-v="${field}"]`);
-  if (ve) ve.textContent = (field === 'predelay' ? String(Math.round(v)) : v.toFixed(2))
-    + (field === 'time' ? ' s' : (field === 'predelay' ? ' ms' : ''));
+  // 小数位/单位在渲染时写进 dataset (不同算法量程差几个数量级, 不能写死)
+  if (ve) ve.textContent = v.toFixed(+(el.dataset.dec === undefined ? 2 : el.dataset.dec))
+    + (el.dataset.unit ? ' ' + el.dataset.unit : '');
   fxPend[s + '|' + field] = {slot:s, field:field, value:v};
   if (!fxPendT) fxPendT = setTimeout(() => {
     fxPendT = null;

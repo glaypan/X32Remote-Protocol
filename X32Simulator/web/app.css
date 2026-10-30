@@ -189,6 +189,10 @@
     background:linear-gradient(180deg,#3d4454,#22262f);border:1px solid #4d566b}
   .fxval{font-size:12px;width:70px;text-align:right;flex:none;color:var(--txt);
          font-variant-numeric:tabular-nums}
+  /* 枚举参数用下拉 (选项是真台 enum 索引的中文名, 比滑杆直观) */
+  .fxrow select.fxsel{flex:1;min-width:0;height:28px;border-radius:6px;
+    background:var(--card2);color:var(--txt);border:1px solid var(--line);
+    font-size:12px;padding:0 6px}
   .fx-tag{margin-left:auto;white-space:nowrap}
   #fxGroup .chip{display:inline-flex;align-items:center;gap:5px;padding:6px 10px;
                  border:1px solid var(--line);border-radius:9px;background:var(--card2);font-size:12px}
