@@ -6,7 +6,7 @@ import struct
 import threading
 import time
 
-from .consts import DEFAULT_NAMES, FADER_ADDR, FX_COUNT, KIND_LABEL, ON_ADDR, REVERB_DEFAULTS
+from .consts import DEFAULT_NAMES, FADER_ADDR, FX_COUNT, FX_SWITCH_DEFAULTS, KIND_LABEL, ON_ADDR, REVERB_DEFAULTS  # noqa: E501
 from .kinds import fx_par_kind, fx_par_num, kind_group
 from .logbus import EVENTS, EVT_SEQ, log
 from .osc import OscMsg, encode_bundle, encode_message
@@ -273,9 +273,11 @@ def set_value(kind, idx, value, source="manual"):
             fx = STATE.fx[idx]
             if kind == "fx_type":
                 fx["type"] = str(value).upper()[:8]
-                # 换算法要重新铺一套该算法的默认参数, 否则参数索引会串味
+                # 换算法要重新铺一套该算法的默认参数, 否则参数索引会串味。
+                # 只有标定过出厂值的算法才播种 (混响十种 + 图示均衡四种),
+                # 其余保持未设置 —— 不猜数值, 见 consts.FX_SWITCH_DEFAULTS。
                 if fx["type"] in fx_algos():
-                    fx["par"] = dict(REVERB_DEFAULTS.get(fx["type"], {}))
+                    fx["par"] = dict(FX_SWITCH_DEFAULTS.get(fx["type"], {}))
                 else:
                     fx["par"] = {}
             elif kind == "fx_name": fx["name"] = str(value)[:12]

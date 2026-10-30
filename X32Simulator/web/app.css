@@ -193,6 +193,9 @@
   .fxrow select.fxsel{flex:1;min-width:0;height:28px;border-radius:6px;
     background:var(--card2);color:var(--txt);border:1px solid var(--line);
     font-size:12px;padding:0 6px}
+  /* 参数多的算法 (GEQ 32 项等) 宽屏双列; 手机窄屏仍单列, 不硬挤 */
+  .fxgrid{display:grid;grid-template-columns:1fr;gap:0 14px}
+  @media (min-width:760px){ .fxgrid{grid-template-columns:1fr 1fr} }
   .fx-tag{margin-left:auto;white-space:nowrap}
   #fxGroup .chip{display:inline-flex;align-items:center;gap:5px;padding:6px 10px;
                  border:1px solid var(--line);border-radius:9px;background:var(--card2);font-size:12px}

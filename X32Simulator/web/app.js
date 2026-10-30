@@ -1271,13 +1271,25 @@ updNkIdx(); updCaParams(); renderActs(); updNmIdx();
 // 时间 = 拍数 × 60/BPM (附点 ×1.5); 实际写入由服务端按算法范围钳制。
 // 算法清单不再写死 —— 由服务端按**当前控台驱动**下发 (S.fx.algos)。
 // 换控台 = 换一套效果库, 下拉选项跟着重建; 这样"选的就是这台台子上真有的效果"。
+// 61 种算法平铺成一个长列表根本找不到东西 → 按分类分组 (optgroup);
+// heavy 算法带"仅FX1-4"标记, 免得用户选了才被拒。
 function fxAlgoOpts(emptyLabel){
   const lib = (S && S.fx && S.fx.algos) || {};
   const keys = Object.keys(lib);
   if (!keys.length) return '<option value="">— 效果库未就绪 —</option>';
   const el = (emptyLabel === undefined) ? '— 空槽 —' : emptyLabel;
-  return `<option value="">${esc(el)}</option>`
-       + keys.map(k => `<option value="${esc(k)}">${esc(lib[k].label)}</option>`).join('');
+  const catLab = ((S.fx && S.fx.console) || {}).catLabel || {};
+  const byCat = {};
+  keys.forEach(k => { const c = lib[k].cat || 'misc'; (byCat[c] = byCat[c] || []).push(k); });
+  const order = Object.keys(catLab);
+  const groups = Object.keys(byCat).sort((a, b) => {
+    const ia = order.indexOf(a), ib = order.indexOf(b);
+    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+  }).map(c => '<optgroup label="' + esc(catLab[c] || c) + '">'
+      + byCat[c].map(k => '<option value="' + esc(k) + '">' + esc(lib[k].label)
+          + (lib[k].heavy ? '（仅FX1-4）' : '') + '</option>').join('')
+      + '</optgroup>').join('');
+  return '<option value="">' + esc(el) + '</option>' + groups;
 }
 const FX_BEATS = {'1/16':0.25, '1/8':0.5, '1/4':1, '1/2':2, '1':4, '2':8};
 const FX_NOTE_OPTS = [['1/16','1/16 音符'], ['1/8','1/8 音符'], ['1/4','1/4 音符'],
@@ -1292,9 +1304,12 @@ function fxNoteSecs(bpm, note, dotted){
 // unit/lo/hi/kind/opts/value/unset), 这里统一渲染: 数值=滑杆, 枚举=下拉。
 // 未设置 (unset) 的参数不拿 0 冒充: 大量参数 lo>0 (频率/时间), 0 越界会把
 // 滑杆骗到一端 —— 显示"未设置", 拖一下才真正写上台面。
+// ⚠️ 步长候选必须**升序**取第一个满足"≤200 档"的: 曾经写成降序, 于是永远
+//    返回 100 —— 0.2–5.0 的混响时间滑杆 step=100, 浏览器把 3.5 吸附回 0.2,
+//    界面看着正常、值根本拖不动 (只能靠交互测试抓出来)。
 function fxStep(lo, hi){
   const span = Math.abs((+hi) - (+lo)) || 1;
-  for (const st of [100, 50, 10, 5, 1, 0.5, 0.1, 0.05, 0.01, 0.001])
+  for (const st of [0.001, 0.01, 0.05, 0.1, 0.5, 1, 5, 10, 50, 100])
     if (span / st <= 200) return st;
   return 1000;
 }
@@ -1309,8 +1324,12 @@ function fxParsHTML(s, st){
     if (c.locked || !Object.keys(lib).length)
       return '<div class="ds" style="margin:0">控台「' + esc(c.label || '当前控台')
            + '」的效果库还没标定，这个槽暂时不可用（写入会被拒绝并记日志）。</div>';
-    const names = Object.keys(lib).map(k => esc(lib[k].label)).join(' / ');
-    return '<div class="ds" style="margin:0">空槽 — 把上面的类型选成 ' + names + ' 中的一个。</div>';
+    // 库小就列名字 (5 种混响的时代), 库大 (61 种) 只报数 —— 全列出来是刷屏
+    const names = Object.keys(lib);
+    const hint = names.length <= 12
+      ? ('空槽 — 把上面的类型选成 ' + names.map(k => esc(lib[k].label)).join(' / ') + ' 中的一个。')
+      : ('空槽 — 从上面的类型下拉选一个算法（' + names.length + ' 种, 按分类分组）。');
+    return '<div class="ds" style="margin:0">' + hint + '</div>';
   }
   if (!st.known)
     return '<div class="ds" style="margin:0">⚠ 真台上这个槽装的是「' + esc(st.type)
@@ -1340,7 +1359,10 @@ function fxParsHTML(s, st){
       <span class="fxval" data-v="${p.field}">${unset ? '未设置' : val.toFixed(dec) + unit}</span></div>`;
   }).join('');
   // mix 是槽级字段 (不在算法参数表里), 固定排在最后
-  return rows + `<div class="fxrow"><span class="fxlab">混合比</span>
+  // 参数多于 8 个的算法 (GEQ 32 项 / P1A2 20 项…) 在宽屏排双列, 窄屏仍单列
+  const body = (st.params || []).length > 8
+    ? '<div class="fxgrid">' + rows + '</div>' : rows;
+  return body + `<div class="fxrow"><span class="fxlab">混合比</span>
       <input type="range" class="fxsl" data-f="mix" data-unit="" data-dec="2"
         min="0" max="1" step="0.01" value="${(+st.mix).toFixed(2)}"
         oninput="fxSlide(${s},'mix',this)">

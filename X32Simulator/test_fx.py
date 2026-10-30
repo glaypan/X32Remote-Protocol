@@ -235,6 +235,9 @@ check("未知算法拒写", "不在" in (fx_set_param(6, "type", "NOPE")[1] or "
 check("heavy 算法拒进 FX5 (DSP 限制)",
       "只能装入" in (fx_set_param(5, "type", "HALL")[1] or ""))
 check("轻量算法可进 FX5 (GEQ)", fx_set_param(5, "type", "GEQ") == ("GEQ", None))
+check("GEQ 播种平直出厂态 (32 频段全 0 dB, 无未设置)",
+      all(p["value"] == 0.0 and not p["unset"]
+          for p in fx_state()["slots"][4]["params"]))
 check("卸载 (type='') 合法", fx_set_param(5, "type", "") == ("", None))
 check("写 decay=9.9 → 钳到 5.0 并落库", fx_set_param(1, "decay", 9.9)[0] == 5.0)
 check("写 par03=-5 → 钳到 lo=2.0", fx_set_param(1, "par03", -5)[0] == 2.0)

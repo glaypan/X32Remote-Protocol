@@ -42,6 +42,16 @@ REVERB_DEFAULTS = {
     "RVRS":  {1: 20.0, 2: 400.0},
 }
 
+# 图示/参数均衡的出厂态: 全部频段 0 dB (平直)。真台加载 GEQ/TEQ 即此状态,
+# 且 0 在 [-15,15] 量程内 —— 不播种的话 32/64 个频段全是"未设置", 页面上一片
+# 未设置, 用户根本没法用。同样**未经真机核对** (与 REVERB_DEFAULTS 同款约定)。
+_EQ_FLAT = ("GEQ", "GEQ2", "TEQ", "TEQ2")
+EQ_FLAT_DEFAULTS = {a: {p: 0.0 for p in range(1, X32_FX_ALGOS[a]["n"] + 1)}
+                    for a in _EQ_FLAT}
+# 切换算法时播种的出厂默认值 (按 par 号)。查不到的算法 → 空 (全部未设置)。
+FX_SWITCH_DEFAULTS = dict(REVERB_DEFAULTS)
+FX_SWITCH_DEFAULTS.update(EQ_FLAT_DEFAULTS)
+
 
 # Tap 定拍 / 时值换算
 TAP_INTERVAL_MIN = 0.15      # 两次点击靠得比这还近 → 抖动, 忽略
