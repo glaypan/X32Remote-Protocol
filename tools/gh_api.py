@@ -31,6 +31,7 @@ if not TOKEN:
 
 PROXIES = [
     None,                          # 直连
+    "http://127.0.0.1:8340",       # 当前会话代理（git push 实测可用）
     "http://127.0.0.1:7897",       # gh.cmd 内置代理
     "http://127.0.0.1:9960",       # 环境变量代理
 ]
@@ -158,6 +159,12 @@ def main():
         if d:
             for a in d["assets"]:
                 print("  %-42s %10d %s" % (a["name"], a["size"], a["state"]))
+    elif cmd == "runs":
+        repo = sys.argv[2] if len(sys.argv) > 2 else REPO
+        for r in api_get("/repos/%s/actions/runs?per_page=5" % repo).get("workflow_runs", []):
+            print("%-28s %-12s %-10s %s  %s" % (
+                r["name"], r["status"], r["conclusion"] or "-", r["head_branch"] or r["head_sha"][:7],
+                r["html_url"]))
     elif cmd == "create":
         tag, title, body_file = sys.argv[2], sys.argv[3], sys.argv[4]
         cmd_create(tag, title, body_file, sys.argv[5:])
