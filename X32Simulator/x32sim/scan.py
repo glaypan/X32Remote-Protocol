@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """x32sim/scan — 局域网控台发现 (广播 /xinfo)"""
 
+import os
 import socket
 import time
 
@@ -100,11 +101,23 @@ def _dedupe_found(items):
     return out
 
 
+def _scan_port():
+    """扫描目标端口: 默认与自己的 OSC 端口一致 (真台固定 10023)。
+
+    X32_SCAN_PORT **只给回归测试用** —— 当 10023 被本机别的服务(如用户的
+    mock_console.py)占着时, 测试组起不来就只能静默失败。生产环境永远不设。"""
+    try:
+        return int(os.environ.get("X32_SCAN_PORT", "") or UDP_PORT[0])
+    except ValueError:
+        return UDP_PORT[0]
+
+
 def scan_consoles(timeout=1.4):
     """发现局域网内的 X32/M32 (以及本机其他模拟器实例)。
     先发广播 /xinfo —— 这是 X32 官方发现指令, X32-Edit 就是靠它找台子的;
     广播被路由器拦截时退化为按 /24 逐地址单播扫一遍。"""
     found = {}
+    scan_port = _scan_port()
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
@@ -123,7 +136,7 @@ def scan_consoles(timeout=1.4):
     try:
         for target in (["255.255.255.255"] + _local_subnets()):
             try:
-                sock.sendto(pkt, (target, 10023))
+                sock.sendto(pkt, (target, scan_port))
             except OSError:
                 pass
         _scan_collect(sock, found, timeout)
@@ -134,7 +147,7 @@ def scan_consoles(timeout=1.4):
                 hosts += ["%s.%d" % (base, n) for n in range(1, 255)]
             for host in hosts:
                 try:
-                    sock.sendto(pkt, (host, 10023))
+                    sock.sendto(pkt, (host, scan_port))
                 except OSError:
                     pass
             _scan_collect(sock, found, timeout + 0.6)
