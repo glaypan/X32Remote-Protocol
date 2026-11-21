@@ -23,6 +23,17 @@ from .timeline import SCHEDULES, SHOW_STATE
 # 以下代码自 x32_simulator.py 逐字搬运 (B1 模块化), 仅头部导入为本工具生成
 # ------------------------------------------------------------
 
+# 非输入组的行只带"推子/静音/声像"三项进 /api/state。
+# 为什么: Bus/Matrix/Main 加上均衡 6 段 + 动态 + 插入后, 每行 45~50 个字段,
+# 全部塞进快照会多出约 26KB —— 而快照是**任何一处改动就整包重发**的,
+# 拖一次推子就是 4 次/秒 × 26KB。详情页改用 /api/params 按需拉。
+_LEAN_FIELDS = ("fader", "on", "pan")
+
+
+def _lean(row):
+    return {k: v for k, v in row.items() if k in _LEAN_FIELDS}
+
+
 def snapshot_state(since_log=None):
     """聚合全量状态。since_log 给定时, log 字段只返回增量 (网页 250ms 轮询省带宽)。"""
     levels = compute_levels()
@@ -44,13 +55,13 @@ def snapshot_state(since_log=None):
             names[g] = {str(i): STATE.names.get((g, i), "") for i in range(1, cnt + 1)}
     return {
         "ch": {str(i): STATE.ch[i] for i in range(1, 33)},
-        "bus": {str(i): STATE.bus[i] for i in range(1, 17)},
+        "bus": {str(i): _lean(STATE.bus[i]) for i in range(1, 17)},
         "dca": {str(i): STATE.dca[i] for i in range(1, 9)},
-        "auxin": {str(i): STATE.auxin[i] for i in range(1, 7)},
+        "auxin": {str(i): _lean(STATE.auxin[i]) for i in range(1, 7)},
         "usb": {str(i): STATE.usb[i] for i in range(1, 3)},
-        "fxret": {str(i): STATE.fxret[i] for i in range(1, 9)},
-        "mtx": {str(i): STATE.mtx[i] for i in range(1, 7)},
-        "main": STATE.main,
+        "fxret": {str(i): _lean(STATE.fxret[i]) for i in range(1, 9)},
+        "mtx": {str(i): _lean(STATE.mtx[i]) for i in range(1, 7)},
+        "main": _lean(STATE.main),
         "meters": levels,
         "scene": scene,
         "fx": fx_state(),

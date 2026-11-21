@@ -86,7 +86,12 @@ SET_KINDMAP = {"ch": {"fader": "ch_fader", "on": "ch_on"},
                "usb": {"fader": "usb_fader", "on": "usb_on"},
                "fxret": {"fader": "fxret_fader", "on": "fxret_on"},
                "mtx": {"fader": "mtx_fader", "on": "mtx_on"}}
-SET_KINDMAP["ch"].update({sp.field: sp.kind for sp in CH_PARAM_SPECS})
+# 每一组的处理参数都进白名单: 组间能力不同 (Bus 没有门, FX 返回没有 EQ),
+# 由 params.GROUP_PARAM_SPECS 决定, 这里不写死任何一项。
+from .params import GROUP_PARAM_SPECS  # noqa: E402  (放在字典构造后, 避免循环)
+for _g, _specs in GROUP_PARAM_SPECS.items():
+    if _g in SET_KINDMAP:
+        SET_KINDMAP[_g].update({sp.field: sp.kind for sp in _specs})
 # 发送是二维目标: 参数名与 kind 同名 (send_level/send_on/send_tap),
 # 调用方用 (group="send", param="send_level", idx=通道, bus=Bus) 寻址,
 # HTTP/动作层负责 send_pack 打包。**故意不用 level/on/tap 这种短名** ——
@@ -130,8 +135,10 @@ PRESET_GROUP_PARAMS = {
     "send": ("send_level", "send_on", "send_tap"),
 }
 # 输入通道的参数白名单跟上登记表 (增益/反相/延时/低切/插入/门)
-PRESET_GROUP_PARAMS["ch"] = tuple(PRESET_GROUP_PARAMS["ch"]) + tuple(
-    sp.field for sp in CH_PARAM_SPECS)
+for _g, _specs in GROUP_PARAM_SPECS.items():
+    if _g in PRESET_GROUP_PARAMS:
+        PRESET_GROUP_PARAMS[_g] = tuple(PRESET_GROUP_PARAMS[_g]) + tuple(
+            sp.field for sp in _specs)
 PRESET_GROUP_LABEL = {"ch": "输入通道", "bus": "Mix Bus", "dca": "DCA",
                       "auxin": "Aux In", "usb": "USB", "fxret": "FX 返回",
                       "mtx": "Matrix", "main": "主输出", "fx": "FX 机架",
@@ -140,7 +147,8 @@ PRESET_PARAM_LABEL = {"fader": "推子", "on": "静音", "name": "名称",
                       "dca": "DCA 归属", "slot": "整槽", "scene": "当前场景",
                       "send_level": "发送电平", "send_on": "发送开关",
                       "send_tap": "发送取点"}
-PRESET_PARAM_LABEL.update({sp.field: sp.label for sp in CH_PARAM_SPECS})
+for _specs in GROUP_PARAM_SPECS.values():
+    PRESET_PARAM_LABEL.update({sp.field: sp.label for sp in _specs})
 PRESET_DEFAULT_SCOPE = {
     "groups": ["ch", "bus", "dca", "auxin", "usb", "fxret", "mtx", "main"],
     "params": ["fader", "on"],
@@ -179,7 +187,9 @@ SET_PARAMS = {
     "send": ("send_level", "send_on", "send_tap"),
 }
 # 通用设置动作的通道参数白名单 (与 SET_KINDMAP["ch"] 同源)
-SET_PARAMS["ch"] = tuple(SET_PARAMS["ch"]) + tuple(sp.field for sp in CH_PARAM_SPECS)
+for _g, _specs in GROUP_PARAM_SPECS.items():
+    if _g in SET_PARAMS:
+        SET_PARAMS[_g] = tuple(SET_PARAMS[_g]) + tuple(sp.field for sp in _specs)
 SET_GROUP_LABEL = {"ch": "通道", "bus": "Bus", "dca": "DCA", "main": "主输出",
                    "auxin": "AuxIn", "usb": "USB", "fxret": "FX返回",
                    "mtx": "Matrix", "fx": "FX", "scene": "场景",
@@ -189,7 +199,8 @@ SET_PARAM_LABEL = {"fader": "推子", "on": "开关", "type": "算法", "name": 
                    "damp": "阻尼", "load": "调用",
                    "send_level": "发送电平", "send_on": "发送开关",
                    "send_tap": "发送取点"}
-SET_PARAM_LABEL.update({sp.field: sp.label for sp in CH_PARAM_SPECS})
+for _specs in GROUP_PARAM_SPECS.values():
+    SET_PARAM_LABEL.update({sp.field: sp.label for sp in _specs})
 
 
 CURVES = ("linear", "ease_out", "ease_in", "smooth")

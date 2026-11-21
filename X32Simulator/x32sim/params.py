@@ -274,114 +274,209 @@ _SPECS.extend(_GATE)
 #   filter/type 是 enum int[0..8]，filter/f 是 logf[20,20000,201]。
 # 排列顺序 = 协议表的顺序 (on→mode→det→env→thr→ratio→knee→mgain→attack→
 # hold→release→pos→keysrc→mix→auto→filter)，前端控件表按同一顺序展开。
-_DYN = (
-    ParamSpec("ch_dyn_on", "ch", "dyn_on", "/ch/%02d/dyn/on",
-              vtype="bool", default=0, label="压缩"),
-    ParamSpec("ch_dyn_mode", "ch", "dyn_mode", "/ch/%02d/dyn/mode",
-              vtype="int", lo=0, hi=1, default=0, dec=0, labels=("COMP", "EXP"),
-              label="动态类型", unverified=True,
-              note="enum int[0..1] {COMP,EXP}; 出厂值需真机确认, 暂取 COMP"),
-    ParamSpec("ch_dyn_det", "ch", "dyn_det", "/ch/%02d/dyn/det",
-              vtype="int", lo=0, hi=1, default=0, dec=0, labels=("PEAK", "RMS"),
-              label="检波方式", unverified=True,
-              note="enum int[0..1] {PEAK,RMS}; 出厂值需真机确认, 暂取 PEAK"),
-    ParamSpec("ch_dyn_env", "ch", "dyn_env", "/ch/%02d/dyn/env",
-              vtype="int", lo=0, hi=1, default=0, dec=0, labels=("LIN", "LOG"),
-              label="包络", unverified=True,
-              note="enum int[0..1] {LIN,LOG}; 出厂值需真机确认, 暂取 LIN"),
-    ParamSpec("ch_dyn_thr", "ch", "dyn_thr", "/ch/%02d/dyn/thr",
-              vtype="float", lo=-80.0, hi=0.0, default=-20.0, step=0.5,
-              label="压缩阈值", unit="dB", dec=1,
-              note="官方 [-80,0,0.5] / 社区 [-60,0,0.5] 不一致 → 取宽; "
-                   "回读若被真台钳到 -60 说明该固件下限更低"),
-    ParamSpec("ch_dyn_ratio", "ch", "dyn_ratio", "/ch/%02d/dyn/ratio",
-              vtype="int", lo=1.1, hi=100.0, default=4.0, dec=1, unit=":1",
-              enum=(1.1, 1.3, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 7.0, 10.0, 20.0, 100.0),
-              enum_wire="index", label="压缩比",
-              note="线上枚举 [0..11] → {1.1,1.3,1.5,2,2.5,3,4,5,7,10,20,100}; "
-                   "本地存**比值**(4.0=4:1), 出入线由 param_wire/param_from_wire 换算"),
-    ParamSpec("ch_dyn_knee", "ch", "dyn_knee", "/ch/%02d/dyn/knee",
-              vtype="float", lo=0.0, hi=5.0, default=2.0, step=1.0,
-              label="拐点", dec=0),
-    ParamSpec("ch_dyn_mgain", "ch", "dyn_mgain", "/ch/%02d/dyn/mgain",
-              vtype="float", lo=0.0, hi=24.0, default=0.0, step=0.5,
-              label="补偿增益", unit="dB", dec=1),
-    ParamSpec("ch_dyn_attack", "ch", "dyn_attack", "/ch/%02d/dyn/attack",
-              vtype="float", lo=0.0, hi=120.0, default=10.0, step=1.0,
-              label="启动时间", unit="ms", dec=0),
-    ParamSpec("ch_dyn_hold", "ch", "dyn_hold", "/ch/%02d/dyn/hold",
-              vtype="float", lo=0.02, hi=2000.0, default=20.0, logsteps=101,
-              label="保持时间", unit="ms", dec=1, unverified=True,
-              note="logf[0.02,2000,101] ms; 出厂值需真机确认, 暂取 20 ms"),
-    ParamSpec("ch_dyn_release", "ch", "dyn_release", "/ch/%02d/dyn/release",
-              vtype="float", lo=5.0, hi=4000.0, default=200.0, logsteps=101,
-              label="释放时间", unit="ms", dec=0,
-              note="手册 logf[5,4000,101] ms"),
-    ParamSpec("ch_dyn_pos", "ch", "dyn_pos", "/ch/%02d/dyn/pos",
-              vtype="bool", default=1, label="压缩位置", labels=("PRE", "POST"),
-              note="enum{PRE,POST} → 0/1 (相对 EQ)"),
-    ParamSpec("ch_dyn_keysrc", "ch", "dyn_keysrc", "/ch/%02d/dyn/keysrc",
-              vtype="int", lo=0, hi=64, default=0, dec=0, labels=_KEYS,
-              label="压缩侧链源", unverified=True,
-              note="int[0..64] {OFF,In01..32,Aux1..6,USB L/R,Fx1L..Fx4R,Bus01..16}; "
-                   "**不是 enum**, 真台只吃整数; 出厂值需真机确认"),
-    ParamSpec("ch_dyn_mix", "ch", "dyn_mix", "/ch/%02d/dyn/mix",
-              vtype="float", lo=0.0, hi=100.0, default=100.0, step=5.0,
-              label="干湿比", unit="%", dec=0,
-              note="手册 linf[0,100,5] %, 100 = 全湿"),
-    ParamSpec("ch_dyn_auto", "ch", "dyn_auto", "/ch/%02d/dyn/auto",
-              vtype="bool", default=0, label="自动增益", unverified=True,
-              note="enum{OFF,ON}; 自动补偿增益; 出厂值需真机确认, 暂取关"),
-    ParamSpec("ch_dyn_filter_on", "ch", "dyn_filter_on",
-              "/ch/%02d/dyn/filter/on",
-              vtype="bool", default=0, label="压缩侧链滤波", unverified=True,
-              note="出厂值需真机确认, 暂取关"),
-    ParamSpec("ch_dyn_filter_type", "ch", "dyn_filter_type",
-              "/ch/%02d/dyn/filter/type",
-              vtype="int", lo=0, hi=8, default=0, dec=0, labels=_FILTER_TYPES,
-              label="侧链滤波类型", unverified=True,
-              note="enum int[0..8] {LC6,LC12,HC6,HC12,1.0,2.0,3.0,5.0,10.0}"),
-    ParamSpec("ch_dyn_filter_f", "ch", "dyn_filter_f",
-              "/ch/%02d/dyn/filter/f",
-              vtype="float", lo=20.0, hi=20000.0, default=1000.0, logsteps=201,
-              label="侧链滤波频率", unit="Hz", dec=0, unverified=True,
-              note="logf[20,20000,201] Hz; 出厂值需真机确认, 暂取 1 kHz"),
+#
+# ⚠️ 各组的参数**不是同一套** —— 这是真台的事实，不是我们偷懒：
+#   ch  : 18 项 (含 keysrc)
+#   bus : 18 项 (含 keysrc)
+#   mtx : 17 项 (**协议表里 mtx 段没有 dyn/keysrc** —— 矩阵没有侧链源可选)
+#   main: 15 项 (**没有 keysrc / mix / auto** —— 主输出动态是精简版)
+#   若哪天真机回读证明某项其实存在，加一行即可 —— 但绝不能先"顺手补上"：
+#   多一个控件就多一处"拖了没反应"，比少一个控件难查得多。
+_DYN_FIELDS = (
+    # (field 后缀, vtype, lo, hi, default, step, logsteps, enum, labels, label, unit, dec, 备注)
+    ("on", "bool", 0, 1, 0, 0, 0, None, None, "压缩", "", 0, ""),
+    ("mode", "int", 0, 1, 0, 0, 0, None, ("COMP", "EXP"), "动态类型", "", 0,
+     "enum int[0..1] {COMP,EXP}"),
+    ("det", "int", 0, 1, 0, 0, 0, None, ("PEAK", "RMS"), "检波方式", "", 0,
+     "enum int[0..1] {PEAK,RMS}"),
+    ("env", "int", 0, 1, 0, 0, 0, None, ("LIN", "LOG"), "包络", "", 0,
+     "enum int[0..1] {LIN,LOG}"),
+    ("thr", "float", -80.0, 0.0, -20.0, 0.5, 0, None, None, "压缩阈值", "dB", 1,
+     "官方 [-80,0,0.5] / 社区 [-60,0,0.5] 不一致 → 取宽"),
+    ("ratio", "int", 1.1, 100.0, 4.0, 0, 0,
+     (1.1, 1.3, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 7.0, 10.0, 20.0, 100.0),
+     None, "压缩比", ":1", 1, "线上枚举 0..11, 本地存比值"),
+    ("knee", "float", 0.0, 5.0, 2.0, 1.0, 0, None, None, "拐点", "", 0, ""),
+    ("mgain", "float", 0.0, 24.0, 0.0, 0.5, 0, None, None, "补偿增益", "dB", 1, ""),
+    ("attack", "float", 0.0, 120.0, 10.0, 1.0, 0, None, None, "启动时间", "ms", 0, ""),
+    ("hold", "float", 0.02, 2000.0, 20.0, 0, 101, None, None, "保持时间", "ms", 1,
+     "logf[0.02,2000,101] ms"),
+    ("release", "float", 5.0, 4000.0, 200.0, 0, 101, None, None, "释放时间", "ms", 0,
+     "手册 logf[5,4000,101] ms"),
+    ("pos", "bool", 0, 1, 1, 0, 0, None, ("PRE", "POST"), "压缩位置", "", 0,
+     "enum{PRE,POST} → 0/1 (相对 EQ)"),
+    ("keysrc", "int", 0, 64, 0, 0, 0, None, None, "压缩侧链源", "", 0,
+     "int[0..64]; **不是 enum**, 真台只吃整数"),
+    ("mix", "float", 0.0, 100.0, 100.0, 5.0, 0, None, None, "干湿比", "%", 0,
+     "手册 linf[0,100,5] %, 100 = 全湿"),
+    ("auto", "bool", 0, 1, 0, 0, 0, None, None, "自动增益", "", 0,
+     "enum{OFF,ON}; 自动补偿增益"),
+    ("filter_on", "bool", 0, 1, 0, 0, 0, None, None, "侧链滤波", "", 0, ""),
+    ("filter_type", "int", 0, 8, 0, 0, 0, None, tuple(_FILTER_TYPES),
+     "侧链滤波类型", "", 0, "enum int[0..8]"),
+    ("filter_f", "float", 20.0, 20000.0, 1000.0, 0, 201, None, None,
+     "侧链滤波频率", "Hz", 0, "logf[20,20000,201] Hz"),
 )
-_SPECS.extend(_DYN)
+_DYN_SKIP = {"mtx": ("keysrc",), "main": ("keysrc", "mix", "auto")}
+# main 只有一路, 地址里没有路号 (/main/st/dyn/thr 而不是 /main/01/dyn/thr)
+GADDR = {"main": "/main/st", "fxret": "/fxrtn"}
 
-# ---- 通道均衡: 4 段参量 ------------------------------------------------
-# 通道 EQ 是 4 段 (Bus/Matrix/Main 才是 6 段)，每段 4 个参数 = 16。
-# 频段号**写死在地址模板里** (每个 band 一个独立 kind) —— 这样 idx 仍然只是通道号,
+
+def gaddr(g, tail, idx=True):
+    """组 + 子路径 → 地址模板。idx=False 表示没有路号 (main)。"""
+    pre = GADDR.get(g, "/" + g)
+    return "%s/%s" % (pre, tail) if not idx else "%s/%%02d/%s" % (pre, tail)
+
+
+def _dyn_specs(g):
+    """给一个通道组生成 dyn 参数 (地址 /<g>/NN/dyn/<项>)。"""
+    out = []
+    skip = _DYN_SKIP.get(g, ())
+    for (f, vt, lo, hi, dv, st, lg, en, lb, lab, unit, dec, note) in _DYN_FIELDS:
+        if f in skip:
+            continue
+        # filter_on/type/f 的真地址是 dyn/**filter**/on —— 多一层, 不能拼成 dyn/filter_on
+        _suf = ("filter/" + f[7:]) if f.startswith("filter_") else f
+        out.append(ParamSpec(
+            "%s_dyn_%s" % (g, f), g, "dyn_" + f,
+            gaddr(g, "dyn/" + _suf, idx=(g != "main")),
+            vtype=vt, lo=lo, hi=hi, default=dv, step=st, logsteps=lg,
+            enum=en, enum_wire=("index" if en is not None else "value"),
+            labels=lb, label=lab, unit=unit, dec=dec,
+            unverified=("出厂值需真机确认" in note) or vt != "bool" and f in
+                       ("hold", "keysrc", "filter_type", "filter_f", "mode", "det", "env"),
+            note=note))
+    return out
+
+
+_DYN = tuple(_dyn_specs("ch"))
+_SPECS.extend(_DYN)
+for _g in ("bus", "mtx", "main"):
+    _SPECS.extend(_dyn_specs(_g))
+
+
+# ---- 均衡: 4 段 / 6 段 ---------------------------------------------------
+# 输入通道与 Aux In 是 **4 段**；Bus / Matrix / Main 是 **6 段**。这是真台的硬规格,
+# 不是配置项 —— 前端按本表自动长控件, 所以"Bus 上多出来的两个频段"不需要另写界面。
+# 频段号**写死在地址模板里** (每段一个独立 kind) —— 这样 idx 仍然只是通道号,
 # 不需要在行字典里做二维打包, 预设/卡片/桥接全部沿用同一条路径。
 #   f: logf[20,20000,201] Hz  |  g: linf[-15,15,0.25] dB  |  q: logf[10,0.3,72] (反向)
 _EQ_TYPES = ("LCut", "LShv", "PEQ", "VEQ", "HShv", "HCut")
-_EQ_DEFAULT_F = (100.0, 500.0, 2000.0, 8000.0)      # 四段落的合理起点, 非手册值
-_EQ_DEFAULT_Q = (2.0, 2.0, 2.0, 2.0)
-_SPECS.append(ParamSpec("ch_eq_on", "ch", "eq_on", "/ch/%02d/eq/on",
-                        vtype="bool", default=0, label="均衡"))
-for _b in range(1, 5):
+# 各频段的"合理起点" (非手册值): 4 段按人声常用点, 6 段把低频再拆细一点。
+_EQ_DEFAULT_F = {4: (100.0, 500.0, 2000.0, 8000.0),
+                 6: (80.0, 200.0, 600.0, 2000.0, 6000.0, 12000.0)}
+_EQ_BANDS = {"ch": 4, "bus": 6, "auxin": 4, "mtx": 6, "main": 6}
+
+
+def _eq_specs(g):
+    """一个通道组的整组 EQ 参数 (eq_on + 每段 4 项)。"""
+    n = _EQ_BANDS[g]
+    fs = _EQ_DEFAULT_F[n]
+    out = [ParamSpec("%s_eq_on" % g, g, "eq_on",
+                     gaddr(g, "eq/on", idx=(g != "main")),
+                     vtype="bool", default=0, label="均衡")]
+    for b in range(1, n + 1):
+        out.append(ParamSpec(
+            "%s_eq%d_type" % (g, b), g, "eq%d_type" % b,
+            gaddr(g, "eq/%d/type" % b, idx=(g != "main")),
+            vtype="int", lo=0.0, hi=5.0, default=2, dec=0, labels=_EQ_TYPES,
+            label="EQ%d 类型" % b,
+            note="enum int[0..5] {LCut,LShv,PEQ,VEQ,HShv,HCut}; 索引即线上值; "
+                 "mtx 01/06 在真台上还能选 BU6..LR24 (0..13), 这里只给公共 6 档"))
+        out.append(ParamSpec(
+            "%s_eq%d_f" % (g, b), g, "eq%d_f" % b,
+            gaddr(g, "eq/%d/f" % b, idx=(g != "main")),
+            vtype="float", lo=20.0, hi=20000.0, default=fs[b - 1],
+            logsteps=201, label="EQ%d 频率" % b, unit="Hz", dec=0,
+            note="手册 logf[20,20000,201] Hz"))
+        out.append(ParamSpec(
+            "%s_eq%d_g" % (g, b), g, "eq%d_g" % b,
+            gaddr(g, "eq/%d/g" % b, idx=(g != "main")),
+            vtype="float", lo=-15.0, hi=15.0, default=0.0, step=0.25,
+            label="EQ%d 增益" % b, unit="dB", dec=2,
+            note="手册 linf[-15,15,0.25] dB"))
+        out.append(ParamSpec(
+            "%s_eq%d_q" % (g, b), g, "eq%d_q" % b,
+            gaddr(g, "eq/%d/q" % b, idx=(g != "main")),
+            vtype="float", lo=0.3, hi=10.0, default=2.0,
+            logsteps=72, logdesc=True, label="EQ%d Q值" % b, dec=2,
+            note="手册 logf[10,0.3,72] —— 表是**从 10 到 0.3 递减**的 (Q 越小频带越宽); "
+                 "lo/hi 这里写自然上下界 0.3..10, 递减方向由 logdesc 表达"))
+    return out
+
+
+for _g in ("ch", "bus", "auxin", "mtx", "main"):
+    _SPECS.extend(_eq_specs(_g))
+
+# ---- 插入 (通道 → FX/AUX 插入点) -----------------------------------------
+# ch 的插入在 _CH_EXTRA 里 (与增益/低切同批进表); Bus/Matrix/Main 的插入项
+# 地址与量程**完全相同**, 只是组名不同 —— 所以这里只补后三组。
+_INS_TARGETS_ = _INS_TARGETS
+
+
+def _ins_specs(g):
+    return [
+        ParamSpec("%s_ins_on" % g, g, "ins_on",
+                  gaddr(g, "insert/on", idx=(g != "main")),
+                  vtype="bool", default=0, label="插入"),
+        ParamSpec("%s_ins_pos" % g, g, "ins_pos",
+                  gaddr(g, "insert/pos", idx=(g != "main")),
+                  vtype="bool", default=0, label="插入位置", labels=("PRE", "POST"),
+                  unverified=True,
+                  note="enum{PRE,POST} → 0/1; 出厂位置需真机确认, 暂取 PRE"),
+        ParamSpec("%s_ins_sel" % g, g, "ins_sel",
+                  gaddr(g, "insert/sel", idx=(g != "main")),
+                  vtype="int", lo=0, hi=22, default=0, dec=0, labels=_INS_TARGETS_,
+                  label="插入目标", unverified=True,
+                  note="enum int[0..22] {OFF, FX1L..FX8R, AUX1..6}; "
+                       "出厂值需真机确认, 暂取 OFF"),
+    ]
+
+
+for _g in ("bus", "mtx", "main"):
+    _SPECS.extend(_ins_specs(_g))
+
+# ---- 声像 (pan) ---------------------------------------------------------
+# 协议类型是 **linf [-100, 100, 2]** —— 不是 -1..1。写成 -1..1 的话, 界面拖到
+# 最左发 -1, 真台收到 -1 (相当于中间偏左 1%), 用户会觉得"pan 坏了"。
+# Matrix 没有 pan (矩阵输出是单声道), 所以不在本表里 —— 少一个死控件。
+# ⚠️ 内部组名仍是 fxret (卡片/预设存的是 kind), 但**地址**必须是 fxrtn。
+OSC_GROUP = {"fxret": "fxrtn"}
+for _g in ("ch", "bus", "auxin", "fxret"):
     _SPECS.append(ParamSpec(
-        "ch_eq%d_type" % _b, "ch", "eq%d_type" % _b,
-        "/ch/%%02d/eq/%d/type" % _b,
-        vtype="int", lo=0.0, hi=5.0, default=2, dec=0, labels=_EQ_TYPES,
-        label="EQ%d 类型" % _b,
-        note="enum int[0..5] {LCut,LShv,PEQ,VEQ,HShv,HCut}; 索引即线上值"))
-    _SPECS.append(ParamSpec(
-        "ch_eq%d_f" % _b, "ch", "eq%d_f" % _b, "/ch/%%02d/eq/%d/f" % _b,
-        vtype="float", lo=20.0, hi=20000.0, default=_EQ_DEFAULT_F[_b - 1],
-        logsteps=201, label="EQ%d 频率" % _b, unit="Hz", dec=0,
-        note="手册 logf[20,20000,201] Hz"))
-    _SPECS.append(ParamSpec(
-        "ch_eq%d_g" % _b, "ch", "eq%d_g" % _b, "/ch/%%02d/eq/%d/g" % _b,
-        vtype="float", lo=-15.0, hi=15.0, default=0.0, step=0.25,
-        label="EQ%d 增益" % _b, unit="dB", dec=2,
-        note="手册 linf[-15,15,0.25] dB"))
-    _SPECS.append(ParamSpec(
-        "ch_eq%d_q" % _b, "ch", "eq%d_q" % _b, "/ch/%%02d/eq/%d/q" % _b,
-        vtype="float", lo=0.3, hi=10.0, default=_EQ_DEFAULT_Q[_b - 1],
-        logsteps=72, logdesc=True, label="EQ%d Q值" % _b, dec=2,
-        note="手册 logf[10,0.3,72] —— 表是**从 10 到 0.3 递减**的 (Q 越小频带越宽); "
-             "lo/hi 这里写自然上下界 0.3..10, 递减方向由 logdesc 表达"))
+        "%s_pan" % _g, _g, "pan", "/%s/%%02d/mix/pan" % OSC_GROUP.get(_g, _g),
+        vtype="float", lo=-100.0, hi=100.0, default=0.0, step=2.0,
+        label="声像", dec=0,
+        note="linf[-100,100,2]; 0=居中, -100=全左, +100=全右"))
+# 主输出只有一路, 地址里没有路号 (/main/st/mix/pan)
+_SPECS.append(ParamSpec(
+    "main_pan", "main", "pan", "/main/st/mix/pan",
+    vtype="float", lo=-100.0, hi=100.0, default=0.0, step=2.0,
+    label="声像", dec=0, note="linf[-100,100,2]; 主输出的左右平衡"))
+
+# ---- Aux In 的前置增益 ---------------------------------------------------
+# Aux In 只有数字 trim, 没有话放 (输入是线路电平) —— 也没有门/动态/插入。
+_SPECS.append(ParamSpec(
+    "auxin_trim", "auxin", "trim", "/auxin/%02d/preamp/trim",
+    vtype="float", lo=-18.0, hi=18.0, default=0.0, step=0.25,
+    label="增益", unit="dB", dec=2,
+    note="手册 [-12,12] / 非官方 [-18,18] → 取宽; 与 ch 同一套 trim 语义"))
+_SPECS.append(ParamSpec(
+    "auxin_invert", "auxin", "invert", "/auxin/%02d/preamp/invert",
+    vtype="bool", default=0, label="反相"))
+
+# ---- 话放模拟增益 (/headamp) --------------------------------------------
+# ⚠️ 这才是**模拟增益**; /ch/NN/preamp/trim 是数字微调。两者是串联的:
+#    声音 = 话放增益 → 数字 trim → 推子。
+# 地址是 **三位补零** (/headamp/000/gain), 与通道的两位不同 —— 写错的症状是
+# "界面在动、台子没反应"。索引默认按本地 XLR 直连映射 (headamp 000..031 = ch 01..32);
+# 若现场用了 AES50 分体接口箱, 这个映射不成立, 需要在台面配置里改。
+_SPECS.append(ParamSpec(
+    "headamp_gain", "headamp", "gain", "/headamp/%03d/gain",
+    vtype="float", lo=-12.0, hi=60.0, default=0.0, step=0.5,
+    label="话放增益", unit="dB", dec=1, unverified=True,
+    note="linf[-12,60,0.5] dB; 三位补零地址; 索引假定本地 XLR 直连 (000..031 → ch01..32), "
+         "AES50 接口箱时映射不同"))
 
 # ---- 发送 (通道 → Mix Bus) ---------------------------------------------
 # ⚠️ 这是全表唯一的**二维**参数: 目标 = (通道, Bus)。128 个组合 × 3 个字段,
@@ -391,90 +486,154 @@ for _b in range(1, 5):
 #      · **不进 /api/state**, 由 /api/sends?ch=N 按需取 (见 httpapi)。
 #    tap 就是"推子前后/取点"本身: enum int[0..5] {IN/LC, PreEQ, PostEQ,
 #    PreFader, PostFader, Sub} —— HON wiki 与官方手册一致。
-SEND_BUS = 16
+SEND_BUS = 16          # 兼容旧名: = 输入通道的发送路数 (16 个 Mix Bus)
+
+# 各组的发送目标数 + 打包基址
+#   ch    → Bus 1-16
+#   auxin → Bus 1-16   (辅助输入也要能送监听)
+#   fxret → Bus 1-16   (混响送回耳返是现场常规操作)
+#   bus   → Matrix 1-6
+#   main  → Matrix 1-6
+# 基址分段的理由: 卡片/预设/HTTP 都把发送目标存成**一个整数 idx**, 改成元组
+# 会炸掉所有存档。用 1000 起步的分段, 既保持 ch 的 1..512 原样, 又不会撞号。
+SEND_GROUPS = (("ch", 32, 16, 0), ("auxin", 6, 16, 1000),
+               ("fxret", 8, 16, 2000), ("bus", 16, 6, 3000), ("main", 1, 6, 4000))
+SEND_BUSES = {g: n for g, _src, n, _base in SEND_GROUPS}
+SEND_BASE = {g: base for g, _src, _n, base in SEND_GROUPS}
+SEND_SRC_MAX = {g: src for g, src, _n, _base in SEND_GROUPS}
 
 
-def send_pack(ch, bus):
-    """(通道, Bus) → 一维键 (1..512)。用**通道主序**打包, 便于按通道整段遍历。"""
-    return (int(ch) - 1) * SEND_BUS + int(bus)
+def send_group_of(idx):
+    """打包键 → 组名。落在哪个基址段就是哪一组 (ch 段从 0 起, 1..512)。"""
+    try:
+        i = int(idx)
+    except (TypeError, ValueError):
+        return "ch"
+    best = "ch"
+    for g in ("ch", "auxin", "fxret", "bus", "main"):
+        if i > SEND_BASE[g]:
+            best = g
+    return best
+
+
+def send_pack(ch, bus, group="ch"):
+    """(源, 目标) → 一维键。按**源主序**打包, 便于按通道整段遍历。"""
+    return SEND_BASE.get(group, 0) + (int(ch) - 1) * SEND_BUSES.get(group, SEND_BUS) \
+        + int(bus)
 
 
 def send_unpack(idx):
-    """send_pack 的逆运算。越界编号会给出 (0, …) 或 (>32, …), 由调用方判。"""
-    return (int(idx) - 1) // SEND_BUS + 1, (int(idx) - 1) % SEND_BUS + 1
+    """send_pack 的逆运算 → (组, 源号, 目标号)。越界编号由调用方判。"""
+    g = send_group_of(idx)
+    rel = int(idx) - SEND_BASE[g] - 1
+    n = SEND_BUSES[g]
+    return g, rel // n + 1, rel % n + 1
 
 
 # 官方协议: /ch/../mix/01/type enum {<-EQ, EQ->, PRE, POST, GRP}
 # (实测固件按字面值发 0..4；线上是枚举索引)
 _SEND_TAP_LABELS = ("<-EQ", "EQ->", "PRE", "POST", "GRP")
-_SEND = (
-    ParamSpec("send_level", "send", "level", "/ch/%02d/mix/%02d/level",
-              vtype="float", lo=0.0, hi=1.0, default=0.0, dec=3,
-              linsteps=161, label="发送电平", unit="%", nidx=2, dims=SEND_BUS,
-              unverified=True,
-              note="协议类型 **level**: [0..1(+10dB), 161 档] —— 161 个点就是 "
-                   "f=k/160 (k=0..160) 的等分, 不是等 dB; dB 换算见 level_db()。"
-                   "出厂值需真机确认, 暂取 0(-∞)"),
-    ParamSpec("send_on", "send", "on", "/ch/%02d/mix/%02d/on",
-              vtype="bool", default=0, label="发送开关", nidx=2, dims=SEND_BUS,
-              unverified=True,
-              note="出厂值需真机确认, 暂取关"),
-    ParamSpec("send_tap", "send", "tap", "/ch/%02d/mix/%02d/type",
-              vtype="int", lo=0.0, hi=4.0, default=3, dec=0,
-              labels=_SEND_TAP_LABELS, label="发送取点",
-              nidx=2, dims=SEND_BUS, unverified=True,
-              note="enum int[0..4] {<-EQ,EQ->,PRE,POST,GRP}; "
-                   "**只对奇数 Bus 定义** (协议表), 真台按 1&2 / 3&4 成对共享取点 → "
-                   "本地把偶数 Bus 统一落到奇数 Bus, 只留一份真相; "
-                   "线上用整数索引 (真台也接受字符串, 见 --tap-wire); "
-                   "出厂默认需真机确认, 暂取 POST"),
-)
-_SPECS.extend(_SEND)
+
+
+def _send_specs(g, buses, has_tap):
+    """一组的发送参数。kind 前缀: ch 保持历史的 send_*, 其余加组名前缀。"""
+    k = "send" if g == "ch" else g + "_send"
+    # 主输出只有一路, 地址里没有源号: /main/st/mix/01/level
+    src_t = "/main/st/mix/%02d/" if g == "main" \
+        else "/%s/%%02d/mix/%%02d/" % OSC_GROUP.get(g, g)
+    out = [
+        ParamSpec(k + "_level", "send", "level",
+                  src_t + "level",
+                  vtype="float", lo=0.0, hi=1.0, default=0.0, dec=3,
+                  linsteps=161, label="发送电平", unit="%", nidx=2, dims=buses,
+                  unverified=True,
+                  note="协议类型 **level**: [0..1(+10dB), 161 档] —— 161 个点就是 "
+                       "f=k/160 (k=0..160) 的等分, 不是等 dB; dB 换算见 level_db()。"
+                       "出厂值需真机确认, 暂取 0(-∞)"),
+        ParamSpec(k + "_on", "send", "on",
+                  src_t + "on",
+                  vtype="bool", default=0, label="发送开关", nidx=2, dims=buses,
+                  unverified=True,
+                  note="出厂值需真机确认, 暂取关"),
+    ]
+    if has_tap:
+        out.append(ParamSpec(
+            k + "_tap", "send", "tap", src_t + "type",
+            vtype="int", lo=0.0, hi=4.0, default=3, dec=0,
+            labels=_SEND_TAP_LABELS, label="发送取点",
+            nidx=2, dims=buses, unverified=True,
+            note="enum int[0..4] {<-EQ,EQ->,PRE,POST,GRP}; "
+                 "**只对奇数 Bus 定义** (协议表), 真台按 1&2 / 3&4 成对共享取点 → "
+                 "本地把偶数 Bus 统一落到奇数 Bus, 只留一份真相; "
+                 "线上用整数索引 (真台也接受字符串, 见 --tap-wire); "
+                 "出厂默认需真机确认, 暂取 POST"))
+    return out
+
+
+for _g, _src, _nb, _base in SEND_GROUPS:
+    # Bus / Main 的发送只有 on + level —— 协议表里没有 /mix/NN/type。
+    _SPECS.extend(_send_specs(_g, _nb, _g not in ("bus", "main")))
 
 PARAM_SPECS = {sp.kind: sp for sp in _SPECS}
 
-# 新增的通道参数 (不含推子/静音) —— presets/前端面板/OSC 日志都遍历它
-CH_PARAM_SPECS = tuple(sp for sp in _SPECS if sp.group == "ch" and not sp.push)
+# 各组的分组规模 (地址通配展开、卡片目标上限、/api/state 循环共用)
+GROUP_SIZE = {"ch": 32, "bus": 16, "dca": 8, "auxin": 6, "usb": 2,
+              "fxret": 8, "mtx": 6, "main": 1, "headamp": 32}
+
+# 某组的**行参数** (推子/静音之外的处理参数)。前端面板、预设白名单、卡片白名单
+# 全部从这里取 —— 各组能力不同, 谁都不许自己维护一份副本。
+GROUP_PARAM_SPECS = {}
+for _sp in _SPECS:
+    if _sp.push or _sp.group in ("send",):
+        continue
+    GROUP_PARAM_SPECS.setdefault(_sp.group, []).append(_sp)
+GROUP_PARAM_SPECS = {g: tuple(v) for g, v in GROUP_PARAM_SPECS.items()}
+
+# 新增的通道参数 (不含推子/静音) —— 历史名, 保留给现有调用方
+CH_PARAM_SPECS = GROUP_PARAM_SPECS["ch"]
 # 发送参数 (二维, 单独一张 STATE.send 表)
 SEND_PARAM_SPECS = tuple(sp for sp in _SPECS if sp.group == "send")
 # ⚠️ 键必须是 **URL 末段** 而不是字段名: 取点的地址是 /mix/%02d/**type**，
 #    字段名却叫 **tap** —— 用 field 做键的话，OSC 读 /ch/01/mix/03/type 会
 #    一条都匹配不上（静默返回空，不是报错，所以只能靠回归抓）。
-SEND_BY_SEG = {sp.osc.strip("/").split("/")[-1]: sp for sp in SEND_PARAM_SPECS}
-assert len(SEND_BY_SEG) == len(SEND_PARAM_SPECS), "发送参数地址末段撞名了"
+#    每组一份: level/on 在五组里同名, 合成一张表会互相覆盖。
+SEND_BY_SEG = {}
+for _sp in SEND_PARAM_SPECS:
+    _parts = _sp.osc.strip("/").split("/")
+    _grp = _parts[0]
+    SEND_BY_SEG.setdefault(_grp, {})[_parts[-1]] = _sp
+assert all(len(v) == len([s for s in SEND_PARAM_SPECS
+                          if s.osc.strip("/").split("/")[0] == g])
+           for g, v in SEND_BY_SEG.items()), "发送参数地址末段撞名了"
 
-# 地址索引: (第3段, 第4段) → [spec, ...], 只收新增 kind。
-# 推子/静音的老地址模式在 state.match_address 里有专门分支 (行为逐字未动)，
-# 不在这里重复登记, 免得两条路径互相覆盖。
-CH_EXTRA_ADDR = {}
+# ---- 地址索引: 由登记表反推, match_address 因此不再有"每组一个分支" ----
+# 三段地址 (/dca/01/fader、/headamp/000/gain)
+ADDR3 = {}
+# 四段地址 (/bus/01/dyn/thr、/bus/01/mix/pan、/ch/01/preamp/trim …)
+ADDR4 = {}
+# 五段带段号 (/bus/01/eq/3/g)：键里不放段号, 段号从 spec 的地址模板里取
+ADDR5_BAND = {}
+# 五段定值 (/bus/01/dyn/filter/f、/ch/01/gate/filter/on …)
+ADDR5_DEEP = {}
 for _sp in _SPECS:
-    if _sp.group != "ch" or _sp.push:
-        continue
+    if _sp.group == "send":
+        continue                      # 发送是二维目标, 走自己的分支
     _parts = _sp.osc.strip("/").split("/")
-    if len(_parts) == 4 and "%02d" in _parts[1]:
-        CH_EXTRA_ADDR.setdefault((_parts[2], _parts[3]), []).append(_sp)
-# EQ 段落地址是 5 段 (/ch/01/eq/1/g): 单独一张按"第3段 + 末尾段"索引的表。
-# 用 (eq, g) 作键是安全的 —— 段号 1..4 已经在 kind/地址模板里固定,
-# 同一个 (第3段, 末段) 组合对应 4 个 band 的 4 个 spec, 由 match_address 展开。
-CH_EQ_ADDR = {}
-for _sp in _SPECS:
-    if _sp.group != "ch" or not _sp.kind.startswith("ch_eq"):
-        continue
-    _parts = _sp.osc.strip("/").split("/")
-    if len(_parts) == 5:
-        CH_EQ_ADDR.setdefault((_parts[2], _parts[4]), []).append(_sp)
+    if len(_parts) == 3:
+        ADDR3.setdefault((_parts[0], _parts[2]), []).append(_sp)
+    elif len(_parts) == 4:
+        ADDR4.setdefault((_parts[0], _parts[2], _parts[3]), []).append(_sp)
+    elif len(_parts) == 5:
+        if _parts[3].isdigit():
+            ADDR5_BAND.setdefault((_parts[0], _parts[2], _parts[4]), []).append(_sp)
+        else:
+            ADDR5_DEEP.setdefault(
+                (_parts[0], _parts[2], _parts[3], _parts[4]), []).append(_sp)
 
-# 五段深层地址 (非 EQ): /ch/01/gate/filter/on、/ch/01/dyn/filter/f …
-# 用 (第3段, 第4段, 第5段) 做键, 与 EQ 的 (第3段, 末段) 分开 ——
-# 两张表混用会让 /ch/01/dyn/filter/f 被当成 EQ 段号去查, 静默无回包。
-# ⚠️ 排除 eq: 它已经有自己的表, 重复登记会让 match_address 返回两份结果。
-CH_DEEP_ADDR = {}
-for _sp in _SPECS:
-    if _sp.group != "ch" or _sp.push or _sp.kind.startswith("ch_eq"):
-        continue
-    _parts = _sp.osc.strip("/").split("/")
-    if len(_parts) == 5 and "%02d" in _parts[1]:
-        CH_DEEP_ADDR.setdefault((_parts[2], _parts[3], _parts[4]), []).append(_sp)
+# 历史表名保留: 有些回归按 CH_* 名字做断言 (内容现在覆盖全部组)
+CH_EXTRA_ADDR = {(k[1], k[2]): v for k, v in ADDR4.items() if k[0] == "ch"}
+CH_EQ_ADDR = {(k[1], k[2]): v for k, v in ADDR5_BAND.items() if k[0] == "ch"}
+CH_DEEP_ADDR = {k: v for k, v in ADDR5_DEEP.items() if k[0] == "ch"}
 
 
 # 控台实际能接受的范围 (kind → (lo, hi))。由 app 在选好控台后写入,
@@ -525,14 +684,20 @@ def spec_addr(sp, idx):
       · 两个 %02d       → 发送, idx 是 send_pack 打包后的 (通道, Bus)
     """
     if sp.nidx >= 2:
-        ch, bus = send_unpack(idx)
+        _g, ch, bus = send_unpack(idx)
         # 取点在真台上按成对 Bus 共享 (1&2 / 3&4 …), 协议表只给奇数 Bus 地址。
         # 偶数 Bus 统一落到它的奇数搭档 —— 否则本地写 Bus02、真台改的却是 Bus01,
         # 界面与台面从此各说各话。
         if sp.kind == "send_tap" and bus % 2 == 0:
             bus -= 1
+        # 主输出的发送地址没有源号 (/main/st/mix/NN/level) —— 只有一个占位符
+        if sp.osc.count("%") == 1:
+            return sp.osc % bus
         return sp.osc % (ch, bus)
-    return sp.osc % idx if "%02d" in sp.osc else sp.osc
+    if sp.kind == "headamp_gain":
+        # 话放地址是**三位**补零, 且 000 对应 ch01 (索引偏移 -1)
+        return sp.osc % (int(idx) - 1)
+    return sp.osc % idx if "%" in sp.osc else sp.osc
 
 
 def _nearest_enum(sp, v):
@@ -710,3 +875,44 @@ def param_fmt(sp, v):
 def blank_row(group):
     """一个空行字典: 该组所有登记参数的出厂值（推子 0.75 / 静音开 / 参数缺省）。"""
     return {sp.field: sp.default for sp in _SPECS if sp.group == group}
+
+
+def spec_section(sp):
+    """参数属于通道面板的哪一页: pre | gate | dyn | eq。
+
+    **三端共用的唯一规则** —— 网页 (app.js)、iOS、Android 都读这里下发的 sec,
+    不许各自再写一份 if/startswith。曾经网页自己按前缀猜, 原生端各抄一遍,
+    加参数时漏改一处就是"控件跑到别的页签里"。
+    插入没有独立页: ins_* 归到 pre (前置), 与真台的 BLOCK/PRE 顺序一致。
+    """
+    f = sp.field
+    if f == "pan":
+        return "pre"
+    if f.startswith("gate_"):
+        return "gate"
+    if f.startswith("dyn_"):
+        return "dyn"
+    if f.startswith("eq"):
+        return "eq"
+    return "pre"
+
+
+def ui_specs(group):
+    """一组的参数元数据 (给前端/App 生成控件, 不含任何协议地址)。
+
+    字段名刻意短: 这个包每次打开通道详情都会拉一次, 6 组加起来约 8KB,
+    用长键名 (label/lo/hi/step/…) 会白白多出 30%。
+    sec = 页签 (见 spec_section), 前端只按它分组, 不再自己猜。
+    """
+    out = []
+    for sp in GROUP_PARAM_SPECS.get(group, ()):
+        out.append({
+            "f": sp.field, "l": sp.label, "t": sp.vtype,
+            "lo": sp.lo, "hi": sp.hi, "st": sp.step, "dec": sp.dec,
+            "u": sp.unit, "lg": sp.logsteps, "ld": 1 if sp.logdesc else 0,
+            "lb": list(sp.labels) if sp.labels else None,
+            "en": list(sp.enum) if sp.enum else None,
+            "dv": sp.default, "un": 1 if sp.unverified else 0,
+            "sec": spec_section(sp),
+        })
+    return out

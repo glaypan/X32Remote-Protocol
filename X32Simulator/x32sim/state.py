@@ -10,7 +10,7 @@ from .consts import DEFAULT_NAMES, FADER_ADDR, FX_COUNT, FX_SWITCH_DEFAULTS, KIN
 from .kinds import fx_par_kind, fx_par_num, kind_group
 from .logbus import EVENTS, EVT_SEQ, log
 from .osc import OscMsg, encode_bundle, encode_message
-from .params import CH_DEEP_ADDR, CH_EQ_ADDR, CH_EXTRA_ADDR, PARAM_SPECS, SEND_BUS, SEND_BY_SEG, blank_row, level_db, level_from_db, param_coerce, param_wire, send_pack, send_unpack  # noqa: E501
+from .params import ADDR3, ADDR4, ADDR5_BAND, ADDR5_DEEP, GROUP_SIZE, PARAM_SPECS, SEND_BUS, SEND_BUSES, SEND_BY_SEG, SEND_GROUPS, SEND_SRC_MAX, blank_row, level_db, level_from_db, param_coerce, param_wire, send_pack, send_unpack  # noqa: E501
 from .profiles import addr_for_write, profile
 from .runtime import MAIN_SOCK
 from .util import _clamp01, _finite, _truthy
@@ -36,11 +36,19 @@ class MixerState:
         self.fxret = {i: blank_row("fxret") for i in range(1, 9)}  # 效果返回 FX Return 1-8
         self.mtx = {i: blank_row("mtx") for i in range(1, 7)}    # 矩阵输出 Matrix 1-6
         self.main = blank_row("main")
+        # 话放 (模拟增益): 与通道一一对应, 但地址是 /headamp/000..031 —— 独立一组,
+        # 因为一台台子的 XLR 口数、AES50 接口箱映射跟"通道号"不是同一个概念。
+        self.headamp = {i: blank_row("headamp") for i in range(1, 33)}
         # 发送 (通道 → Bus): 二维目标, 键 = params.send_pack(ch, bus)。
         # ⚠️ 故意**不进** snapshot_state —— 512 行 × 3 字段会把 /api/state 撑爆,
         #    那笔 4G 流量账刚结清。界面按需取 /api/sends?ch=N。
-        self.send = {i: blank_row("send")
-                     for i in range(1, 32 * SEND_BUS + 1)}
+        # 键 = send_pack(源, 目标, 组)。五组共用这一张表, 用基址分段区分
+        # (ch 1..512 原样保留, auxin/fxret/bus/main 各自从 1000/2000/3000/4000 起)。
+        self.send = {}
+        for _g, _src, _nb, _base in SEND_GROUPS:
+            for _s in range(1, _src + 1):
+                for _b in range(1, _nb + 1):
+                    self.send[send_pack(_s, _b, _g)] = blank_row("send")
         self.scene = 1
         # FX 机架 1-8: 混响器. par 存**原生单位**参数值 (时间=秒 / 预延迟=毫秒 / 阻尼=0..1),
         # 参数索引随算法变化, 映射表见 X32_FX_ALGOS / M32_FX_ALGOS (默认值需真机标定)
@@ -92,105 +100,75 @@ def _row_of(group, idx):
     return store[idx]
 
 
-def match_address(pattern: str):
-    """按 X32 通配符匹配,返回 (group, index, kind) 列表。
-    kind: 'ch_fader' | 'ch_on' | 'dca_fader' | 'dca_on' | 'main_fader' | 'main_on'
-    """
-    segs = pattern.strip("/").split("/")
-    results = []
+def _table_pick(table, key):
+    """表查询, 支持键里带 * 的通配 (订阅与桥接会发 /bus/*/dyn/* 这类模式)。
 
-    def seg_match(pat, val):
-        return pat == "*" or pat == val
+    直接命中优先 —— 绝大多数查询是精确地址, 不该为通配付代价; 只有带 * 时才扫表。
+    """
+    hit = table.get(key)
+    if hit is not None:
+        return hit
+    if "*" not in key:
+        return ()
+    out = []
+    for k, v in table.items():
+        if len(k) != len(key):
+            continue
+        if all(kk == key[i] or key[i] == "*" or kk == "*" for i, kk in enumerate(k)):
+            out.extend(v)
+    return out
+
+
+def _expand_spec(sp, segs):
+    """一个 spec 在通配模式下展开成 [(kind, idx), ...]。
+
+    地址模板的三种形态在这里统一处理:
+      · 无占位符 (/main/st/mix/fader)      → 只有一路, idx=0
+      · 一位占位符 (/bus/%02d/mix/pan)     → 该组每一路都试一次
+      · 话放 (/headamp/%03d/gain)          → 三位补零, 且 000 = ch01
+    """
+    out = []
+    if "%" not in sp.osc:
+        if segs[1] == sp.osc.strip("/").split("/")[1]:
+            out.append((sp.kind, 0))
+        return out
+    n = GROUP_SIZE.get(sp.group, 0)
+    if sp.kind == "headamp_gain":
+        for i in range(1, n + 1):
+            if segs[1] in ("*", "%03d" % (i - 1)):
+                out.append((sp.kind, i))
+        return out
+    for i in range(1, n + 1):
+        if segs[1] in ("*", "%02d" % i):
+            out.append((sp.kind, i))
+    return out
+
+
+def match_address(pattern: str):
+    """按 X32 通配符匹配, 返回 (kind, index) 列表。
+
+    地址索引**不再按组分分支**, 而是从 params 登记表反推的三张表:
+      ADDR4       四段地址 (/bus/01/dyn/thr, /bus/01/mix/pan, /ch/01/preamp/trim)
+      ADDR5_BAND  五段带段号 (/bus/01/eq/3/g) —— 段号写死在 spec 里, 通配只作用于路号
+      ADDR5_DEEP  五段定值 (/bus/01/dyn/filter/f, /ch/01/gate/filter/on)
+    发送 (二维) 与 FX 机架仍然是独立分支: 前者的目标数是"每组的 Bus 数"而不是路数,
+    后者的参数号随算法变化, 都没有静态地址可索引。
+    新增一组通道 / 一个参数 = 只改 params.py, 这里不用动。
+    """
+    segs = [x for x in pattern.strip("/").split("/") if x]
+    results = []
+    if not segs:
+        return results
+    g0 = segs[0]
 
     with STATE.lock:
-        if len(segs) == 4 and segs[0] == "ch" and segs[2] == "mix":
-            kind = {"fader": "ch_fader", "on": "ch_on", "dca": "ch_dca"}.get(segs[3])
-            if kind:
-                for i in sorted(STATE.ch):
-                    if seg_match(segs[1], "%02d" % i):
-                        results.append((kind, i))
-        elif len(segs) == 4 and segs[0] == "ch" and (segs[2], segs[3]) in CH_EXTRA_ADDR:
-            # 通道参数 (增益/反相/延时/低切/插入/门): 与推子同款通配符语义。
-            # 地址索引由 params.py 从登记表生成, 新增参数不用来这里补分支。
-            for sp in CH_EXTRA_ADDR[(segs[2], segs[3])]:
-                for i in sorted(STATE.ch):
-                    if seg_match(segs[1], "%02d" % i):
-                        results.append((sp.kind, i))
-        elif len(segs) == 5 and segs[0] == "ch" and segs[2] == "eq" \
-                and (segs[2], segs[4]) in CH_EQ_ADDR:
-            # 通道 EQ 段落: /ch/01/eq/3/g —— 段号写死在 spec 里 (每段一个 kind),
-            # 所以这里通配符只作用于通道号; 段号写 * 一次展开 4 段。
-            for sp in CH_EQ_ADDR[(segs[2], segs[4])]:
-                band = sp.osc.strip("/").split("/")[3]
-                if not seg_match(segs[3], band):
-                    continue
-                for i in sorted(STATE.ch):
-                    if seg_match(segs[1], "%02d" % i):
-                        results.append((sp.kind, i))
-        elif len(segs) == 5 and segs[0] == "ch" and segs[2] == "mix" \
-                and segs[4] in SEND_BY_SEG:
-            # 发送: /ch/01/mix/05/level —— 二维目标, idx = send_pack(通道, Bus)。
-            # 两个位置都支持通配符 (/ch/*/mix/*/level 一次 512 条)。
-            sp = SEND_BY_SEG[segs[4]]
-            # 取点只存在于奇数 Bus: 通配时展开奇数, 但允许用**偶数**地址查
-            # (真台界面上 Bus02 与 Bus01 是同一个取点, 用户按 02 查是合理的)。
-            odd_only = (sp.kind == "send_tap")
-            step = 2 if odd_only else 1
-            for ch in sorted(STATE.ch):
-                if not seg_match(segs[1], "%02d" % ch):
-                    continue
-                for bus in range(1, SEND_BUS + 1, step):
-                    hit = seg_match(segs[3], "%02d" % bus)
-                    if not hit and odd_only and bus + 1 <= SEND_BUS:
-                        hit = seg_match(segs[3], "%02d" % (bus + 1))
-                    if hit:
-                        results.append((sp.kind, send_pack(ch, bus)))
-        elif len(segs) == 5 and segs[0] == "ch" \
-                and (segs[2], segs[3], segs[4]) in CH_DEEP_ADDR:
-            # 侧链滤波器: /ch/01/gate/filter/on、/ch/01/dyn/filter/f …
-            # 与 EQ 同为五段但结构不同 (EQ 是 /eq/<段号>/<参数>), 用独立的表,
-            # 免得 /dyn/filter/f 被当成"EQ 第 4 段"去查而静默无回包。
-            for sp in CH_DEEP_ADDR[(segs[2], segs[3], segs[4])]:
-                for i in sorted(STATE.ch):
-                    if seg_match(segs[1], "%02d" % i):
-                        results.append((sp.kind, i))
-        elif len(segs) == 4 and segs[0] == "bus" and segs[2] == "mix":
-            kind = {"fader": "bus_fader", "on": "bus_on"}.get(segs[3])
-            if kind:
-                for i in sorted(STATE.bus):
-                    if seg_match(segs[1], "%02d" % i):
-                        results.append((kind, i))
-        elif len(segs) == 3 and segs[0] == "dca":
-            kind = {"fader": "dca_fader", "on": "dca_on"}.get(segs[2])
-            if kind:
-                for i in sorted(STATE.dca):
-                    if seg_match(segs[1], "%02d" % i):
-                        results.append((kind, i))
-        elif len(segs) == 4 and segs[2] == "mix" \
-                and segs[0] in ("auxin", "usb", "fxret", "fxrtn", "mtx"):
-            # ⚠️ fxrtn 是真台拼写 (Maillot: /fxrtn/[01..08]/mix/fader);
-            #    fxret 是早年的拼写变体 —— 两个都收, 归一到同一份 STATE.fxret。
-            #    内部 kind 仍是 fxret_fader/fxret_on (卡片配置存 kind, 不能改)。
-            grp = "fxret" if segs[0] == "fxrtn" else segs[0]
-            kind = {"fader": grp + "_fader", "on": grp + "_on"}.get(segs[3])
-            if kind:
-                group = {"auxin": STATE.auxin, "usb": STATE.usb,
-                         "fxret": STATE.fxret, "mtx": STATE.mtx}[grp]
-                val = segs[1].rstrip("LR")            # 真台 FX 返回常用 01L/01R 写法
-                for i in sorted(group):
-                    if seg_match(val, "%02d" % i):
-                        results.append((kind, i))
-        elif len(segs) == 4 and segs[0] == "main" and segs[1] == "st" and segs[2] == "mix":
-            kind = {"fader": "main_fader", "on": "main_on"}.get(segs[3])
-            if kind:
-                results.append((kind, 0))
-        elif len(segs) >= 3 and segs[0] == "fx" and segs[1].isdigit():
-            # FX 机架: /fx/<槽>/type | on | mix | par/<参数号> | config/name
-            # ⚠️ 槽号不补零 (/fx/1/...), 参数号补零 (/fx/1/par/01)
+        # ---- FX 机架: /fx/<槽>/type | on | mix | par/NN | config/name ----
+        if g0 == "fx" and len(segs) >= 2 and segs[1].isdigit():
             slot = int(segs[1])
             if 1 <= slot <= FX_COUNT:
                 if len(segs) == 3:
-                    kind = {"type": "fx_type", "on": "fx_on", "mix": "fx_mix"}.get(segs[2])
+                    kind = {"type": "fx_type", "on": "fx_on",
+                            "mix": "fx_mix"}.get(segs[2])
                     if kind:
                         results.append((kind, slot))
                 elif len(segs) == 4 and segs[2] == "par" and segs[3].isdigit():
@@ -199,15 +177,68 @@ def match_address(pattern: str):
                         results.append((fx_par_kind(p), slot))
                 elif len(segs) == 4 and segs[2] == "config" and segs[3] == "name":
                     results.append(("fx_name", slot))
+            return results
+
+        # ---- 发送: /<组>/<源>/mix/<目标>/{level|on|type} ----
+        g_osc = "fxrtn" if g0 == "fxret" else g0
+        if len(segs) == 5 and segs[2] == "mix" and g_osc in SEND_BY_SEG \
+                and segs[4] in SEND_BY_SEG[g_osc]:
+            sp = SEND_BY_SEG[g_osc][segs[4]]
+            # 内部组名与地址前缀不同 (fxret ↔ fxrtn), 表都按内部名索引
+            g_int = "fxret" if g_osc == "fxrtn" else g_osc
+            src_tpl = sp.osc.strip("/").split("/")[1]
+            # 取点只存在于奇数 Bus: 通配时展开奇数, 但允许用**偶数**地址查
+            # (真台上 Bus02 与 Bus01 是同一个取点, 用户按 02 查是合理的)。
+            odd_only = sp.kind.endswith("_tap")
+            step = 2 if odd_only else 1
+            nb = SEND_BUSES[g_int]
+            for src in range(1, SEND_SRC_MAX[g_int] + 1):
+                if src_tpl == "%02d":
+                    if not (segs[1] == "*" or segs[1] == "%02d" % src):
+                        continue
+                elif segs[1] != src_tpl:      # /main/st/mix/... 的 "st"
+                    continue
+                for bus in range(1, nb + 1, step):
+                    hit = segs[3] in ("*", "%02d" % bus)
+                    if not hit and odd_only and bus + 1 <= nb:
+                        hit = segs[3] == "%02d" % (bus + 1)
+                    if hit:
+                        results.append((sp.kind, send_pack(src, bus, g_int)))
+            return results
+
+        # ---- 三段地址: /dca/01/fader、/headamp/000/gain ----
+        if len(segs) == 3:
+            for sp in _table_pick(ADDR3, (g_osc, segs[2])):
+                results.extend(_expand_spec(sp, segs))
+        # ---- 四段地址 ----
+        elif len(segs) == 4:
+            for sp in _table_pick(ADDR4, (g_osc, segs[2], segs[3])):
+                results.extend(_expand_spec(sp, segs))
+        # ---- 五段: EQ 段号 ----
+        elif len(segs) == 5:
+            for sp in _table_pick(ADDR5_BAND, (g_osc, segs[2], segs[4])):
+                band = sp.osc.strip("/").split("/")[3]
+                if segs[3] in ("*", band):
+                    results.extend(_expand_spec(sp, segs))
+            for sp in _table_pick(ADDR5_DEEP, (g_osc, segs[2], segs[3], segs[4])):
+                results.extend(_expand_spec(sp, segs))
+        if results:
+            return results
+
+        # ---- 通道的 DCA 归属位掩码 (不是存储值, 是成员表的投影) ----
+        if len(segs) == 4 and g0 == "ch" and segs[2] == "mix" and segs[3] == "dca":
+            for i in sorted(STATE.ch):
+                if segs[1] in ("*", "%02d" % i):
+                    results.append(("ch_dca", i))
     return results
 
 
 def _send_norm(kind, idx):
     """取点按成对 Bus 共享 → 读写都归一到奇数 Bus (与真台同一份真相)。"""
-    if kind == "send_tap":
-        ch, bus = send_unpack(idx)
+    if kind.endswith("_tap"):
+        g, src, bus = send_unpack(idx)
         if bus % 2 == 0:
-            return send_pack(ch, bus - 1)
+            return send_pack(src, bus - 1, g)
     return idx
 
 

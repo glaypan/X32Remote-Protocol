@@ -13,7 +13,7 @@ from .consts import FX_COUNT, NAME_COUNTS, NOTE_BEATS, SET_KINDMAP
 from .fx import FX_MODE_LABEL, FX_SYNC, FX_SYNC_LOCK, fx_set_param, fx_tap_apply, tap_register, tap_reset
 from .logbus import EVENTS, EVT_SEQ, log
 from .pair import pair_text
-from .params import PARAM_SPECS, SEND_BUS, send_pack, active_limits, unverified_kinds
+from .params import GROUP_PARAM_SPECS, GROUP_SIZE, PARAM_SPECS, SEND_BUS, SEND_BUSES, SEND_SRC_MAX, active_limits, send_pack, ui_specs, unverified_kinds  # noqa: E501
 from .persist import CONFIG_PATH, ID_SEQ, clear_console, next_id, recall_last, save_user_config
 from .presets import AUTO_SNAPS, SNAPSHOTS, _recall_stop_current, preset_scope_text, recall_snapshot, save_snapshot, start_recall
 from .profiles import profile, set_profile
@@ -117,24 +117,61 @@ class WebHandler(BaseHTTPRequestHandler):
                 body = b"{}"
             self._send(200, "application/json; charset=utf-8", body)
         elif path == "/api/sends":
-            # 发送 (通道 → 16 个 Bus) 单独取: 512 行 × 3 字段放不进 /api/state,
+            # 发送 (源 → 目标) 单独取: 五组共 838 个目标 × 3 字段放不进 /api/state,
             # 那会把刚结清的 4G 流量账又借回来。界面点开"发送"页时才拉一次。
+            #   group=ch|auxin|fxret|bus|main (默认 ch)
             try:
                 qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-                ch = int(qs.get("ch", ["1"])[0])
+                grp = qs.get("group", ["ch"])[0]
+                # 旧参数名 ch= 继续认, 等价于 src=
+                src = int(qs.get("src", qs.get("ch", ["1"]))[0])
             except (TypeError, ValueError):
-                ch = 1
-            ch = min(max(ch, 1), 32)
+                grp, src = "ch", 1
+            grp = grp if grp in SEND_BUSES else "ch"
+            src = min(max(src, 1), SEND_SRC_MAX[grp])
             row = {}
-            for bus in range(1, SEND_BUS + 1):
-                i = send_pack(ch, bus)
+            for bus in range(1, SEND_BUSES[grp] + 1):
+                i = send_pack(src, bus, grp)
                 row[str(bus)] = {
-                    "level": get_value("send_level", i),
-                    "on": int(get_value("send_on", i) or 0),
-                    "tap": int(get_value("send_tap", i) or 0),
+                    "level": get_value("send_level" if grp == "ch" else grp + "_send_level", i),
+                    "on": int(get_value("send_on" if grp == "ch" else grp + "_send_on", i) or 0),
                 }
+                if grp not in ("bus", "main"):
+                    row[str(bus)]["tap"] = int(get_value(
+                        "send_tap" if grp == "ch" else grp + "_send_tap", i) or 0)
             self._send(200, "application/json; charset=utf-8",
-                       json.dumps({"ch": ch, "sends": row},
+                       json.dumps({"group": grp, "src": src, "buses": SEND_BUSES[grp],
+                                   "sends": row}, allow_nan=False).encode("utf-8"))
+
+        elif path == "/api/params":
+            # 某一路的全部处理参数 (均衡/门/动态/插入/声像…)。
+            # 为什么不进 /api/state: 全组参数约 1.3K 个值, 每次推子一动就全量重发
+            # 会把流量治理的账还回去。界面点开某一路时才拉一次, 之后靠写入回执与
+            # 轮询里的行内字段 (fader/on/pan) 保持同步。
+            try:
+                qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                grp = qs.get("group", ["ch"])[0]
+                idx = int(qs.get("idx", ["1"])[0])
+            except (TypeError, ValueError):
+                grp, idx = "ch", 1
+            if grp not in GROUP_PARAM_SPECS:
+                self._send(400, "application/json",
+                           b'{"ok":false,"error":"no such group"}')
+                return
+            idx = min(max(idx, 1 if grp != "main" else 0), GROUP_SIZE.get(grp, 1))
+            vals = {sp.field: get_value(sp.kind, idx)
+                    for sp in GROUP_PARAM_SPECS[grp]}
+            self._send(200, "application/json; charset=utf-8",
+                       json.dumps({"group": grp, "idx": idx, "params": vals},
+                                  allow_nan=False).encode("utf-8"))
+
+        elif path == "/api/paramspecs":
+            # 各组参数的**元数据** (名称/量程/单位/枚举/默认值)。
+            # 前端不再维护一份手抄的控件表: 抄一份就必然有一天与后端漂移,
+            # 而漂移的症状是"滑块能拖到后端不认的区间"——只能靠回归抓。
+            self._send(200, "application/json; charset=utf-8",
+                       json.dumps({"specs": {g: ui_specs(g)
+                                             for g in GROUP_PARAM_SPECS}},
                                   allow_nan=False).encode("utf-8"))
         elif path == "/api/meters":
             # 电平单独取: 它每 tick 都变, 不能进 /api/state 的内容指纹,
@@ -313,18 +350,26 @@ class WebHandler(BaseHTTPRequestHandler):
                            b'{"ok":false,"error":"bad idx"}')
                 return
             if grp == "send":
-                # 发送是二维目标: idx=通道, bus=Bus, 落库键 = send_pack。
+                # 发送是二维目标: idx=源, bus=目标, 落库键 = send_pack。
                 # 不接受"直接传打包值"—— 512 这种数字对用户没有意义, 也容易越界。
+                sg = data.get("sgroup") or "ch"      # 源组: ch/auxin/fxret/bus/main
+                if sg not in SEND_BUSES:
+                    sg = "ch"
                 try:
                     bus = int(data.get("bus", 0))
                 except (TypeError, ValueError):
                     bus = 0
-                if not (1 <= bus <= SEND_BUS and 1 <= idx <= 32):
+                if not (1 <= bus <= SEND_BUSES[sg]
+                        and 1 <= idx <= SEND_SRC_MAX[sg]):
                     self._send(400, "application/json", json.dumps(
-                        {"ok": False, "error": "发送目标应为 通道 1-32 + Bus 1-%d"
-                                               % SEND_BUS}).encode("utf-8"))
+                        {"ok": False,
+                         "error": "发送目标应为 源 1-%d + 目标 1-%d"
+                                  % (SEND_SRC_MAX[sg], SEND_BUSES[sg])}
+                    ).encode("utf-8"))
                     return
-                idx = send_pack(idx, bus)
+                # param 本身就是该组的 kind (send_level / auxin_send_level …),
+                # 由 SET_KINDMAP 解析, 这里只负责打包目标。
+                idx = send_pack(idx, bus, sg)
             if not target_exists(k, idx):
                 self._send(400, "application/json",
                            json.dumps({"ok": False,
@@ -365,13 +410,17 @@ class WebHandler(BaseHTTPRequestHandler):
                 except (TypeError, ValueError):
                     continue
                 if it.get("kind") == "send":
+                    sg = it.get("sgroup") or "ch"
+                    if sg not in SEND_BUSES:
+                        sg = "ch"
                     try:
                         bus = int(it.get("bus", 0))
                     except (TypeError, ValueError):
                         continue
-                    if not (1 <= bus <= SEND_BUS and 1 <= idx <= 32):
+                    if not (1 <= bus <= SEND_BUSES[sg]
+                            and 1 <= idx <= SEND_SRC_MAX[sg]):
                         continue
-                    idx = send_pack(idx, bus)
+                    idx = send_pack(idx, bus, sg)
                 if not target_exists(k, idx):
                     continue      # 越界条目直接跳过，applied 计数会反映出来
                 set_value(k, idx, it.get("value"))

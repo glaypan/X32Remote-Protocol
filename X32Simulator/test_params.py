@@ -49,7 +49,7 @@ _persist.save_user_config = lambda: True
 
 from x32sim.actions import _clean_actions            # noqa: E402
 from x32sim.params import (CH_DEEP_ADDR, CH_EQ_ADDR, CH_EXTRA_ADDR,  # noqa: E402
-                           CH_PARAM_SPECS,
+                           GROUP_PARAM_SPECS, CH_PARAM_SPECS,
                            PARAM_SPECS, SEND_PARAM_SPECS, blank_row,
                            level_db, level_from_db,
                            param_coerce, param_from_wire, param_wire, send_pack,
@@ -58,42 +58,64 @@ from x32sim.presets import _recall_instant, _snap_group_items_locked  # noqa: E4
 from x32sim.state import STATE, get_value, match_address, set_value, value_reply  # noqa: E402
 
 print("== A1. 登记表自洽 ==")
-check("登记表 75 项 (16 既有 + 56 通道 + 3 发送)",
-      len(PARAM_SPECS) == 75, str(len(PARAM_SPECS)))
-check("通道参数 56 项 (13 前置/插入 + 9 门 + 18 动态 + 16 均衡)",
-      len(CH_PARAM_SPECS) == 56, str(len(CH_PARAM_SPECS)))
-check("发送参数 3 项 (电平/开关/取点)",
-      len(SEND_PARAM_SPECS) == 3, str(len(SEND_PARAM_SPECS)))
+# 数量断言改成"分组自洽"而不是写死一个数：以后再加一组通道不用回来改测试，
+# 但"漏了一半参数"仍然能被抓出来。
+_row_sum = sum(len(v) for v in GROUP_PARAM_SPECS.values())
+check("登记表 = 16 推子/静音 + 各组行参数 + 13 发送 + 1 话放",
+      len(PARAM_SPECS) == 16 + _row_sum + len(SEND_PARAM_SPECS),
+      "%d vs 16+%d+%d" % (len(PARAM_SPECS), _row_sum, len(SEND_PARAM_SPECS)))
+check("ch 参数 57 项 (13 前置/插入 + 11 门 + 18 动态 + 16 均衡 + 声像)",
+      len(CH_PARAM_SPECS) == 57, str(len(CH_PARAM_SPECS)))
+check("Bus 参数 47 项 (18 动态 + 3 插入 + 24 均衡 + 声像)",
+      len(GROUP_PARAM_SPECS["bus"]) == 47, str(len(GROUP_PARAM_SPECS["bus"])))
+check("Bus EQ 是 6 段 (ch 是 4 段)",
+      len([sp for sp in GROUP_PARAM_SPECS["bus"] if sp.field.startswith("eq6_")]) == 4
+      and not any(sp.field.startswith("eq5_") for sp in CH_PARAM_SPECS))
+check("FX 返回只有声像 (真台没有 EQ/动态/插入)",
+      [sp.field for sp in GROUP_PARAM_SPECS["fxret"]] == ["pan"],
+      str([sp.field for sp in GROUP_PARAM_SPECS["fxret"]]))
+check("发送参数 13 项 (ch/auxin/fxret 各 3 + bus/main 各 2)",
+      len(SEND_PARAM_SPECS) == 13, str(len(SEND_PARAM_SPECS)))
 kinds = [sp.kind for sp in PARAM_SPECS.values()]
 check("kind 无重复", len(kinds) == len(set(kinds)))
-main_specs = [sp for sp in PARAM_SPECS.values() if sp.group == "main"]
-check("main 系列模板不带 %02d", all("%02d" not in sp.osc for sp in main_specs))
+main_specs = [sp for sp in PARAM_SPECS.values()
+              if sp.group == "main" and sp.group != "send"]
+check("main 的行参数模板不带 %02d (只有一路)",
+      all("%02d" not in sp.osc for sp in main_specs))
 check("spec_addr(main_fader,0) 直接给地址",
       spec_addr(PARAM_SPECS["main_fader"], 0) == "/main/st/mix/fader",
       spec_addr(PARAM_SPECS["main_fader"], 0))
 check("spec_addr(ch_trim,7) 补零",
       spec_addr(PARAM_SPECS["ch_trim"], 7) == "/ch/07/preamp/trim")
 ch_addrs = {spec_addr(sp, 1) for sp in CH_PARAM_SPECS}
-check("56 个通道参数地址互不重复", len(ch_addrs) == 56, str(len(ch_addrs)))
+check("57 个通道参数地址互不重复", len(ch_addrs) == 57, str(len(ch_addrs)))
 # 4 段地址 (dyn/gate/preamp…) 走 CH_EXTRA_ADDR; EQ 段落是 5 段, 单独一张表
-check("4 段地址索引 34 项 (ch 表 56 项 - 16 EQ - 6 深层)",
-      sum(len(v) for v in CH_EXTRA_ADDR.values()) == 34,
-      str(sum(len(v) for v in CH_EXTRA_ADDR.values())))
+# 4 段地址的条数由登记表自己算: 写死一个数只会在加参数时变成噪音
+_ch4 = [sp for sp in PARAM_SPECS.values() if sp.group == "ch"
+        and len(sp.osc.strip("/").split("/")) == 4]   # 含推子/静音
+check("4 段地址索引覆盖全部 4 段通道参数 (%d 项)" % len(_ch4),
+      sum(len(v) for v in CH_EXTRA_ADDR.values()) == len(_ch4),
+      "%d vs %d" % (sum(len(v) for v in CH_EXTRA_ADDR.values()), len(_ch4)))
 check("侧链滤波 5 段地址索引 6 项 (gate/dyn × on/type/f)",
       sum(len(v) for v in CH_DEEP_ADDR.values()) == 6,
       str(sum(len(v) for v in CH_DEEP_ADDR.values())))
 check("EQ 5 段地址索引 16 项",
       sum(len(v) for v in CH_EQ_ADDR.values()) == 16,
       str(sum(len(v) for v in CH_EQ_ADDR.values())))
-check("发送地址是二维 (两个 %02d)",
-      all(sp.osc.count("%02d") == 2 for sp in SEND_PARAM_SPECS))
-check("send_pack/send_unpack 互逆",
-      all(send_unpack(send_pack(c, b)) == (c, b)
-          for c in (1, 7, 32) for b in (1, 9, 16)))
+check("发送地址是二维 (ch/auxin/fxret 两个 %02d, main 一个)",
+      all(sp.osc.count("%02d") == (1 if sp.osc.startswith("/main/") else 2)
+          for sp in SEND_PARAM_SPECS))
+check("send_pack/send_unpack 互逆 (含各组基址)",
+      all(send_unpack(send_pack(c, b, g)) == (g, c, b)
+          for g, c, b in (("ch", 1, 1), ("ch", 32, 16), ("auxin", 6, 16),
+                          ("fxret", 8, 16), ("bus", 16, 6), ("main", 1, 6))))
+check("发送基址不撞号 (ch 1..512 / auxin 1001+ …)",
+      send_pack(32, 16, "ch") == 512 and send_pack(1, 1, "auxin") == 1001
+      and send_pack(1, 1, "bus") == 3001 and send_pack(1, 1, "main") == 4001)
 
 print("== A2. 出厂行 (blank_row) ==")
 row = blank_row("ch")
-check("ch 行 58 个字段 (推子/静音 + 56 参数)", len(row) == 58, str(len(row)))
+check("ch 行 59 个字段 (推子/静音 + 57 参数)", len(row) == 59, str(len(row)))
 check("推子出厂 0.75 / 静音出厂 1", row["fader"] == 0.75 and row["on"] == 1)
 check("增益出厂 0 dB / 门限出厂 -40 dB / 门范围 15 dB",
       row["trim"] == 0.0 and row["gate_thr"] == -40.0 and row["gate_range"] == 15.0)
@@ -102,7 +124,11 @@ check("低切频率出厂 80 Hz (需真机确认项有 note)",
 check("开关默认值是 int 不是 float (JSON 形状)",
       isinstance(row["on"], int) and isinstance(row["invert"], int))
 check("低切斜率默认 12 (int)", row["hpf_slope"] == 12 and isinstance(row["hpf_slope"], int))
-check("bus 行只有推子/静音 (新参数仅 ch)", len(blank_row("bus")) == 2)
+check("bus 行 = 推子/静音 + 47 个处理参数", len(blank_row("bus")) == 49,
+      str(len(blank_row("bus"))))
+check("声像出厂居中 (0), 范围 -100..100",
+      blank_row("ch")["pan"] == 0.0
+      and PARAM_SPECS["ch_pan"].lo == -100.0 and PARAM_SPECS["ch_pan"].hi == 100.0)
 
 print("== A3. 量程钳制与量化档位 (param_coerce) ==")
 _cases = [
@@ -232,78 +258,96 @@ except Exception as e:
     ok, why = False, repr(e)
 check("旧格式预设兼容且不碰新参数", ok, why)
 
-print("== A8. 前端控件表 vs 后端登记表 (防漂移) ==")
-# web/app.js 的 CH_PARAM_UI 是"第二份量程表" —— 界面滑块拖到 400、后端只认 20–400
-# 这种事不会报错, 只会让显示值和真实值悄悄分家。这里逐项比对 (格式变了就红,
-# 逼着一起更新, 而不是让两边各说各话)。
-import re  # noqa: E402
-
-_js = open(os.path.join(BASE, "web", "app.js"), encoding="utf-8").read()
-_m = re.search(r"const CH_PARAM_UI=\[(.*?)\n\];", _js, re.S)
-_block = _m.group(1) if _m else ""
-# 下拉档位可能抽成具名常量 (EQ_TYPES)。不先内联, `opts:EQ_TYPES` 会被解析成
-# "没有档位", 于是下面的档位校验变成恒真的假绿。
-for _nm in set(re.findall(r"opts:([A-Z][A-Z0-9_]*)", _block)):
-    _cm = re.search(r"const " + _nm + r"=(\[.*?\]);", _js, re.S)
-    if _cm:
-        _block = _block.replace("opts:" + _nm, "opts:" + _cm.group(1))
-_entries = {}
-for _part in _block.split("{f:'")[1:]:
-    _entries[_part.split("'", 1)[0]] = _part
-check("前端控件表解析到 %d 项" % len(CH_PARAM_SPECS),
-      len(_entries) == len(CH_PARAM_SPECS), str(sorted(_entries)))
-check("字段名与后端完全一致且同序",
-      re.findall(r"\{f:'([a-z0-9_]+)'", _block) == [sp.field for sp in CH_PARAM_SPECS],
-      str(list(_entries)))
+print("== A8. 前端控件元数据 (ui_specs) vs 登记表 ==")
+# 以前这段是"从 app.js 里正则抠 CH_PARAM_UI 再逐项比对" —— 因为前端有**第二份**
+# 控件表。现在前端不再抄表, 控件由 /api/paramspecs 生成, 所以这里改成两件事:
+#   ① ui_specs() 必须如实反映登记表 (量程/档位/精度/枚举/默认值);
+#   ② 端到端层再验 /api/paramspecs 与 ui_specs 一致 (序列化不丢字段)。
+# 前端的量程正确性由"只有一份来源"保证, 不再靠比对两份手抄表。
+from x32sim.params import ui_specs  # noqa: E402
 
 
-def _jnum(key, part):
-    _mm = re.search(key + r":(-?[\d.]+)", part)
-    return float(_mm.group(1)) if _mm else None
+def _us(group, field):
+    for r in ui_specs(group):
+        if r["f"] == field:
+            return r
+    return None
 
 
-for sp in CH_PARAM_SPECS:
-    part = _entries.get(sp.field, "")
-    if sp.enum is not None:
-        opts = [float(x) for x in re.findall(r"\[(-?[\d.]+),'", part)]
-        check("前端 %s 枚举档位与后端一致" % sp.field,
-              opts == [float(e) for e in sp.enum], "%s vs %s" % (opts, list(sp.enum)))
-    elif sp.vtype == "float":
-        lo, hi = _jnum("lo", part), _jnum("hi", part)
-        check("前端 %s 量程与后端一致 [%g, %g]" % (sp.field, sp.lo, sp.hi),
-              lo is not None and hi is not None
-              and abs(lo - sp.lo) < 1e-9 and abs(hi - sp.hi) < 1e-9,
-              "lo=%r hi=%r" % (lo, hi))
-        if sp.step:
-            st = _jnum("step", part)
-            check("前端 %s 档位与后端一致 (%g)" % (sp.field, sp.step),
-                  st is not None and abs(st - sp.step) < 1e-9, str(st))
-        dv = _jnum("dv", part)
-        check("前端 %s 默认值与后端一致 (%g)" % (sp.field, sp.default),
-              dv is not None and abs(dv - sp.default) < 1e-9, str(dv))
-        # 显示精度: 两边必须一致, 且不能比档位粗 (step=0.25 配 dec=1 会把
-        # 3.75 dB 显示成 3.8, 键盘精调还会预填 3.8 —— 静默丢精度的典型)
-        dc = _jnum("dec", part)
-        check("前端 %s 显示精度与后端一致 (dec=%d)" % (sp.field, sp.dec),
-              dc is not None and int(dc) == int(sp.dec), str(dc))
-        if sp.step and sp.step < 1:
-            need = 0
-            while need < 6 and abs(round(sp.step * 10 ** need) - sp.step * 10 ** need) > 1e-9:
-                need += 1
-            check("后端 %s 的 dec 够表示 %.2f 的档位" % (sp.field, sp.step),
-                  sp.dec >= need, "dec=%d 但需要 %d 位" % (sp.dec, need))
-    elif sp.vtype == "int" and sp.labels:
-        # 索引型枚举 (EQ 类型 0..5): 后端存索引、带名字标签; 前端应是同序下拉
-        opts = [float(v) for v in re.findall(r"\[(-?[\d.]+),'", part)]
-        check("前端 %s 是 %d 档下拉 (索引型枚举)" % (sp.field, len(sp.labels)),
-              opts == [float(i) for i in range(len(sp.labels))],
-              "%s vs %d 档" % (opts, len(sp.labels)))
-    else:
-        # bool 型: 要么两态按钮, 要么 0/1 两档下拉 —— ins_pos 用 PRE/POST 下拉
-        # 更可读 (后端仍按 bool 存 0/1), 所以两种形态都算对。
-        two = ([float(v) for v in re.findall(r"\[(-?[\d.]+),'", part)] == [0.0, 1.0])
-        check("前端 %s 是两态控件 (bool 或 0/1 枚举)" % sp.field,
-              "t:'bool'" in part or two, part[:60])
+_bad = []
+for _g, _specs in GROUP_PARAM_SPECS.items():
+    if len(ui_specs(_g)) != len(_specs):
+        _bad.append("%s 条目数 %d vs %d" % (_g, len(ui_specs(_g)), len(_specs)))
+        continue
+    for sp, r in zip(_specs, ui_specs(_g)):
+        if (r["f"] != sp.field or r["l"] != sp.label or r["t"] != sp.vtype
+                or abs(r["lo"] - sp.lo) > 1e-9 or abs(r["hi"] - sp.hi) > 1e-9
+                or abs(r["st"] - sp.step) > 1e-9 or r["dec"] != sp.dec
+                or r["u"] != sp.unit or r["lg"] != sp.logsteps
+                or (r["lb"] or None) != (list(sp.labels) if sp.labels else None)
+                or abs(r["dv"] - sp.default) > 1e-9):
+            _bad.append("%s/%s" % (_g, sp.field))
+check("每组 ui_specs 与登记表逐项一致", not _bad, str(_bad[:5]))
+# 页签 (sec) 是**三端共用**的规矩: 网页/iOS/Android 都按它分页, 谁都不许自己猜。
+# 这里锁死易错的几条: 声像必须在前置页、插入归前置、Gate/Dyn/EQ 各归各页。
+_secs = {g: {r["f"]: r.get("sec") for r in ui_specs(g)}
+         for g in GROUP_PARAM_SPECS}
+check("每个参数都带合法页签 (pre/gate/dyn/eq)",
+      all(v in ("pre", "gate", "dyn", "eq")
+          for m in _secs.values() for v in m.values()),
+      str([(g, f, v) for g, m in _secs.items() for f, v in m.items()
+           if v not in ("pre", "gate", "dyn", "eq")][:5]))
+check("声像/插入/前置归 pre, 门/压缩/EQ 各归各页",
+      _secs["ch"]["pan"] == "pre" and _secs["ch"]["ins_on"] == "pre"
+      and _secs["ch"]["gate_thr"] == "gate" and _secs["ch"]["dyn_thr"] == "dyn"
+      and _secs["ch"]["eq1_g"] == "eq" and _secs["bus"]["eq6_g"] == "eq",
+      str(_secs["ch"]))
+
+print("== A9. 三端共用的参数表导出物 ==")
+# 原生 App 直连真台只走 OSC, 参数元数据只能随包带 —— 导出物 (iOS Swift /
+# Android assets / outputs JSON) 一旦落后于登记表, 就会出现"网页能调、App
+# 调到的却是另一个参数"。所以这里把"导出物必须等于 build_payload()"锁进回归:
+# 改了 params.py 忘记重跑导出 → 这一步直接红。
+import subprocess  # noqa: E402
+_r = subprocess.run([sys.executable, os.path.join("tools", "export_param_specs.py"), "--check"],
+                    capture_output=True, text=True, encoding="utf-8", errors="replace")
+check("参数表导出物未过期 (改了 params.py 必须重跑导出)",
+      _r.returncode == 0, ((_r.stdout or "") + (_r.stderr or "")).strip()[:300])
+
+# 原生端的地址反查是"具体地址 → 参数"的字典: 两条参数撞同一个地址时,
+# 后写的那条会把前一条从字典里挤掉 —— 表现为"某个控件怎么拖都不生效"。
+# 模拟器这边是逐个分支匹配, 撞了也看不出来, 所以必须在这里静态查一遍。
+_payload = json.loads(subprocess.run(
+    [sys.executable, "-c",
+     "import sys,json;sys.path.insert(0,'tools');import export_param_specs as e;"
+     "print(json.dumps(e.build_payload(),ensure_ascii=False))"],
+    capture_output=True, text=True, encoding="utf-8").stdout)
+_dup = {}
+for _g, _rows in _payload["specs"].items():
+    _size = _payload["groups"][_g]["size"]
+    for _row in _rows:
+        for _i in range(1, _size + 1):
+            _a = _row["a"] % _i if "%" in _row["a"] else _row["a"]
+            _dup.setdefault(_a, []).append("%s/%s/%d" % (_g, _row["f"], _i))
+_collide = {k: v for k, v in _dup.items() if len(v) > 1}
+check("参数地址在原生端反查表里不撞号", not _collide, str(list(_collide.items())[:3]))
+check("导出物覆盖 6 种通道类型且带 OSC 前缀 (fxret→/fxrtn)",
+      set(_payload["groups"]) == {"ch", "bus", "auxin", "fxret", "mtx", "main"}
+      and _payload["groups"]["fxret"]["osc"] == "/fxrtn"
+      and _payload["groups"]["main"]["osc"] == "/main/st",
+      str({g: c["osc"] for g, c in _payload["groups"].items()}))
+check("前端能拿到 6 种通道的元数据 (ch/bus/auxin/fxret/mtx/main)",
+      set(GROUP_PARAM_SPECS) == {"ch", "bus", "auxin", "fxret", "mtx", "main", "headamp"},
+      str(sorted(GROUP_PARAM_SPECS)))
+check("声像元数据带 -100..100 / 档位 2",
+      _us("ch", "pan")["lo"] == -100.0 and _us("ch", "pan")["hi"] == 100.0
+      and _us("ch", "pan")["st"] == 2.0)
+check("EQ 类型元数据带 6 个枚举名",
+      _us("bus", "eq6_type")["lb"] == ["LCut", "LShv", "PEQ", "VEQ", "HShv", "HCut"],
+      str(_us("bus", "eq6_type")["lb"]))
+check("压缩比元数据带 12 个比值 (不是索引)",
+      _us("ch", "dyn_ratio")["en"] and len(_us("ch", "dyn_ratio")["en"]) == 12,
+      str(_us("ch", "dyn_ratio")["en"]))
 
 print("== A9. 二维发送 / 索引型枚举 / 反向对数 ==")
 # dyn/ratio: 线上是 0..11 的索引, 本地存比值。两个方向都必须对得上, 否则
@@ -471,6 +515,8 @@ check("发送电平 161 档: 0.42 → 67/160",
       str(param_coerce("send_level", 0.42)))
 check("发送电平端点不漂 (0.0 / 1.0)",
       param_coerce("send_level", 0.0) == 0.0 and param_coerce("send_level", 1.0) == 1.0)
+import re  # noqa: E402  (仅用于校验仍是手写的 SEND_UI 档位)
+_js = open(os.path.join(BASE, "web", "app.js"), encoding="utf-8").read()
 _ui = re.search(r"\{f:'send_level'.*?\}", _js)
 _step = float(re.search(r"step:([\d.]+)", _ui.group(0)).group(1))
 check("前端发送电平档位 = 100/160 = 0.625%",
@@ -684,14 +730,21 @@ check("回归低切频率回预设值 (~200, 101 对数档)",
 print("== B8. /api/state 形状 ==")
 s = state()
 row = s["ch"]["1"]
-check("ch 行 58 个字段", len(row) == 58, str(len(row)))
+check("ch 行 59 个字段 (推子/静音 + 57 处理参数)", len(row) == 59, str(len(row)))
 check("on 是 int / fader 是 float (JSON 形状未变)",
       isinstance(row["on"], int) and not isinstance(row["on"], bool)
       and isinstance(row["fader"], float))
 check("trim 是 float / 斜率是 int",
       isinstance(row["trim"], float) and isinstance(row["hpf_slope"], int))
-check("bus 行仍只有 2 个字段", len(s["bus"]["1"]) == 2, str(sorted(s["bus"]["1"])))
-check("main 行只有推子/静音 (无 %02d 那套)", len(s["main"]) == 2, str(sorted(s["main"])))
+# 非输入组在 /api/state 里只带"推子/静音/声像"三项 —— 45~50 个处理参数走
+# /api/params 按需取, 否则任何一处改动都会让整包快照多出 26KB。
+check("bus 行只带 fader/on/pan (处理参数不进快照)",
+      sorted(s["bus"]["1"]) == ["fader", "on", "pan"], str(sorted(s["bus"]["1"])))
+check("main 行同上 (无 %02d 那套)", sorted(s["main"]) == ["fader", "on", "pan"],
+      str(sorted(s["main"])))
+check("/api/params 能取回 bus 的完整处理参数",
+      len((get_json("/api/params?group=bus&idx=1").get("params") or {})) == 47,
+      str(len(get_json("/api/params?group=bus&idx=1").get("params") or {})))
 
 print("== B8b. 动态 / 均衡 / 发送 (端到端) ==")
 # 动态: ratio 线上是索引 —— 这是本轮最容易"看起来对、实际错一档"的地方
