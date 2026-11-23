@@ -343,6 +343,22 @@ WEB_PAGE = r"""<!DOCTYPE html>
 .cdot{fill:var(--accent);stroke:#0b0d11;stroke-width:1.5;cursor:grab}
 .cfn{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:12px;color:var(--sub);margin:4px 0}
 .cbtn{background:#565d6d;color:#fff;font-size:12px;padding:5px 9px}
+
+/* ---- 效果器面板图 (v1.8) ---- */
+.fxshot{margin:6px 0 8px;border-radius:10px;overflow:hidden;
+  border:1px solid var(--line);background:#0d0f13;line-height:0}
+.fxshot img{width:100%;height:auto;display:block}
+.fxshot.empty{display:none}
+.fxgal{display:grid;grid-template-columns:1fr;gap:10px;margin-top:8px}
+.fxgal figure{margin:0;border:1px solid var(--line);border-radius:12px;overflow:hidden;
+  background:var(--card2)}
+.fxgal img{width:100%;height:auto;display:block;background:#0d0f13}
+.fxgal figcaption{padding:7px 10px;font-size:12.5px;display:flex;gap:8px;
+  align-items:center;justify-content:space-between}
+.fxgal .cn{color:var(--sub);font-size:11.5px}
+.fxgal .tag{font-size:11px;padding:1px 6px;border-radius:999px;
+  border:1px solid var(--line);color:var(--sub);flex:none}
+@media(min-width:700px){.fxgal{grid-template-columns:1fr 1fr}}
 </style>
 </head>
 <body>
@@ -383,6 +399,7 @@ WEB_PAGE = r"""<!DOCTYPE html>
       <span class="ds" id="fxConsoleTag" style="margin:0"></span></div>
     <div class="ds" id="fxConsoleNote">效果槽、算法清单与参数索引都来自<b>当前控台驱动</b> —— 在「设置」里换控台，这里会自动换库。</div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:6px">
+      <button id="fxGalBtn" onclick="fxGallery()">🖼 效果器图鉴</button>
       <button id="fxPullBtn" onclick="fxPull()">⟳ 从真台同步效果</button>
       <span class="ds" id="fxPullNote" style="margin:0">读回真台各效果槽的算法/开关/参数（需桥接真台）</span>
     </div>
@@ -675,6 +692,21 @@ WEB_PAGE = r"""<!DOCTYPE html>
       <button type="button" data-tab="send" onclick="chpTab('send')">发送</button>
     </div>
     <div id="chParamBody"></div>
+  </div>
+</div>
+
+<div class="modal" id="fxGalModal" onclick="if(event.target===this)closeFxGallery()">
+  <div class="mdlg" role="dialog" aria-label="效果器图鉴">
+    <div class="mhd"><b>效果器图鉴</b>
+      <button class="mclose" onclick="closeFxGallery()" aria-label="关闭">✕</button></div>
+    <div class="ds">真实界面截图 —— X32 由官方编辑器逐算法渲染，WING 取自官方手册的 FX 选择页。
+      用来「对上号」：台面上显示的就是这个样子，不是我们画的示意图。</div>
+    <div class="chp-tabs" id="fxGalTabs">
+      <button type="button" data-g="x32" onclick="fxGalTab('x32')">X32 / M32</button>
+      <button type="button" data-g="premium" onclick="fxGalTab('premium')">WING 高级</button>
+      <button type="button" data-g="standard" onclick="fxGalTab('standard')">WING 标准</button>
+    </div>
+    <div id="fxGalBody" class="fxgal"></div>
   </div>
 </div>
 
@@ -2111,7 +2143,46 @@ function fxCardHTML(s){
         onchange="fxSet(${s},'name',this.value)">
       <button class="mute fx-on" onclick="fxToggle(${s})" title="效果开关">M</button>
       <span class="ds fx-tag" style="margin:0"></span></div>
+    <div class="fxshot empty"><img alt="效果器面板" loading="lazy"></div>
     <div class="fxpars"></div></div>`;
+}
+// ---- 效果器图鉴 (v1.8) ----
+// 图片是真机界面截图: X32 由 X32-Edit 4.4 逐算法渲染后截取(61 种全),
+// WING 取自官方手册的 FX 选择页(52 种)。只作"对号"用, 不参与参数运算。
+// 元数据在 /fx/fxlib.json, 由 X32Simulator/tools/export_fx_gallery.py 生成。
+let fxGalData = null, fxGalGroup = 'x32';
+function fxGallery(){
+  $('#fxGalModal').classList.add('on');
+  if (fxGalData){ fxGalRender(); return; }
+  const body = $('#fxGalBody');
+  body.innerHTML = '<div class="ds">加载中…</div>';
+  fetch('/fx/fxlib.json').then(r => r.json()).then(d => {
+    fxGalData = d; fxGalRender();
+  }).catch(e => {
+    body.innerHTML = '<div class="ds">图鉴元数据加载失败: ' + esc(String(e)) + '</div>';
+  });
+}
+function closeFxGallery(){ $('#fxGalModal').classList.remove('on'); }
+function fxGalTab(g){ fxGalGroup = g; fxGalRender(); }
+function fxGalRender(){
+  if (!fxGalData) return;
+  [...$('#fxGalTabs').children].forEach(b => b.classList.toggle('on', b.dataset.g === fxGalGroup));
+  let rows = [];
+  if (fxGalGroup === 'x32'){
+    rows = (fxGalData.x32.items || []).map(it => ({
+      img: it.img, name: it.en, sub: it.cn,
+      tag: it.heavy ? '仅 FX1-4' : (it.n + ' 参数')}));
+  } else {
+    const g = fxGalData.wing[fxGalGroup] || {items: []};
+    rows = g.items.map(it => ({img: it.img, name: it.name, sub: '', tag: ''}));
+  }
+  $('#fxGalBody').innerHTML = rows.length ? rows.map(r =>
+      '<figure><img src="/fx/' + esc(r.img) + '" loading="lazy" alt="' + esc(r.name) + '">'
+      + '<figcaption><span><b>' + esc(r.name) + '</b>'
+      + (r.sub ? ' <span class="cn">' + esc(r.sub) + '</span>' : '') + '</span>'
+      + (r.tag ? '<span class="tag">' + esc(r.tag) + '</span>' : '')
+      + '</figcaption></figure>').join('')
+    : '<div class="ds">这一类还没有图。</div>';
 }
 function buildFx(){
   $('#fxNote').innerHTML = FX_NOTE_OPTS.map(([v,t]) => `<option value="${v}">${t}</option>`).join('');
@@ -2159,6 +2230,21 @@ function updFx(){
                : (st.time != null ? (st.tmin + '–' + st.tmax + ' ' + (st.tunit || 's'))
                                   : (((st.params || []).length) + ' 个参数')));
     if (tag.textContent !== txt) tag.textContent = txt;
+    // 面板图: 用真台算法代码查内嵌截图。算法不在库里/空槽就收起整块,
+    // 不留一个空白框 —— 空框会被当成"图没加载出来"。
+    const box = card.querySelector('.fxshot');
+    if (box) {
+      const img = box.querySelector('img');
+      const src = st.loaded && st.known
+        ? '/fx/x32/' + String(st.type).replace('/', '_') + '.webp' : '';
+      if (src) {
+        if (img.getAttribute('src') !== src) img.src = src;
+        box.classList.remove('empty');
+      } else {
+        img.removeAttribute('src');
+        box.classList.add('empty');
+      }
+    }
     // 算法变了就重建这一张卡的参数区 (range 的 min/max 随算法范围变)
     const pars = card.querySelector('.fxpars');
     // 算法变了、或控台锁定状态变了 → 重建参数区（range 的 min/max 随算法范围变；

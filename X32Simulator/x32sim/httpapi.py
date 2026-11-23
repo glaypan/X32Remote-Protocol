@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """x32sim/httpapi — HTTP API (WebHandler: 全部路由)"""
 
+import base64
 import json
 import time
 import urllib.parse
@@ -26,6 +27,7 @@ from .snapshot import snapshot_state_safe
 from .state import STATE, XREMOTE_SNAPSHOT, compute_levels, get_value, set_name, set_value, target_exists
 from .timeline import SCHEDULES, _show_stop_current, cancel_schedule, run_show, schedule_card
 from .util import _finite
+from .fxassets import FX_ASSETS
 from .webassets import PWA_ICON, PWA_MANIFEST, PWA_SERVICE_WORKER, WEB_PAGE
 
 # ------------------------------------------------------------
@@ -238,6 +240,27 @@ class WebHandler(BaseHTTPRequestHandler):
         elif path == "/icon.svg":
             self._send(200, "image/svg+xml; charset=utf-8",
                        PWA_ICON.encode("utf-8"))
+        elif path.startswith("/fx/"):
+            # 效果器面板图 / 图鉴元数据。图片是内嵌的 base64（发行形态是单文件，
+            # 读不了外部目录），所以这里解一次再发，不落磁盘。
+            # 缓存放长：文件名带算法代码，内容不会变（换图就是换代码版本）。
+            key = path[4:]
+            blob = FX_ASSETS.get(key)
+            if blob is None:
+                self._send(404, "text/plain; charset=utf-8", b"not found")
+                return
+            raw = base64.b64decode(blob)
+            ctype = ("image/webp" if key.endswith(".webp") else
+                     "application/json; charset=utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(raw)))
+            self.send_header("Cache-Control", "public, max-age=604800")
+            self.end_headers()
+            try:
+                self.wfile.write(raw)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
         elif path == "/sw.js":
             self._send(200, "application/javascript; charset=utf-8",
                        PWA_SERVICE_WORKER.encode("utf-8"))

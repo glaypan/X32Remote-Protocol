@@ -52,6 +52,7 @@
       <span class="ds" id="fxConsoleTag" style="margin:0"></span></div>
     <div class="ds" id="fxConsoleNote">效果槽、算法清单与参数索引都来自<b>当前控台驱动</b> —— 在「设置」里换控台，这里会自动换库。</div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:6px">
+      <button id="fxGalBtn" onclick="fxGallery()">🖼 效果器图鉴</button>
       <button id="fxPullBtn" onclick="fxPull()">⟳ 从真台同步效果</button>
       <span class="ds" id="fxPullNote" style="margin:0">读回真台各效果槽的算法/开关/参数（需桥接真台）</span>
     </div>
@@ -344,6 +345,21 @@
       <button type="button" data-tab="send" onclick="chpTab('send')">发送</button>
     </div>
     <div id="chParamBody"></div>
+  </div>
+</div>
+
+<div class="modal" id="fxGalModal" onclick="if(event.target===this)closeFxGallery()">
+  <div class="mdlg" role="dialog" aria-label="效果器图鉴">
+    <div class="mhd"><b>效果器图鉴</b>
+      <button class="mclose" onclick="closeFxGallery()" aria-label="关闭">✕</button></div>
+    <div class="ds">真实界面截图 —— X32 由官方编辑器逐算法渲染，WING 取自官方手册的 FX 选择页。
+      用来「对上号」：台面上显示的就是这个样子，不是我们画的示意图。</div>
+    <div class="chp-tabs" id="fxGalTabs">
+      <button type="button" data-g="x32" onclick="fxGalTab('x32')">X32 / M32</button>
+      <button type="button" data-g="premium" onclick="fxGalTab('premium')">WING 高级</button>
+      <button type="button" data-g="standard" onclick="fxGalTab('standard')">WING 标准</button>
+    </div>
+    <div id="fxGalBody" class="fxgal"></div>
   </div>
 </div>
 

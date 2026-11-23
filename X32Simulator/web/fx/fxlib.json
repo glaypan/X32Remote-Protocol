@@ -1,0 +1,898 @@
+{
+ "v": 1,
+ "note": "由 X32Simulator/tools/export_fx_gallery.py 生成, 禁止手改",
+ "x32": {
+  "label": "X32 / M32 效果库",
+  "count": 61,
+  "heavySlots": [
+   1,
+   2,
+   3,
+   4
+  ],
+  "items": [
+   {
+    "code": "HALL",
+    "cn": "大厅混响",
+    "en": "Hall Reverb",
+    "cat": "reverb",
+    "catCn": "混响",
+    "n": 12,
+    "heavy": 1,
+    "img": "x32/HALL.webp"
+   },
+   {
+    "code": "PLAT",
+    "cn": "板式混响",
+    "en": "Plate Reverb",
+    "cat": "reverb",
+    "catCn": "混响",
+    "n": 12,
+    "heavy": 1,
+    "img": "x32/PLAT.webp"
+   },
+   {
+    "code": "AMBI",
+    "cn": "氛围混响",
+    "en": "Ambience",
+    "cat": "reverb",
+    "catCn": "混响",
+    "n": 10,
+    "heavy": 1,
+    "img": "x32/AMBI.webp"
+   },
+   {
+    "code": "RPLT",
+    "cn": "Rich 板式混响",
+    "en": "Rich Plate Reverb",
+    "cat": "reverb",
+    "catCn": "混响",
+    "n": 16,
+    "heavy": 1,
+    "img": "x32/RPLT.webp"
+   },
+   {
+    "code": "ROOM",
+    "cn": "房间混响",
+    "en": "Room Reverb",
+    "cat": "reverb",
+    "catCn": "混响",
+    "n": 16,
+    "heavy": 1,
+    "img": "x32/ROOM.webp"
+   },
+   {
+    "code": "CHAM",
+    "cn": "密室混响",
+    "en": "Chamber Reverb",
+    "cat": "reverb",
+    "catCn": "混响",
+    "n": 16,
+    "heavy": 1,
+    "img": "x32/CHAM.webp"
+   },
+   {
+    "code": "VREV",
+    "cn": "复古混响",
+    "en": "Vintage Reverb",
+    "cat": "reverb",
+    "catCn": "混响",
+    "n": 10,
+    "heavy": 1,
+    "img": "x32/VREV.webp"
+   },
+   {
+    "code": "VRM",
+    "cn": "复古房间",
+    "en": "Vintage Room",
+    "cat": "reverb",
+    "catCn": "混响",
+    "n": 13,
+    "heavy": 1,
+    "img": "x32/VRM.webp"
+   },
+   {
+    "code": "GATE",
+    "cn": "门混响",
+    "en": "Gated Reverb",
+    "cat": "reverb",
+    "catCn": "混响",
+    "n": 10,
+    "heavy": 1,
+    "img": "x32/GATE.webp"
+   },
+   {
+    "code": "RVRS",
+    "cn": "反向混响",
+    "en": "Reverse Reverb",
+    "cat": "reverb",
+    "catCn": "混响",
+    "n": 9,
+    "heavy": 1,
+    "img": "x32/RVRS.webp"
+   },
+   {
+    "code": "DLY",
+    "cn": "立体声延迟",
+    "en": "Stereo Delay",
+    "cat": "delay",
+    "catCn": "延迟",
+    "n": 12,
+    "heavy": 1,
+    "img": "x32/DLY.webp"
+   },
+   {
+    "code": "3TAP",
+    "cn": "3 段延迟",
+    "en": "3-Tap Delay",
+    "cat": "delay",
+    "catCn": "延迟",
+    "n": 15,
+    "heavy": 1,
+    "img": "x32/3TAP.webp"
+   },
+   {
+    "code": "4TAP",
+    "cn": "节奏延迟",
+    "en": "Rhythm Delay",
+    "cat": "delay",
+    "catCn": "延迟",
+    "n": 15,
+    "heavy": 1,
+    "img": "x32/4TAP.webp"
+   },
+   {
+    "code": "D/RV",
+    "cn": "延迟+密室",
+    "en": "Delay + Chamber",
+    "cat": "combo",
+    "catCn": "组合效果",
+    "n": 12,
+    "heavy": 1,
+    "img": "x32/D_RV.webp"
+   },
+   {
+    "code": "D/CR",
+    "cn": "延迟+合唱",
+    "en": "Delay + Chorus",
+    "cat": "combo",
+    "catCn": "组合效果",
+    "n": 12,
+    "heavy": 1,
+    "img": "x32/D_CR.webp"
+   },
+   {
+    "code": "D/FL",
+    "cn": "延迟+镶边",
+    "en": "Delay + Flanger",
+    "cat": "combo",
+    "catCn": "组合效果",
+    "n": 12,
+    "heavy": 1,
+    "img": "x32/D_FL.webp"
+   },
+   {
+    "code": "CR/R",
+    "cn": "合唱+密室",
+    "en": "Chorus + Chamber",
+    "cat": "combo",
+    "catCn": "组合效果",
+    "n": 12,
+    "heavy": 1,
+    "img": "x32/CR_R.webp"
+   },
+   {
+    "code": "FL/R",
+    "cn": "镶边+密室",
+    "en": "Flanger + Chamber",
+    "cat": "combo",
+    "catCn": "组合效果",
+    "n": 12,
+    "heavy": 1,
+    "img": "x32/FL_R.webp"
+   },
+   {
+    "code": "MODD",
+    "cn": "调制延迟",
+    "en": "Modulation Delay",
+    "cat": "combo",
+    "catCn": "组合效果",
+    "n": 13,
+    "heavy": 1,
+    "img": "x32/MODD.webp"
+   },
+   {
+    "code": "CRS",
+    "cn": "立体声合唱",
+    "en": "Stereo Chorus",
+    "cat": "mod",
+    "catCn": "调制",
+    "n": 11,
+    "heavy": 1,
+    "img": "x32/CRS.webp"
+   },
+   {
+    "code": "FLNG",
+    "cn": "立体声镶边",
+    "en": "Stereo Flanger",
+    "cat": "mod",
+    "catCn": "调制",
+    "n": 12,
+    "heavy": 1,
+    "img": "x32/FLNG.webp"
+   },
+   {
+    "code": "PHAS",
+    "cn": "立体声移相",
+    "en": "Stereo Phaser",
+    "cat": "mod",
+    "catCn": "调制",
+    "n": 12,
+    "heavy": 0,
+    "img": "x32/PHAS.webp"
+   },
+   {
+    "code": "DIMC",
+    "cn": "Dimension-C 合唱",
+    "en": "Dimensional Chorus",
+    "cat": "mod",
+    "catCn": "调制",
+    "n": 7,
+    "heavy": 1,
+    "img": "x32/DIMC.webp"
+   },
+   {
+    "code": "FILT",
+    "cn": "情绪滤波",
+    "en": "Mood Filter",
+    "cat": "mod",
+    "catCn": "调制",
+    "n": 14,
+    "heavy": 0,
+    "img": "x32/FILT.webp"
+   },
+   {
+    "code": "ROTA",
+    "cn": "旋转音箱",
+    "en": "Rotary Speaker",
+    "cat": "mod",
+    "catCn": "调制",
+    "n": 8,
+    "heavy": 1,
+    "img": "x32/ROTA.webp"
+   },
+   {
+    "code": "PAN",
+    "cn": "颤音/声像",
+    "en": "Tremolo / Panner",
+    "cat": "mod",
+    "catCn": "调制",
+    "n": 9,
+    "heavy": 0,
+    "img": "x32/PAN.webp"
+   },
+   {
+    "code": "SUB",
+    "cn": "低八度",
+    "en": "Suboctaver",
+    "cat": "pitch",
+    "catCn": "变调",
+    "n": 5,
+    "heavy": 0,
+    "img": "x32/SUB.webp"
+   },
+   {
+    "code": "PIT",
+    "cn": "立体声变调",
+    "en": "Stereo Pitch Shifter",
+    "cat": "pitch",
+    "catCn": "变调",
+    "n": 6,
+    "heavy": 1,
+    "img": "x32/PIT.webp"
+   },
+   {
+    "code": "PIT2",
+    "cn": "双声道变调",
+    "en": "Dual Pitch Shifter",
+    "cat": "pitch",
+    "catCn": "变调",
+    "n": 12,
+    "heavy": 1,
+    "img": "x32/PIT2.webp"
+   },
+   {
+    "code": "GEQ2",
+    "cn": "双通道图示 EQ",
+    "en": "Dual Graphic EQ",
+    "cat": "eq",
+    "catCn": "均衡",
+    "n": 64,
+    "heavy": 0,
+    "img": "x32/GEQ2.webp"
+   },
+   {
+    "code": "GEQ",
+    "cn": "立体声图示 EQ",
+    "en": "Stereo Graphic EQ",
+    "cat": "eq",
+    "catCn": "均衡",
+    "n": 32,
+    "heavy": 0,
+    "img": "x32/GEQ.webp"
+   },
+   {
+    "code": "TEQ2",
+    "cn": "双通道 True EQ",
+    "en": "Dual TruEQ",
+    "cat": "eq",
+    "catCn": "均衡",
+    "n": 64,
+    "heavy": 0,
+    "img": "x32/TEQ2.webp"
+   },
+   {
+    "code": "TEQ",
+    "cn": "立体声 True EQ",
+    "en": "Stereo TruEQ",
+    "cat": "eq",
+    "catCn": "均衡",
+    "n": 32,
+    "heavy": 0,
+    "img": "x32/TEQ.webp"
+   },
+   {
+    "code": "P1A",
+    "cn": "立体声 Program EQ",
+    "en": "Stereo Xtec EQ1",
+    "cat": "eq",
+    "catCn": "均衡",
+    "n": 10,
+    "heavy": 0,
+    "img": "x32/P1A.webp"
+   },
+   {
+    "code": "P1A2",
+    "cn": "双通道 Program EQ",
+    "en": "Dual Xtec EQ1",
+    "cat": "eq",
+    "catCn": "均衡",
+    "n": 20,
+    "heavy": 0,
+    "img": "x32/P1A2.webp"
+   },
+   {
+    "code": "PQ5",
+    "cn": "立体声 Midrange EQ",
+    "en": "Stereo Xtec EQ5",
+    "cat": "eq",
+    "catCn": "均衡",
+    "n": 9,
+    "heavy": 0,
+    "img": "x32/PQ5.webp"
+   },
+   {
+    "code": "PQ5S",
+    "cn": "双通道 Midrange EQ",
+    "en": "Dual Xtec EQ5",
+    "cat": "eq",
+    "catCn": "均衡",
+    "n": 18,
+    "heavy": 0,
+    "img": "x32/PQ5S.webp"
+   },
+   {
+    "code": "DES",
+    "cn": "立体声去咝声",
+    "en": "Stereo DeEsser",
+    "cat": "dyn",
+    "catCn": "动态",
+    "n": 6,
+    "heavy": 0,
+    "img": "x32/DES.webp"
+   },
+   {
+    "code": "DES2",
+    "cn": "双通道去咝声",
+    "en": "Dual DeEsser",
+    "cat": "dyn",
+    "catCn": "动态",
+    "n": 6,
+    "heavy": 0,
+    "img": "x32/DES2.webp"
+   },
+   {
+    "code": "LIM",
+    "cn": "精密限幅器",
+    "en": "Precision Limiter",
+    "cat": "dyn",
+    "catCn": "动态",
+    "n": 8,
+    "heavy": 0,
+    "img": "x32/LIM.webp"
+   },
+   {
+    "code": "CMB",
+    "cn": "立体声 Combinator",
+    "en": "Stereo Combinator",
+    "cat": "dyn",
+    "catCn": "动态",
+    "n": 29,
+    "heavy": 1,
+    "img": "x32/CMB.webp"
+   },
+   {
+    "code": "CMB2",
+    "cn": "双通道 Combinator",
+    "en": "Dual Combinator",
+    "cat": "dyn",
+    "catCn": "动态",
+    "n": 58,
+    "heavy": 1,
+    "img": "x32/CMB2.webp"
+   },
+   {
+    "code": "FAC",
+    "cn": "立体声 Fair 压缩",
+    "en": "Stereo Fair Compressor",
+    "cat": "dyn",
+    "catCn": "动态",
+    "n": 7,
+    "heavy": 0,
+    "img": "x32/FAC.webp"
+   },
+   {
+    "code": "FAC1M",
+    "cn": "M/S Fair 压缩",
+    "en": "M/S Fair Compressor",
+    "cat": "dyn",
+    "catCn": "动态",
+    "n": 7,
+    "heavy": 0,
+    "img": "x32/FAC1M.webp"
+   },
+   {
+    "code": "FAC2",
+    "cn": "双通道 Fair 压缩",
+    "en": "Dual Fair Compressor",
+    "cat": "dyn",
+    "catCn": "动态",
+    "n": 14,
+    "heavy": 0,
+    "img": "x32/FAC2.webp"
+   },
+   {
+    "code": "LEC",
+    "cn": "立体声 Leisure 压缩",
+    "en": "Stereo Leisure Compressor",
+    "cat": "dyn",
+    "catCn": "动态",
+    "n": 5,
+    "heavy": 0,
+    "img": "x32/LEC.webp"
+   },
+   {
+    "code": "LEC2",
+    "cn": "双通道 Leisure 压缩",
+    "en": "Dual Leisure Compressor",
+    "cat": "dyn",
+    "catCn": "动态",
+    "n": 10,
+    "heavy": 0,
+    "img": "x32/LEC2.webp"
+   },
+   {
+    "code": "ULC",
+    "cn": "立体声 Ultimo 压缩",
+    "en": "Stereo Ultimo Compressor",
+    "cat": "dyn",
+    "catCn": "动态",
+    "n": 6,
+    "heavy": 0,
+    "img": "x32/ULC.webp"
+   },
+   {
+    "code": "ULC2",
+    "cn": "双通道 Ultimo 压缩",
+    "en": "Dual Ultimo Compressor",
+    "cat": "dyn",
+    "catCn": "动态",
+    "n": 12,
+    "heavy": 0,
+    "img": "x32/ULC2.webp"
+   },
+   {
+    "code": "WAVD",
+    "cn": "波形设计器",
+    "en": "Wave Designer",
+    "cat": "dyn",
+    "catCn": "动态",
+    "n": 6,
+    "heavy": 0,
+    "img": "x32/WAVD.webp"
+   },
+   {
+    "code": "ENH",
+    "cn": "立体声增强器",
+    "en": "Stereo Enhancer",
+    "cat": "enh",
+    "catCn": "增强/成像",
+    "n": 9,
+    "heavy": 0,
+    "img": "x32/ENH.webp"
+   },
+   {
+    "code": "ENH2",
+    "cn": "双通道增强器",
+    "en": "Dual Enhancer",
+    "cat": "enh",
+    "catCn": "增强/成像",
+    "n": 18,
+    "heavy": 0,
+    "img": "x32/ENH2.webp"
+   },
+   {
+    "code": "EXC",
+    "cn": "立体声激励器",
+    "en": "Stereo Exciter",
+    "cat": "enh",
+    "catCn": "增强/成像",
+    "n": 7,
+    "heavy": 0,
+    "img": "x32/EXC.webp"
+   },
+   {
+    "code": "EXC2",
+    "cn": "双通道激励器",
+    "en": "Dual Exciter",
+    "cat": "enh",
+    "catCn": "增强/成像",
+    "n": 14,
+    "heavy": 0,
+    "img": "x32/EXC2.webp"
+   },
+   {
+    "code": "SON",
+    "cn": "Sound Maxer",
+    "en": "Sound Maxer",
+    "cat": "enh",
+    "catCn": "增强/成像",
+    "n": 8,
+    "heavy": 0,
+    "img": "x32/SON.webp"
+   },
+   {
+    "code": "IMG",
+    "cn": "立体声成像",
+    "en": "Stereo Imager",
+    "cat": "enh",
+    "catCn": "增强/成像",
+    "n": 7,
+    "heavy": 0,
+    "img": "x32/IMG.webp"
+   },
+   {
+    "code": "EDI",
+    "cn": "Edison EX1",
+    "en": "Edison EX1",
+    "cat": "enh",
+    "catCn": "增强/成像",
+    "n": 8,
+    "heavy": 0,
+    "img": "x32/EDI.webp"
+   },
+   {
+    "code": "AMP",
+    "cn": "立体声吉他箱头",
+    "en": "Stereo Guitar Amp",
+    "cat": "amp",
+    "catCn": "吉他",
+    "n": 9,
+    "heavy": 0,
+    "img": "x32/AMP.webp"
+   },
+   {
+    "code": "AMP2",
+    "cn": "双通道吉他箱头",
+    "en": "Dual Guitar Amp",
+    "cat": "amp",
+    "catCn": "吉他",
+    "n": 18,
+    "heavy": 0,
+    "img": "x32/AMP2.webp"
+   },
+   {
+    "code": "DRV",
+    "cn": "立体声电子管",
+    "en": "Stereo Tube Stage",
+    "cat": "amp",
+    "catCn": "吉他",
+    "n": 10,
+    "heavy": 0,
+    "img": "x32/DRV.webp"
+   },
+   {
+    "code": "DRV2",
+    "cn": "双通道电子管",
+    "en": "Dual Tube Stage",
+    "cat": "amp",
+    "catCn": "吉他",
+    "n": 20,
+    "heavy": 0,
+    "img": "x32/DRV2.webp"
+   }
+  ]
+ },
+ "wing": {
+  "premium": {
+   "label": "高级效果器（仅 WING 的 FX1-8 槽）",
+   "items": [
+    {
+     "slug": "ambience",
+     "name": "AMBIENCE",
+     "img": "wing/premium/ambience.webp"
+    },
+    {
+     "slug": "bbd-delay",
+     "name": "BBD DELAY",
+     "img": "wing/premium/bbd-delay.webp"
+    },
+    {
+     "slug": "blue-plate",
+     "name": "BLUE PLATE",
+     "img": "wing/premium/blue-plate.webp"
+    },
+    {
+     "slug": "chamber-reverb",
+     "name": "CHAMBER REVERB",
+     "img": "wing/premium/chamber-reverb.webp"
+    },
+    {
+     "slug": "concert-reverb",
+     "name": "CONCERT REVERB",
+     "img": "wing/premium/concert-reverb.webp"
+    },
+    {
+     "slug": "delay-reverb",
+     "name": "DELAY REVERB",
+     "img": "wing/premium/delay-reverb.webp"
+    },
+    {
+     "slug": "dimension-crs",
+     "name": "DIMENSION CRS",
+     "img": "wing/premium/dimension-crs.webp"
+    },
+    {
+     "slug": "dual-pitch",
+     "name": "DUAL PITCH",
+     "img": "wing/premium/dual-pitch.webp"
+    },
+    {
+     "slug": "gated-reverb",
+     "name": "GATED REVERB",
+     "img": "wing/premium/gated-reverb.webp"
+    },
+    {
+     "slug": "hall-reverb",
+     "name": "HALL REVERB",
+     "img": "wing/premium/hall-reverb.webp"
+    },
+    {
+     "slug": "oilcan-delay",
+     "name": "OILCAN DELAY",
+     "img": "wing/premium/oilcan-delay.webp"
+    },
+    {
+     "slug": "plate-reverb",
+     "name": "PLATE REVERB",
+     "img": "wing/premium/plate-reverb.webp"
+    },
+    {
+     "slug": "reverse-reverb",
+     "name": "REVERSE REVERB",
+     "img": "wing/premium/reverse-reverb.webp"
+    },
+    {
+     "slug": "room-reverb",
+     "name": "ROOM REVERB",
+     "img": "wing/premium/room-reverb.webp"
+    },
+    {
+     "slug": "shimmer-reverb",
+     "name": "SHIMMER REVERB",
+     "img": "wing/premium/shimmer-reverb.webp"
+    },
+    {
+     "slug": "spring-reverb",
+     "name": "SPRING REVERB",
+     "img": "wing/premium/spring-reverb.webp"
+    },
+    {
+     "slug": "stereo-chorus",
+     "name": "STEREO CHORUS",
+     "img": "wing/premium/stereo-chorus.webp"
+    },
+    {
+     "slug": "stereo-delay",
+     "name": "STEREO DELAY",
+     "img": "wing/premium/stereo-delay.webp"
+    },
+    {
+     "slug": "stereo-flanger",
+     "name": "STEREO FLANGER",
+     "img": "wing/premium/stereo-flanger.webp"
+    },
+    {
+     "slug": "stereo-pitch",
+     "name": "STEREO PITCH",
+     "img": "wing/premium/stereo-pitch.webp"
+    },
+    {
+     "slug": "tape-delay",
+     "name": "TAPE DELAY",
+     "img": "wing/premium/tape-delay.webp"
+    },
+    {
+     "slug": "ultratap-delay",
+     "name": "ULTRATAP DELAY",
+     "img": "wing/premium/ultratap-delay.webp"
+    },
+    {
+     "slug": "vintage-plate",
+     "name": "VINTAGE PLATE",
+     "img": "wing/premium/vintage-plate.webp"
+    },
+    {
+     "slug": "vintage-reverb",
+     "name": "VINTAGE REVERB",
+     "img": "wing/premium/vintage-reverb.webp"
+    },
+    {
+     "slug": "vintage-room",
+     "name": "VINTAGE ROOM",
+     "img": "wing/premium/vintage-room.webp"
+    },
+    {
+     "slug": "vss3-reverb",
+     "name": "VSS3 REVERB",
+     "img": "wing/premium/vss3-reverb.webp"
+    }
+   ]
+  },
+  "standard": {
+   "label": "标准效果器（WING 的 FX9-16 槽，X32 也有同族）",
+   "items": [
+    {
+     "slug": "2-band-deesser",
+     "name": "2 BAND DEESSER",
+     "img": "wing/standard/2-band-deesser.webp"
+    },
+    {
+     "slug": "angel-amp",
+     "name": "ANGEL AMP",
+     "img": "wing/standard/angel-amp.webp"
+    },
+    {
+     "slug": "bodyrez",
+     "name": "BODYREZ",
+     "img": "wing/standard/bodyrez.webp"
+    },
+    {
+     "slug": "combinator",
+     "name": "COMBINATOR",
+     "img": "wing/standard/combinator.webp"
+    },
+    {
+     "slug": "deluxe-amp",
+     "name": "DELUXE AMP",
+     "img": "wing/standard/deluxe-amp.webp"
+    },
+    {
+     "slug": "double-vocal",
+     "name": "DOUBLE VOCAL",
+     "img": "wing/standard/double-vocal.webp"
+    },
+    {
+     "slug": "exciter",
+     "name": "EXCITER",
+     "img": "wing/standard/exciter.webp"
+    },
+    {
+     "slug": "graphic-eq",
+     "name": "GRAPHIC EQ",
+     "img": "wing/standard/graphic-eq.webp"
+    },
+    {
+     "slug": "jazz-clean-amp",
+     "name": "JAZZ CLEAN AMP",
+     "img": "wing/standard/jazz-clean-amp.webp"
+    },
+    {
+     "slug": "mood-filter",
+     "name": "MOOD FILTER",
+     "img": "wing/standard/mood-filter.webp"
+    },
+    {
+     "slug": "phaser",
+     "name": "PHASER",
+     "img": "wing/standard/phaser.webp"
+    },
+    {
+     "slug": "pia-560-geq",
+     "name": "PIA 560 GEQ",
+     "img": "wing/standard/pia-560-geq.webp"
+    },
+    {
+     "slug": "pitch-fix",
+     "name": "PITCH FIX",
+     "img": "wing/standard/pitch-fix.webp"
+    },
+    {
+     "slug": "precision-limiter",
+     "name": "PRECISION LIMITER",
+     "img": "wing/standard/precision-limiter.webp"
+    },
+    {
+     "slug": "psycho-bass",
+     "name": "PSYCHO BASS",
+     "img": "wing/standard/psycho-bass.webp"
+    },
+    {
+     "slug": "rack-amp",
+     "name": "RACK AMP",
+     "img": "wing/standard/rack-amp.webp"
+    },
+    {
+     "slug": "rotary-speaker",
+     "name": "ROTARY SPEAKER",
+     "img": "wing/standard/rotary-speaker.webp"
+    },
+    {
+     "slug": "speaker-manager",
+     "name": "SPEAKER MANAGER",
+     "img": "wing/standard/speaker-manager.webp"
+    },
+    {
+     "slug": "sub-monster",
+     "name": "SUB MONSTER",
+     "img": "wing/standard/sub-monster.webp"
+    },
+    {
+     "slug": "sub-octaver",
+     "name": "SUB OCTAVER",
+     "img": "wing/standard/sub-octaver.webp"
+    },
+    {
+     "slug": "tape-machine",
+     "name": "TAPE MACHINE",
+     "img": "wing/standard/tape-machine.webp"
+    },
+    {
+     "slug": "tremolo-panner",
+     "name": "TREMOLO PANNER",
+     "img": "wing/standard/tremolo-panner.webp"
+    },
+    {
+     "slug": "triple-deq",
+     "name": "TRIPLE DEQ",
+     "img": "wing/standard/triple-deq.webp"
+    },
+    {
+     "slug": "uk-rock-amp",
+     "name": "UK ROCK AMP",
+     "img": "wing/standard/uk-rock-amp.webp"
+    },
+    {
+     "slug": "ultra-enhancer",
+     "name": "ULTRA ENHANCER",
+     "img": "wing/standard/ultra-enhancer.webp"
+    },
+    {
+     "slug": "velvet-imager",
+     "name": "VELVET IMAGER",
+     "img": "wing/standard/velvet-imager.webp"
+    }
+   ]
+  }
+ }
+}

@@ -1400,7 +1400,46 @@ function fxCardHTML(s){
         onchange="fxSet(${s},'name',this.value)">
       <button class="mute fx-on" onclick="fxToggle(${s})" title="效果开关">M</button>
       <span class="ds fx-tag" style="margin:0"></span></div>
+    <div class="fxshot empty"><img alt="效果器面板" loading="lazy"></div>
     <div class="fxpars"></div></div>`;
+}
+// ---- 效果器图鉴 (v1.8) ----
+// 图片是真机界面截图: X32 由 X32-Edit 4.4 逐算法渲染后截取(61 种全),
+// WING 取自官方手册的 FX 选择页(52 种)。只作"对号"用, 不参与参数运算。
+// 元数据在 /fx/fxlib.json, 由 X32Simulator/tools/export_fx_gallery.py 生成。
+let fxGalData = null, fxGalGroup = 'x32';
+function fxGallery(){
+  $('#fxGalModal').classList.add('on');
+  if (fxGalData){ fxGalRender(); return; }
+  const body = $('#fxGalBody');
+  body.innerHTML = '<div class="ds">加载中…</div>';
+  fetch('/fx/fxlib.json').then(r => r.json()).then(d => {
+    fxGalData = d; fxGalRender();
+  }).catch(e => {
+    body.innerHTML = '<div class="ds">图鉴元数据加载失败: ' + esc(String(e)) + '</div>';
+  });
+}
+function closeFxGallery(){ $('#fxGalModal').classList.remove('on'); }
+function fxGalTab(g){ fxGalGroup = g; fxGalRender(); }
+function fxGalRender(){
+  if (!fxGalData) return;
+  [...$('#fxGalTabs').children].forEach(b => b.classList.toggle('on', b.dataset.g === fxGalGroup));
+  let rows = [];
+  if (fxGalGroup === 'x32'){
+    rows = (fxGalData.x32.items || []).map(it => ({
+      img: it.img, name: it.en, sub: it.cn,
+      tag: it.heavy ? '仅 FX1-4' : (it.n + ' 参数')}));
+  } else {
+    const g = fxGalData.wing[fxGalGroup] || {items: []};
+    rows = g.items.map(it => ({img: it.img, name: it.name, sub: '', tag: ''}));
+  }
+  $('#fxGalBody').innerHTML = rows.length ? rows.map(r =>
+      '<figure><img src="/fx/' + esc(r.img) + '" loading="lazy" alt="' + esc(r.name) + '">'
+      + '<figcaption><span><b>' + esc(r.name) + '</b>'
+      + (r.sub ? ' <span class="cn">' + esc(r.sub) + '</span>' : '') + '</span>'
+      + (r.tag ? '<span class="tag">' + esc(r.tag) + '</span>' : '')
+      + '</figcaption></figure>').join('')
+    : '<div class="ds">这一类还没有图。</div>';
 }
 function buildFx(){
   $('#fxNote').innerHTML = FX_NOTE_OPTS.map(([v,t]) => `<option value="${v}">${t}</option>`).join('');
@@ -1448,6 +1487,21 @@ function updFx(){
                : (st.time != null ? (st.tmin + '–' + st.tmax + ' ' + (st.tunit || 's'))
                                   : (((st.params || []).length) + ' 个参数')));
     if (tag.textContent !== txt) tag.textContent = txt;
+    // 面板图: 用真台算法代码查内嵌截图。算法不在库里/空槽就收起整块,
+    // 不留一个空白框 —— 空框会被当成"图没加载出来"。
+    const box = card.querySelector('.fxshot');
+    if (box) {
+      const img = box.querySelector('img');
+      const src = st.loaded && st.known
+        ? '/fx/x32/' + String(st.type).replace('/', '_') + '.webp' : '';
+      if (src) {
+        if (img.getAttribute('src') !== src) img.src = src;
+        box.classList.remove('empty');
+      } else {
+        img.removeAttribute('src');
+        box.classList.add('empty');
+      }
+    }
     // 算法变了就重建这一张卡的参数区 (range 的 min/max 随算法范围变)
     const pars = card.querySelector('.fxpars');
     // 算法变了、或控台锁定状态变了 → 重建参数区（range 的 min/max 随算法范围变；
