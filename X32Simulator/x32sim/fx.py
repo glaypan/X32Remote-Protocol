@@ -39,7 +39,9 @@ def fx_lib_meta():
             "catLabel": FX_CAT_LABEL,
             "cats": cats,
             "heavySlots": list(FX_SLOTS_HEAVY),
-            "algos": {k: {"label": v["label"], "cat": v.get("cat", "misc"),
+            # label = 中文（辅助），en = 真台显示名（主）。前端一律先显示 en。
+            "algos": {k: {"label": v["label"], "en": v.get("en") or k,
+                          "cat": v.get("cat", "misc"),
                           "heavy": bool(v.get("heavy")), "n": v.get("n", 0)}
                       for k, v in lib.items()}}
 

@@ -55,7 +55,8 @@ def build_payload():
             if p["kind"] == "i":
                 item["opts"] = p["opts"]
             params.append(item)
-        algos[name] = {"label": d["label"], "cat": d.get("cat", "misc"),
+        algos[name] = {"label": d["label"], "en": d.get("en") or name,
+                       "cat": d.get("cat", "misc"),
                        "heavy": bool(d.get("heavy")), "n": d["n"],
                        "params": params}
         # 语义别名 (time/predelay/damp) 也导出: 三端做 Tap/同步组要用

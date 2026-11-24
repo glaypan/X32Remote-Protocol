@@ -218,16 +218,27 @@ def main():
         if p:
             made.append(p)
 
-    # ---- SHA256SUMS：只覆盖本次实际存在的附件
-    if made:
+    # ---- SHA256SUMS：覆盖本次版本的全部平台附件（不受 --only 影响，
+    #      否则「只补打一个包」会把校验和文件缩成一条，下载页上看起来像丢了包）
+    cand = [
+        OUT / ("X32Remote-%s-windows-x64.zip" % ver),
+        OUT / ("X32Remote-macOS-%s-unsigned.zip" % mver),
+        OUT / ("X32Remote-%s-android.zip" % ver),
+        OUT / ("X32Remote-%s-ios.zip" % ver),
+        OUT / ("X32Remote-%s-server.zip" % ver),
+        OUT / ("X32Remote-%s-source.zip" % ver),
+    ]
+    have = [p for p in cand if p.is_file()]
+    if have:
         sums = OUT / "SHA256SUMS.txt"
-        lines = []
-        for f in sorted(made):
-            lines.append("%s  %s" % (sha256(f), f.name))
+        lines = ["%s  %s" % (sha256(f), f.name) for f in have]
         sums.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
-        print("\n写出 %s（%d 个附件）" % (sums, len(made)))
+        print("\n写出 %s（%d 个附件）" % (sums, len(have)))
         for ln in lines:
             print("  " + ln)
+    if not made:
+        print("\n本次没有任何包被生成 —— 先确认产物已就位")
+        return 1
     return 0
 
 

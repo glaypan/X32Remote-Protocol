@@ -653,7 +653,7 @@ function renderConsole(){
     if(c.ready&&c.verified){
       nt.innerHTML=`地址表已与真机核对 · 通道 <b>${c.counts.ch}</b> · Bus <b>${c.counts.bus}</b>`
         +` · DCA <b>${c.counts.dca}</b> · FX <b>${c.counts.fx}</b> 槽`
-        +(c.fxLib?` · 效果库 <b>${c.fxLib}</b> 种（混响页已同步）`:'');
+        +(c.fxLib?` · 效果库 <b>${c.fxLib}</b> 种（效果器页已同步）`:'');
     } else if(c.ready){
       nt.innerHTML='⚠️ '+esc(c.note||'地址表未经真机核对');
     } else {
@@ -1289,7 +1289,9 @@ document.addEventListener('keydown',e=>{ if(e.key==='Escape') closeCardModal(); 
 function delCard(id){ api('/api/carddel',{id:id}); }
 updNkIdx(); updCaParams(); renderActs(); updNmIdx();
 
-// ---- 混响控制: FX 槽 / Tap 定拍 / 混响时间同步 ----
+// ---- 效果器: FX 槽 1-8 / Tap 定拍 / 混响时间同步 ----
+// 页面覆盖全部 61 种算法（混响/延迟/组合/调制/变调/均衡/动态/增强/吉他），
+// 不是"混响专用"：算法名一律用真台英文名，中文只作括号里的辅助。
 // 与服务端同一套语义: BPM 取最近 8 个间隔均值, 抖动(<0.15s)忽略, 超时(>2s)重开;
 // 时间 = 拍数 × 60/BPM (附点 ×1.5); 实际写入由服务端按算法范围钳制。
 // 算法清单不再写死 —— 由服务端按**当前控台驱动**下发 (S.fx.algos)。
@@ -1309,8 +1311,14 @@ function fxAlgoOpts(emptyLabel){
     const ia = order.indexOf(a), ib = order.indexOf(b);
     return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
   }).map(c => '<optgroup label="' + esc(catLab[c] || c) + '">'
-      + byCat[c].map(k => '<option value="' + esc(k) + '">' + esc(lib[k].label)
-          + (lib[k].heavy ? '（仅FX1-4）' : '') + '</option>').join('')
+      + byCat[c].map(k => {
+          // 真台名在前、中文在后：用户照着台子/X32-Edit 上的字找效果器，
+          // 只给中文等于让他自己翻译（"立体声合唱" ↔ "Stereo Chorus"）。
+          const en = lib[k].en || k, zh = lib[k].label || '';
+          const nm = (!zh || zh === en) ? en : (en + '（' + zh + '）');
+          return '<option value="' + esc(k) + '">' + esc(nm)
+              + (lib[k].heavy ? ' · 仅FX1-4' : '') + '</option>';
+        }).join('')
       + '</optgroup>').join('');
   return '<option value="">' + esc(el) + '</option>' + groups;
 }
@@ -1554,7 +1562,7 @@ function updFx(){
   $('#fxTapSecs').textContent = bpm
     ? ('当前时值换算 = ' + fxNoteSecs(bpm, sync.note, sync.dotted).toFixed(3) + ' 秒') : '';
 }
-// ---- 混响页：效果库随控台自动切换 ----
+// ---- 效果器页：效果库随控台自动切换 ----
 // 只在"效果库真的换了"时重建下拉（见 updFx 的 libId 判断）——
 // 否则 250ms 一次的轮询会把用户正在选的下拉反复重画。
 function renderFxLibrary(){
@@ -1588,7 +1596,7 @@ function renderFxConsole(c){
   if (note && note.dataset.k !== nk){
     note.dataset.k = nk;
     note.innerHTML = c.locked
-      ? ('控台「' + esc(c.label || '?') + '」的效果库还没标定 —— 混响页暂时<b>只能看不能写</b>。'
+      ? ('控台「' + esc(c.label || '?') + '」的效果库还没标定 —— 效果器页暂时<b>只能看不能写</b>。'
          + '写入会被拒绝并记进日志：地址蒙错会写到别的参数上，比干脆不动作难查得多。')
       : ('本控台效果库共 <b>' + (c.libCount || 0) + '</b> 种算法，占用 <b>' + (c.slots || 0)
          + '</b> 个效果槽。下面的算法下拉就是这台台子上真正有的效果。');
@@ -1681,7 +1689,7 @@ function tapApply(){
   .then(r => r.json()).then(d => {
     if (!d || !d.ok){ showToast('Tap 写入失败: ' + ((d && d.error) || '未知')); return; }
     showToast('🎛 按 ' + note + (dotted ? ' 附点' : '') + ' 换算 = ' + d.seconds
-      + ' 秒, 已写入 ' + (d.written || []).length + ' 个混响槽');
+      + ' 秒, 已写入 ' + (d.written || []).length + ' 个效果槽');
   }).catch(() => showToast('Tap 写入失败: 网络异常'));
 }
 

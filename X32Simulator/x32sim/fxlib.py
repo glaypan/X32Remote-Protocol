@@ -950,6 +950,12 @@ FX_LABEL_EN = {
 FX_TYPE_ALIAS = {"PLATE": "PLAT", "CHAMBER": "CHAM", "VINTAGE": "VREV",
                  "ROOM": "ROOM", "HALL": "HALL"}
 
+# 真台显示名注入每个算法条目（键 en）。中文字段仍叫 label —— 界面按
+# 「真台名 + 中文」并排显示：用户是照着台子/X32-Edit 上的字找效果器的，
+# 只给中文等于让他二次翻译，"Stereo Chorus" 与 "立体声合唱" 对不上号。
+for _code, _algo in _RAW.items():
+    _algo["en"] = FX_LABEL_EN.get(_code, _code)
+
 X32_FX_ALGOS = dict(_RAW)
 # M32 与 X32 同一 Klark Teknik 引擎：独立副本，便于日后分化
 M32_FX_ALGOS = {k: dict(v) for k, v in _RAW.items()}

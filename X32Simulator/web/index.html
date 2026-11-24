@@ -46,7 +46,7 @@
   <div class="tilegrid" id="tileKeys"></div>
 </div>
 
-<div class="page" id="pg-fx"><h3>🎛 混响控制 (Tap 定拍 · 混响时间同步)</h3>
+<div class="page" id="pg-fx"><h3>🎛 效果器 FX 1-8 (61 种算法 · Tap 定拍 · 混响同步)</h3>
   <div class="card">
     <div class="nm">🎛 效果库来源：<span id="fxConsoleName">—</span>
       <span class="ds" id="fxConsoleTag" style="margin:0"></span></div>
@@ -57,8 +57,9 @@
       <span class="ds" id="fxPullNote" style="margin:0">读回真台各效果槽的算法/开关/参数（需桥接真台）</span>
     </div>
   </div>
-  <div class="ds">这里是 <b id="fxConsoleName2">当前控台</b> 的 <b>FX 效果槽 1-8</b>。给槽选一个算法后, 就能调它的<b>全部参数</b> —— 效果库 <b>61 种</b>算法 (混响/延迟/调制/均衡/动态…) 按分类分组, 数值是滑杆、枚举是下拉。
-    <b>Tap 定拍</b>可直接把混响时间算到节拍上, 再按「同步设置」铺给联动的其他槽。<br>
+  <div class="ds">这里是 <b id="fxConsoleName2">当前控台</b> 的 <b>FX 效果槽 1-8</b>。给槽选一个算法后, 就能调它的<b>全部参数</b> —— 效果库 <b>61 种</b>算法 (混响/延迟/组合/调制/变调/均衡/动态/增强/吉他) 按分类分组, 数值是滑杆、枚举是下拉。<br>
+    算法名照<b>真台写法</b>（X32-Edit / 固件 FX 页上的英文名，如 Stereo Chorus），括号里是中文辅助 —— 照着台子上的字找就对得上。<br>
+    <b>Tap 定拍</b>只对带时间参数的算法有效（混响的衰减、延迟的拍值），再按「同步设置」铺给联动的其他槽。<br>
     ⚠️ 标了「仅FX1-4」的算法占 DSP 算力, 装不进 FX 5-8 (真台同样限制)。</div>
 
   <div class="card">
@@ -259,7 +260,7 @@
 
 <nav>
   <button class="on" data-p="cards"><span class="ic">🎬</span>卡片</button>
-  <button data-p="fx"><span class="ic">🎛</span>混响</button>
+  <button data-p="fx"><span class="ic">🎛</span>效果</button>
   <button data-p="keys"><span class="ic">⚡</span>控制键</button>
   <button data-p="rider"><span class="ic">🎚</span>自动</button>
   <button data-p="mix"><span class="ic">🎚</span>调音台</button>

@@ -393,7 +393,7 @@ WEB_PAGE = r"""<!DOCTYPE html>
   <div class="tilegrid" id="tileKeys"></div>
 </div>
 
-<div class="page" id="pg-fx"><h3>🎛 混响控制 (Tap 定拍 · 混响时间同步)</h3>
+<div class="page" id="pg-fx"><h3>🎛 效果器 FX 1-8 (61 种算法 · Tap 定拍 · 混响同步)</h3>
   <div class="card">
     <div class="nm">🎛 效果库来源：<span id="fxConsoleName">—</span>
       <span class="ds" id="fxConsoleTag" style="margin:0"></span></div>
@@ -404,8 +404,9 @@ WEB_PAGE = r"""<!DOCTYPE html>
       <span class="ds" id="fxPullNote" style="margin:0">读回真台各效果槽的算法/开关/参数（需桥接真台）</span>
     </div>
   </div>
-  <div class="ds">这里是 <b id="fxConsoleName2">当前控台</b> 的 <b>FX 效果槽 1-8</b>。给槽选一个算法后, 就能调它的<b>全部参数</b> —— 效果库 <b>61 种</b>算法 (混响/延迟/调制/均衡/动态…) 按分类分组, 数值是滑杆、枚举是下拉。
-    <b>Tap 定拍</b>可直接把混响时间算到节拍上, 再按「同步设置」铺给联动的其他槽。<br>
+  <div class="ds">这里是 <b id="fxConsoleName2">当前控台</b> 的 <b>FX 效果槽 1-8</b>。给槽选一个算法后, 就能调它的<b>全部参数</b> —— 效果库 <b>61 种</b>算法 (混响/延迟/组合/调制/变调/均衡/动态/增强/吉他) 按分类分组, 数值是滑杆、枚举是下拉。<br>
+    算法名照<b>真台写法</b>（X32-Edit / 固件 FX 页上的英文名，如 Stereo Chorus），括号里是中文辅助 —— 照着台子上的字找就对得上。<br>
+    <b>Tap 定拍</b>只对带时间参数的算法有效（混响的衰减、延迟的拍值），再按「同步设置」铺给联动的其他槽。<br>
     ⚠️ 标了「仅FX1-4」的算法占 DSP 算力, 装不进 FX 5-8 (真台同样限制)。</div>
 
   <div class="card">
@@ -606,7 +607,7 @@ WEB_PAGE = r"""<!DOCTYPE html>
 
 <nav>
   <button class="on" data-p="cards"><span class="ic">🎬</span>卡片</button>
-  <button data-p="fx"><span class="ic">🎛</span>混响</button>
+  <button data-p="fx"><span class="ic">🎛</span>效果</button>
   <button data-p="keys"><span class="ic">⚡</span>控制键</button>
   <button data-p="rider"><span class="ic">🎚</span>自动</button>
   <button data-p="mix"><span class="ic">🎚</span>调音台</button>
@@ -1396,7 +1397,7 @@ function renderConsole(){
     if(c.ready&&c.verified){
       nt.innerHTML=`地址表已与真机核对 · 通道 <b>${c.counts.ch}</b> · Bus <b>${c.counts.bus}</b>`
         +` · DCA <b>${c.counts.dca}</b> · FX <b>${c.counts.fx}</b> 槽`
-        +(c.fxLib?` · 效果库 <b>${c.fxLib}</b> 种（混响页已同步）`:'');
+        +(c.fxLib?` · 效果库 <b>${c.fxLib}</b> 种（效果器页已同步）`:'');
     } else if(c.ready){
       nt.innerHTML='⚠️ '+esc(c.note||'地址表未经真机核对');
     } else {
@@ -2032,7 +2033,9 @@ document.addEventListener('keydown',e=>{ if(e.key==='Escape') closeCardModal(); 
 function delCard(id){ api('/api/carddel',{id:id}); }
 updNkIdx(); updCaParams(); renderActs(); updNmIdx();
 
-// ---- 混响控制: FX 槽 / Tap 定拍 / 混响时间同步 ----
+// ---- 效果器: FX 槽 1-8 / Tap 定拍 / 混响时间同步 ----
+// 页面覆盖全部 61 种算法（混响/延迟/组合/调制/变调/均衡/动态/增强/吉他），
+// 不是"混响专用"：算法名一律用真台英文名，中文只作括号里的辅助。
 // 与服务端同一套语义: BPM 取最近 8 个间隔均值, 抖动(<0.15s)忽略, 超时(>2s)重开;
 // 时间 = 拍数 × 60/BPM (附点 ×1.5); 实际写入由服务端按算法范围钳制。
 // 算法清单不再写死 —— 由服务端按**当前控台驱动**下发 (S.fx.algos)。
@@ -2052,8 +2055,14 @@ function fxAlgoOpts(emptyLabel){
     const ia = order.indexOf(a), ib = order.indexOf(b);
     return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
   }).map(c => '<optgroup label="' + esc(catLab[c] || c) + '">'
-      + byCat[c].map(k => '<option value="' + esc(k) + '">' + esc(lib[k].label)
-          + (lib[k].heavy ? '（仅FX1-4）' : '') + '</option>').join('')
+      + byCat[c].map(k => {
+          // 真台名在前、中文在后：用户照着台子/X32-Edit 上的字找效果器，
+          // 只给中文等于让他自己翻译（"立体声合唱" ↔ "Stereo Chorus"）。
+          const en = lib[k].en || k, zh = lib[k].label || '';
+          const nm = (!zh || zh === en) ? en : (en + '（' + zh + '）');
+          return '<option value="' + esc(k) + '">' + esc(nm)
+              + (lib[k].heavy ? ' · 仅FX1-4' : '') + '</option>';
+        }).join('')
       + '</optgroup>').join('');
   return '<option value="">' + esc(el) + '</option>' + groups;
 }
@@ -2297,7 +2306,7 @@ function updFx(){
   $('#fxTapSecs').textContent = bpm
     ? ('当前时值换算 = ' + fxNoteSecs(bpm, sync.note, sync.dotted).toFixed(3) + ' 秒') : '';
 }
-// ---- 混响页：效果库随控台自动切换 ----
+// ---- 效果器页：效果库随控台自动切换 ----
 // 只在"效果库真的换了"时重建下拉（见 updFx 的 libId 判断）——
 // 否则 250ms 一次的轮询会把用户正在选的下拉反复重画。
 function renderFxLibrary(){
@@ -2331,7 +2340,7 @@ function renderFxConsole(c){
   if (note && note.dataset.k !== nk){
     note.dataset.k = nk;
     note.innerHTML = c.locked
-      ? ('控台「' + esc(c.label || '?') + '」的效果库还没标定 —— 混响页暂时<b>只能看不能写</b>。'
+      ? ('控台「' + esc(c.label || '?') + '」的效果库还没标定 —— 效果器页暂时<b>只能看不能写</b>。'
          + '写入会被拒绝并记进日志：地址蒙错会写到别的参数上，比干脆不动作难查得多。')
       : ('本控台效果库共 <b>' + (c.libCount || 0) + '</b> 种算法，占用 <b>' + (c.slots || 0)
          + '</b> 个效果槽。下面的算法下拉就是这台台子上真正有的效果。');
@@ -2424,7 +2433,7 @@ function tapApply(){
   .then(r => r.json()).then(d => {
     if (!d || !d.ok){ showToast('Tap 写入失败: ' + ((d && d.error) || '未知')); return; }
     showToast('🎛 按 ' + note + (dotted ? ' 附点' : '') + ' 换算 = ' + d.seconds
-      + ' 秒, 已写入 ' + (d.written || []).length + ' 个混响槽');
+      + ' 秒, 已写入 ' + (d.written || []).length + ' 个效果槽');
   }).catch(() => showToast('Tap 写入失败: 网络异常'));
 }
 

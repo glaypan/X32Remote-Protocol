@@ -154,6 +154,42 @@ check("网页含图鉴弹窗骨架", "fxGalModal" in page and "fxGalBody" in pag
 check("网页按 /fx/fxlib.json 拉图鉴", "/fx/fxlib.json" in page)
 check("网页卡片有面板图容器", "fxshot" in page)
 
+# ---------------------------------------------------------------- 5. 真台名一致
+# 用户是照着台子/X32-Edit 上的字找效果器的。界面上必须出现真台英文名
+# （"Stereo Chorus"），只给中文（"立体声合唱"）等于让他自己翻译 —— 找不着。
+print("\n== 5. 算法名 = 真台名 ==")
+from x32sim.fx import fx_lib_meta                         # noqa: E402
+
+meta = fx_lib_meta()["algos"]
+check("API 下发条目数 = 61", len(meta) == 61, len(meta))
+noen = [k for k, v in meta.items() if not (v.get("en") or "").strip()]
+check("每个算法都带真台名 en", not noen, noen)
+bad = [k for k, v in meta.items() if v.get("en") != FX_LABEL_EN.get(k)]
+check("en 与 FX_LABEL_EN 逐条一致", not bad, bad)
+check("en 无重名", len({v["en"] for v in meta.values()}) == len(meta))
+check("中文 label 仍保留（作为辅助）",
+      all((v.get("label") or "").strip() for v in meta.values()))
+
+# 导出物（Android assets / iOS generated swift）必须带同一份 en
+AND_JSON = os.path.join(os.path.dirname(os.path.abspath(".")),
+                        "..", "X32RemoteAndroid", "app", "src", "main",
+                        "assets", "fx_calibration.json")
+if os.path.exists(AND_JSON):
+    aj = json.load(open(AND_JSON, encoding="utf-8"))["algos"]
+    check("Android 标定表带 en 且一致",
+          all(aj.get(k, {}).get("en") == FX_LABEL_EN.get(k) for k in meta),
+          [k for k in meta if aj.get(k, {}).get("en") != FX_LABEL_EN.get(k)][:5])
+IOS_SWIFT = os.path.join(os.path.dirname(os.path.abspath(".")),
+                         "X32Remote-ios", "Sources", "X32RemoteCore", "Model",
+                         "FxCalibration+Generated.swift")
+if os.path.exists(IOS_SWIFT):
+    src = open(IOS_SWIFT, encoding="utf-8").read()
+    check("iOS 生成物带 en 字段", '"en":' in src)
+    check("iOS 生成物含 Stereo Chorus", "Stereo Chorus" in src)
+
+# 网页：下拉用 en 拼显示名，不是只用中文 label
+check("网页下拉用真台名拼显示", "lib[k].en ||" in page and "（' + zh + '）" in page)
+
 # ---------------------------------------------------------------- 汇总
 print("\n" + "=" * 60)
 print("%d/%d 通过" % (sum(results), len(results)))
