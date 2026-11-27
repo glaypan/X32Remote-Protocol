@@ -39,6 +39,10 @@ outputs/archive/
 # ---- 目视验证截图（本地截图存档，非交付物）----
 outputs/verify/
 outputs/*页-*.png
+outputs/shot_*.png
+
+# ---- 第三方协议原文（946 KB，按 X32Simulator/_docs/README.md 现取现用）----
+X32Simulator/_docs/WingRemoteProtocols.md
 
 # ---- 本地 Swift 工具链安装目录（体积大，且可通过 tools/local_verify.sh 重建）----
 .swift-setup/
