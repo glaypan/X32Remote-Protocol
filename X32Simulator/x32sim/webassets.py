@@ -2113,22 +2113,27 @@ function fxParsHTML(s, st){
   const clamp0 = (lo, hi) => Math.min(Math.max(0, +lo), +hi);
   const rows = (st.params || []).map(p => {
     const unit = p.unit ? ' ' + p.unit : '';
+    // w=false: 当前控台（如 WING）没有这个参数的地址 —— 只读不给滑杆。
+    // 留一个能拖的假滑杆比不给更糟: 用户以为台子坏了。
+    const off = (p.w === false);
+    const dis = off ? ' disabled' : '';
+    const offTip = off ? ' <span class="ds">(本控台未标定)</span>' : '';
     if (p.kind === 'i'){
       const opts = (p.opts || []).map((o, i) =>
         `<option value="${i}">${esc(o)}</option>`).join('');
       const unset = (p.value === null || p.value === undefined);
       const shown = unset ? '未设置'
         : esc(String((p.opts || [])[p.value] != null ? (p.opts)[p.value] : p.value));
-      return `<div class="fxrow"><span class="fxlab">${esc(p.label)}</span>
-        <select class="fxsel" data-f="${p.field}" onchange="fxSet(${s},'${p.field}',+this.value)">
+      return `<div class="fxrow"${off ? ' style="opacity:.55"' : ''}><span class="fxlab">${esc(p.label)}${offTip}</span>
+        <select class="fxsel"${dis} data-f="${p.field}" onchange="fxSet(${s},'${p.field}',+this.value)">
           ${unset ? '<option value="">未设置</option>' : ''}${opts}</select>
         <span class="fxval" data-v="${p.field}">${shown}</span></div>`;
     }
     const dec = fxDec(p.lo, p.hi), step = fxStep(p.lo, p.hi);
     const unset = (p.value === null || p.value === undefined);
     const val = unset ? clamp0(p.lo, p.hi) : +p.value;
-    return `<div class="fxrow"><span class="fxlab">${esc(p.label)}</span>
-      <input type="range" class="fxsl" data-f="${p.field}" data-unit="${esc(p.unit || '')}"
+    return `<div class="fxrow"${off ? ' style="opacity:.55"' : ''}><span class="fxlab">${esc(p.label)}${offTip}</span>
+      <input type="range" class="fxsl"${dis} data-f="${p.field}" data-unit="${esc(p.unit || '')}"
         data-dec="${dec}" min="${p.lo}" max="${p.hi}" step="${step}" value="${val.toFixed(dec)}"
         oninput="fxSlide(${s},'${p.field}',this)">
       <span class="fxval" data-v="${p.field}">${unset ? '未设置' : val.toFixed(dec) + unit}</span></div>`;

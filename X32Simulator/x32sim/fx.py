@@ -8,7 +8,7 @@ import time
 from .consts import FX_CAT_LABEL, FX_COUNT, FX_SLOTS_HEAVY, NOTE_BEATS, REVERB_DEFAULTS, TAP_BPM_MAX, TAP_BPM_MIN, TAP_INTERVAL_MIN, TAP_MAX_INTERVALS, TAP_RESET_GAP, slot_allows  # noqa: E501
 from .kinds import fx_par_kind
 from .logbus import log
-from .profiles import profile
+from .profiles import addr_for_write, profile
 from .state import STATE, get_value, set_value
 from .util import _clamp01, _finite, _truthy
 
@@ -40,7 +40,9 @@ def fx_lib_meta():
             "cats": cats,
             "heavySlots": list(FX_SLOTS_HEAVY),
             # label = 中文（辅助），en = 真台显示名（主）。前端一律先显示 en。
+            # mdl = 该控台的线上枚举名（WING 用；X32 没有这个概念，为 None）。
             "algos": {k: {"label": v["label"], "en": v.get("en") or k,
+                          "mdl": v.get("wing_mdl"),
                           "cat": v.get("cat", "misc"),
                           "heavy": bool(v.get("heavy")), "n": v.get("n", 0)}
                       for k, v in lib.items()}}
@@ -359,6 +361,10 @@ def fx_state():
                         "p": p["p"], "field": p["field"], "label": p["label"],
                         "unit": p["unit"], "kind": p["kind"],
                         "lo": p["lo"], "hi": p["hi"], "opts": p["opts"],
+                        # w = 当前控台**能写**这个参数（WING 是命名参数，只有标定过的
+                        # 才有地址）。前端据 w 灰掉控件：宁可没有滑杆，也不要一个
+                        # 拖了没反应的假滑杆 —— 那会让人以为台子坏了。
+                        "w": addr_for_write(fx_par_kind(p["p"]), s) is not None,
                         "value": v, "unset": unset})
                 for a in ("time", "predelay", "damp"):
                     if a in algo:

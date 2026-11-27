@@ -1218,6 +1218,90 @@ def param_spec(algo: str, field: str):
     return None
 
 
+# ============================================================ WING 效果库
+#
+# 数据来源：Behringer 授权、Patrick-Gilles Maillot 维护的
+# 《WING Remote Protocols V3.1》Effects Settings / Effects and Plugins 章。
+# WING 的 FX 模型与 X32 **不是同一套**：
+#   * 算法选择 = `/fx/<槽>/mdl`，值是枚举名（写小写、读回大写）；
+#   * 参数是**命名**叶子（`/fx/1/time`、`/fx/2/pdel`、`/fx/5/dcy`），没有 par 号；
+#   * 枚举表里有大量 X32 没有的东西（VSS3 / CONCERT / SPRING / BBD-DL /
+#     PCORR / BODY / 各箱体模拟），X32 的 TruEQ / Combinator / Fair Comp /
+#     Xtec EQ 在 WING 里属于**通道插件**而非 FX 机架。
+#
+# 因此 WING 库是 X32 库的**子集 + 映射**，而不是另抄一份 61 项：
+# 内部 key（HALL/CRS/DLY…）继续是唯一标识 —— 卡片、预设、存档都用它，
+# 换控台时才不会各说各话。取不到的算法显式缺席（`_fx_sync_on_console_change`
+# 会把不在库里的槽位置空并记日志），不做"看起来像"的臆造映射。
+
+# WING `/fx/<n>/mdl` 的完整枚举（文档 `mdl list`，固件 3.0.6）。
+# 仅用于校验我们的映射不越界；顺序随固件变化，不参与任何 UI 排序。
+WING_MDL_LIST = (
+    "NONE", "EXT", "HALL", "ROOM", "CHAMBER", "PLATE", "CONCERT", "AMBI",
+    "V-ROOM", "V-REV", "V-PLATE", "GATED", "REVERSE", "DEL/REV", "SHIMMER",
+    "SPRING", "DIMCRS", "CHORUS", "FLANGER", "ST-DL", "TAP-DL", "TAPE-DL",
+    "OILCAN", "BBD-DL", "PITCH", "D-PITCH", "VSS3", "BPLATE", "GEQ", "PIA",
+    "DOUBLE", "PCORR", "LIMITER", "DE-S2", "ENHANCE", "EXCITER", "P-BASS",
+    "ROTARY", "PHASER", "PANNER", "TAPE", "MOOD", "SUB", "RACKAMP", "UKROCK",
+    "ANGEL", "JAZZC", "DELUXE", "BODY", "SOUL", "E88", "E84", "F110",
+    "PULSAR", "MACH4", "C5-CMB", "SUB-M", "V-IMG", "SPKMAN", "DEQ3",
+    "*EVEN*", "*SOUL*", "*VINTAGE*", "*BUS*", "*MASTER*",
+)
+
+# 内部 key → WING mdl。只收**语义与名字都对得上**的：名字不同就是不同效果，
+# 宁可缺席让用户看见"这台控台没有这个算法"，也不要让他在 WING 上选中一个
+# 心里以为是 3-Tap、实际是跟拍延迟的东西。
+WING_MDL = {
+    "HALL": "HALL",        # Hall Reverb
+    "PLAT": "PLATE",       # Plate Reverb
+    "AMBI": "AMBI",        # Ambience
+    "ROOM": "ROOM",        # Room Reverb
+    "CHAM": "CHAMBER",     # Chamber Reverb
+    "VREV": "V-REV",       # Vintage Reverb
+    "VRM": "V-ROOM",       # Vintage Room
+    "GATE": "GATED",       # Gated Reverb
+    "RVRS": "REVERSE",     # Reverse Reverb
+    "DLY": "ST-DL",        # Stereo Delay
+    "D/RV": "DEL/REV",     # Delay + Chamber → Delay + Reverb
+    "CRS": "CHORUS",       # Stereo Chorus
+    "FLNG": "FLANGER",     # Stereo Flanger
+    "PHAS": "PHASER",      # Stereo Phaser
+    "DIMC": "DIMCRS",      # Dimensional Chorus
+    "FILT": "MOOD",        # Mood Filter
+    "ROTA": "ROTARY",      # Rotary Speaker
+    "PAN": "PANNER",       # Tremolo / Panner
+    "SUB": "SUB",          # Suboctaver
+    "PIT": "PITCH",        # Stereo Pitch Shifter
+    "PIT2": "D-PITCH",     # Dual Pitch Shifter
+    "GEQ": "GEQ",          # Stereo Graphic EQ
+    "DES": "DE-S2",        # Stereo DeEsser
+    "LIM": "LIMITER",      # Precision Limiter
+    "ENH": "ENHANCE",      # Stereo Enhancer
+    "EXC": "EXCITER",      # Stereo Exciter
+    "IMG": "V-IMG",        # Stereo Imager
+}
+# 反查：WING mdl → 内部 key（真台回读 `/fx/N/mdl` 时用）
+WING_MDL_REV = {v: k for k, v in WING_MDL.items()}
+
+# WING 效果库（内部 key 顺序沿用 FX_ENUM_14，UI 下拉顺序不因换控台而跳变）
+WING_FX_ALGOS = {
+    k: dict(X32_FX_ALGOS[k], wing_mdl=WING_MDL[k])
+    for k in FX_ENUM_14 if k in WING_MDL
+}
+
+
+def wing_mdl(algo: str):
+    """内部算法 key → WING 的 mdl 枚举名；该算法 WING 没有则返回 None。"""
+    return WING_MDL.get(algo)
+
+
+def algorithm_for_wing_mdl(mdl: str):
+    """WING 回读的 mdl → 内部 key（大小写不敏感，真台回大写）。"""
+    if not isinstance(mdl, str):
+        return None
+    return WING_MDL_REV.get(mdl.strip().upper())
+
+
 # ==================================================================
 # ==== x32sim/kinds.py
 # ==================================================================
@@ -2945,6 +3029,41 @@ def level_from_db(db):
     return (db + 90.0) / 480.0
 
 
+# ------------------------------------------------------- 平台值转换（WING）
+# WING 的推子是 **dB 浮点**（-144 = -∞，上限 +10），X32 是 0..1 归一值。
+# 曲线本身两家一致（WING 文档实测 0.75→0 dB、0.7→-2 dB、0.675→-3 dB，
+# 与 level_db 第一段 dB = 40f - 30 逐点吻合），差别只在 **-∞ 的表示**：
+# X32 把 f=0 记作 -90，WING 发 -144。所以下行用 level_db、上行钳到 0，
+# 只在两端各加一个 -144 的特例 —— 不要另造一条曲线。
+WING_DB_SILENT = -144.0
+
+
+def fader_to_db(f):
+    """0..1 归一值 → WING 的 dB 推子值（0 = -144 即 -∞）。"""
+    f = _finite(f, 0.0)
+    if f <= 0.0:
+        return WING_DB_SILENT
+    return round(level_db(f), 2)
+
+
+def fader_from_db(db):
+    """WING 的 dB 推子值 → 0..1（-144 与 -90 都落到 0）。"""
+    db = _finite(db, WING_DB_SILENT)
+    if db <= -90.0:
+        return 0.0
+    return round(level_from_db(db), 4)
+
+
+def _is_group_fader(sp):
+    """是不是组级推子（ch_fader / bus_fader …），排除 EQ/门 里的同名 field。"""
+    return sp.kind == sp.group + "_fader"
+
+
+def _is_group_mute(sp):
+    """是不是组级静音（ch_on / bus_on …）。"""
+    return sp.kind == sp.group + "_on"
+
+
 def _snap(sp, v):
     """钳制 + 按档位量化。真台的旋钮是"有级"的，不是连续模拟量 ——
     存一个连续值回去，回读时就会发现"设 124.3 Hz 回来变成 124.3 但台上是 124.3±档"。"""
@@ -2992,14 +3111,23 @@ def param_coerce(kind, value):
     return _snap(sp, _finite(value, sp.default))
 
 
-def param_wire(sp, v):
+def param_wire(sp, v, prof=None):
     """本地存的值 → **线上**该发的值 (OSC 回包与桥接转发共用)。
 
-    三种换算:
-      · enum_wire="index"  → 本地比值/自然值换算成枚举下标 (dyn/ratio 4.0 → 6)
-      · enum_wire="label"  → 发**枚举名字符串** (发送取点 "POST")
+    四种换算:
+      · prof.fader_db       → 组级推子发 dB (WING)，不是 0..1
+      · prof.mute_inverted  → 组级静音线上 1=muted (WING)，本地 1=开
+      · enum_wire="index"   → 本地比值/自然值换算成枚举下标 (dyn/ratio 4.0 → 6)
+      · enum_wire="label"   → 发**枚举名字符串** (发送取点 "POST")
       · 其余按 vtype 定型 (float 发浮点 / bool 发 0-1 / int 发整数)
+
+    prof 省略时按 X32 规则（历史行为不变）—— 调用方拿不到控台实例就别传。
     """
+    if prof is not None:
+        if getattr(prof, "fader_db", False) and _is_group_fader(sp):
+            return fader_to_db(v)
+        if getattr(prof, "mute_inverted", False) and _is_group_mute(sp):
+            return 0 if _truthy(v) else 1
     if sp.vtype == "bool":
         return 1 if _truthy(v) else 0
     if sp.enum is not None and sp.enum_wire == "index":
@@ -3012,16 +3140,30 @@ def param_wire(sp, v):
     return float(v) if sp.vtype == "float" else int(round(float(v)))
 
 
-def param_from_wire(sp, v):
+def param_from_wire(sp, v, prof=None):
     """**线上**来的值 → 本地存的值 (外部 OSC 写入与真台回读共用)。
 
     真台的 dyn/ratio 收到的是索引 (0..11)，直接落库会把 6 存成 "6:1" ——
     实际是 4:1。这一层换算只在入线处做一次，落库之后全项目都看到比值。
 
+    prof.fader_db / prof.mute_inverted 的反向换算与 param_wire 对称：
+    WING 的 -144 dB 落回本地 0，`mute=1` 落回本地"开=0"。
+
     另外支持**枚举名字符串** (收到 "POST" / "GRP" / "GATE")：协议允许多种写法,
     真台不同固件回包可能是字符串。以前这里会把字符串当非法值 → 落回默认值,
     表现为"读一次真台，取点就从 POST 变成默认值"——静默改值, 最难查的一类。
     """
+    if prof is not None and not (isinstance(v, str) and sp.labels):
+        if getattr(prof, "fader_db", False) and _is_group_fader(sp):
+            return fader_from_db(v)
+        if getattr(prof, "mute_inverted", False) and _is_group_mute(sp):
+            # 真台回包可能是 `1` / `1.0` / `"1"` 三种形态，一律先转数值再取反；
+            # 转不动（返回 "NODE NOT FOUND" 之类）就交回通用路径，不吞掉错误。
+            try:
+                x = float(v) if isinstance(v, str) else v
+            except (TypeError, ValueError):
+                return param_coerce(sp.kind, v)
+            return 0 if _truthy(x) else 1
     if isinstance(v, str) and sp.labels:
         s = v.strip().upper()
         for _i, _lab in enumerate(sp.labels):
@@ -3330,6 +3472,3333 @@ SAVE_MAX = {"ch": 64, "bus": 32, "dca": 16, "auxin": 16, "usb": 8,
 
 
 # ==================================================================
+# ==== x32sim/version.py
+# ==================================================================
+# -*- coding: utf-8 -*-
+"""x32sim/version — 版本与设备身份常量 (xinfo 回包用)"""
+
+# 模拟器自身版本。与共享协议规范的 spec-v1.14 对齐
+# (v1.14 = WING 控台标定：可选算法 + FX 命名参数 + 订阅回读)。
+APP_VERSION = "1.10.0"
+
+# /xinfo 回包的身份字段 (真台回 [ip, name, model, firmware]; 这里 name/model/firmware
+# 是模拟器自称, 原先是 handle() 里的字面量, 收敛到这里统一管理)。
+SIM_NAME = "X32Remote-Sim"
+SIM_MODEL = "X32"
+SIM_FIRMWARE = "3.06-sim"
+
+
+# ==================================================================
+# ==== x32sim/webassets.py
+# ==================================================================
+# -*- coding: utf-8 -*-
+"""x32sim/webassets — 内嵌网页与 PWA 资源
+
+AUTO-GENERATED by tools/build_web.py — DO NOT EDIT (禁止手改)
+开发源在 web/ 下 (index.html + app.css + app.js + icon.svg + manifest + sw.js),
+改页面请改那边, 然后跑: python tools/build_web.py
+"""
+
+
+PWA_ICON = r"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+<rect width="512" height="512" rx="96" fill="#14171c"/>
+<g stroke-linecap="round" stroke-width="22">
+<line x1="136" y1="120" x2="136" y2="392" stroke="#3a4150"/>
+<line x1="256" y1="120" x2="256" y2="392" stroke="#3a4150"/>
+<line x1="376" y1="120" x2="376" y2="392" stroke="#3a4150"/>
+</g>
+<g fill="#ffb454" stroke="none">
+<rect x="106" y="150" width="60" height="56" rx="12"/>
+<rect x="226" y="300" width="60" height="56" rx="12"/>
+<rect x="346" y="200" width="60" height="56" rx="12"/>
+</g></svg>"""
+
+PWA_MANIFEST = r"""{"name": "X32 虚拟调音台", "short_name": "X32 调音台", "description": "Behringer X32/M32 虚拟调音台控制台", "start_url": "/", "scope": "/", "display": "standalone", "orientation": "portrait", "background_color": "#121419", "theme_color": "#121419", "icons": [{"src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}]}"""
+
+PWA_SERVICE_WORKER = r"""self.addEventListener('install', e => self.skipWaiting());
+self.addEventListener('activate', e => e.waitUntil(clients.claim()));
+self.addEventListener('fetch', e => { /* 全部直连网络,控制台数据不允许离线缓存 */ });
+"""
+
+WEB_PAGE = r"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#121419">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="X32 调音台">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" type="image/svg+xml" href="/icon.svg">
+<link rel="apple-touch-icon" href="/icon.svg">
+<title>X32 模拟器 · 控制台</title>
+<style>
+  :root{--bg:#121419;--card:#1c2029;--card2:#232833;--txt:#e9ebf0;--sub:#8d93a0;
+        --line:#2b303b;--accent:#ffb454;--accent2:#4da3ff;
+        --green:#3ecf8e;--red:#ff6b6b;--track:#0d0f13}
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{overscroll-behavior-y:contain}
+  body{font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
+       background:var(--bg);color:var(--txt);padding-bottom:70px;
+       -webkit-tap-highlight-color:transparent;touch-action:manipulation}
+  button,.mute,input[type=range],.tile{touch-action:manipulation}
+  ::selection{background:var(--accent);color:#141414}
+  @media (max-width:768px){
+    .mute{width:44px;height:44px}
+    .row input[type=range]{height:38px}
+    nav button{padding:11px 0 9px;font-size:12px}
+    nav .ic{font-size:21px}
+  }
+  header{position:sticky;top:0;z-index:9;
+         background:linear-gradient(180deg,#191d24,#14171d);color:#fff;
+         padding:13px 18px;font-size:15px;font-weight:700;letter-spacing:.04em;
+         display:flex;align-items:center;gap:10px;
+         border-bottom:1px solid var(--line)}
+  header .dot{width:9px;height:9px;border-radius:50%;background:var(--green);
+              box-shadow:0 0 8px var(--green);animation:pulse 1.6s infinite}
+  @keyframes pulse{50%{opacity:.4}}
+  header small{font-weight:400;opacity:.65;margin-left:auto;font-size:12px;
+               font-variant-numeric:tabular-nums}
+  nav{position:fixed;bottom:0;left:0;right:0;display:flex;z-index:10;
+      background:rgba(18,20,25,.92);backdrop-filter:blur(12px);
+      border-top:1px solid var(--line)}
+  nav button{flex:1;border:0;background:none;padding:9px 0 8px;font-size:11px;
+             color:var(--sub);position:relative}
+  nav button.on{color:var(--accent);font-weight:700}
+  nav button.on::before{content:"";position:absolute;top:0;left:50%;transform:translateX(-50%);
+                        width:26px;height:3px;border-radius:0 0 3px 3px;background:var(--accent)}
+  nav .ic{display:block;font-size:19px;margin-bottom:2px}
+  .page{display:none;padding:14px 14px 20px;max-width:760px;margin:0 auto}
+  .page.on{display:block;animation:pagein .18s ease-out}
+  @keyframes pagein{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+  h3{display:flex;align-items:center;gap:10px;
+     font-size:12px;color:var(--sub);margin:20px 2px 10px;font-weight:700;
+     letter-spacing:.12em;text-transform:uppercase}
+  h3::after{content:"";flex:1;height:1px;background:var(--line)}
+  .ds{font-size:12px;color:var(--sub);line-height:1.6}
+  .nkin{padding:9px 11px;border-radius:9px;border:1px solid var(--line);font-size:13px;
+        background:var(--card2);color:var(--txt)}
+  .nkin::placeholder{color:#5b6170}
+  select{background:var(--card2);color:var(--txt)}
+  /* ---- 卡片瓷砖 ---- */
+  .tilegrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:9px;margin-bottom:6px}
+  .tile{background:linear-gradient(180deg,var(--card2),var(--card));
+        border:1px solid var(--line);border-radius:13px;padding:13px 6px 11px;
+        text-align:center;font-size:14px;font-weight:700;cursor:pointer;user-select:none;
+        min-height:62px;display:flex;flex-direction:column;align-items:center;
+        justify-content:center;gap:4px;
+        box-shadow:0 2px 8px rgba(0,0,0,.35),inset 0 1px 0 rgba(255,255,255,.05);
+        transition:transform .12s cubic-bezier(.22,1,.36,1),border-color .15s}
+  .tile small{font-weight:500;color:var(--sub);font-size:11px}
+  .tile:active{transform:scale(.94)}
+  .tile.off{background:linear-gradient(180deg,#3a2426,#2c1c1e);border-color:#5c3236;color:var(--red)}
+  .tile.off small{color:#c98084}
+  .tile.run{background:linear-gradient(180deg,#33291a,#282017);border-color:#6b5426;color:var(--accent)}
+  .tile.run small{color:#c7a25e}
+  .tile.add{border-style:dashed;border-width:1.5px;color:var(--sub);opacity:.8;font-size:24px}
+  .tile.add small{font-weight:400;font-size:11px}
+  .tile.add:active{transform:scale(.94)}
+  /* ---- 名称 / 多选芯片 / 实时值 / 撤销 ---- */
+  .chipgrid{display:flex;flex-wrap:wrap;gap:6px;width:100%;margin:2px 0;
+            border-radius:10px;padding:2px}
+  .chipgrid.inv{outline:1.5px solid var(--red);outline-offset:2px}
+  .chip{padding:6px 9px;border-radius:8px;border:1px solid var(--line);background:var(--card2);
+        font-size:12px;font-weight:700;cursor:pointer;user-select:none;color:var(--txt);
+        display:inline-flex;gap:5px;align-items:baseline;transition:background .12s,border-color .12s}
+  .chip em{font-style:normal;font-weight:400;font-size:10px;color:var(--sub)}
+  .chip.on{background:rgba(255,180,84,.16);border-color:var(--accent);color:var(--accent)}
+  .chip.on em{color:#c7a25e}
+  .tile .live{font-size:11px;line-height:1.35;font-weight:500;color:var(--sub);
+              display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .tile.undo{border-color:rgba(77,163,255,.5);color:var(--accent2)}
+  .learnbtn{border:1px solid var(--line);border-radius:9px;padding:9px 12px;font-size:12px;
+            background:var(--card2);color:var(--accent);cursor:pointer;font-weight:700}
+  .modal{display:none;position:fixed;inset:0;z-index:60;background:rgba(8,10,14,.72);
+         backdrop-filter:blur(3px);align-items:flex-end;justify-content:center}
+  .modal.on{display:flex}
+  .mdlg{background:var(--card);border:1px solid var(--line);border-radius:18px 18px 0 0;
+        width:100%;max-width:560px;max-height:88vh;overflow-y:auto;
+        padding:18px 18px calc(18px + env(safe-area-inset-bottom));animation:mup .22s ease}
+  @keyframes mup{from{transform:translateY(30px);opacity:0}}
+  @media(min-width:700px){.modal{align-items:center}.mdlg{border-radius:16px}}
+  .mhd{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+  .mhd b{font-size:16px}
+  .mclose{border:0;background:var(--card2);color:var(--sub);width:32px;height:32px;
+          border-radius:50%;font-size:15px;cursor:pointer;flex:none}
+  .merr{display:none;background:rgba(255,107,107,.12);border:1px solid var(--red);
+        color:var(--red);border-radius:10px;padding:8px 12px;font-size:13px;margin-top:10px}
+  .merr.on{display:block}
+  .btnspin{opacity:.55;pointer-events:none}
+  .inv{border-color:var(--red)!important}
+  .tile .bar{width:82%;margin-top:4px}
+  /* ---- 推子行 ---- */
+  .row{display:flex;align-items:center;gap:10px;background:var(--card);
+       border:1px solid var(--line);border-radius:12px;padding:9px 12px;margin-bottom:8px;
+       box-shadow:0 1px 4px rgba(0,0,0,.3)}
+  .meter{width:9px;height:36px;border-radius:4px;background:var(--track);overflow:hidden;
+         display:flex;align-items:flex-end;flex:none;border:1px solid #23272f}
+  .meter i{display:block;width:100%;height:0%;
+           background:linear-gradient(to top,#3ecf8e 0 62%,#ffb454 62% 85%,#ff6b6b 85%);
+           transition:height .15s linear}
+  .num{font-size:11px;font-weight:600;color:var(--sub);width:62px;flex:none;letter-spacing:.03em}
+  .num b{display:block;font-size:15px;color:var(--txt);font-variant-numeric:tabular-nums}
+  .num small{display:block;font-size:10px;font-weight:500;color:#c7a25e;
+             white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .row input[type=range]{flex:1;-webkit-appearance:none;appearance:none;
+                         background:transparent;height:30px;min-width:0}
+  .row input[type=range]::-webkit-slider-runnable-track{height:7px;border-radius:4px;
+    background:linear-gradient(90deg,#0d0f13,#31374a);
+    box-shadow:inset 0 1px 3px rgba(0,0,0,.6)}
+  .row input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:24px;height:32px;
+    margin-top:-13px;border-radius:6px;
+    background:linear-gradient(180deg,#3d4454,#22262f);
+    border:1px solid #4d566b;
+    box-shadow:0 3px 8px rgba(0,0,0,.55),inset 0 1px 0 rgba(255,255,255,.12)}
+  .row input[type=range]::-moz-range-track{height:7px;border-radius:4px;
+    background:linear-gradient(90deg,#0d0f13,#31374a)}
+  .row input[type=range]::-moz-range-thumb{width:22px;height:30px;border-radius:6px;
+    background:linear-gradient(180deg,#3d4454,#22262f);border:1px solid #4d566b;
+    box-shadow:0 3px 8px rgba(0,0,0,.55)}
+  .db{font-size:11px;color:var(--sub);width:56px;text-align:right;flex:none;
+      font-variant-numeric:tabular-nums}
+  .mute{width:32px;height:32px;border-radius:50%;border:1.5px solid var(--line);
+        background:var(--card2);color:var(--sub);font-weight:800;font-size:13px;
+        flex:none;cursor:pointer;transition:background .15s,border-color .15s}
+  .mute.on{background:var(--red);border-color:var(--red);color:#fff;
+           box-shadow:0 0 10px rgba(255,107,107,.4)}
+  /* ---- 卡片 / 表单 ---- */
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;
+        padding:14px 16px;margin-bottom:10px;
+        box-shadow:0 1px 4px rgba(0,0,0,.3)}
+  .card .nm{font-size:15px;font-weight:700}
+  .card .ds{font-size:12px;color:var(--sub);margin:5px 0 10px}
+  .card button{border:0;border-radius:10px;padding:9px 18px;font-size:13px;
+               font-weight:700;cursor:pointer;background:var(--accent);color:#17130c;
+               transition:transform .12s cubic-bezier(.22,1,.36,1),filter .15s}
+  .card button:active{transform:scale(.95)}
+  .card button:hover{filter:brightness(1.08)}
+  .card button.stop{background:var(--red);color:#fff}
+  .keybtn{min-width:96px;min-height:48px;font-size:15px;border-radius:12px;
+          border:0;background:var(--accent);color:#17130c;font-weight:800;cursor:pointer}
+  .bar{height:5px;border-radius:3px;background:var(--track);margin-top:11px;overflow:hidden}
+  .bar i{display:block;height:100%;width:0;
+         background:linear-gradient(90deg,#c98a3a,var(--accent));
+         transition:width .2s}
+  .prog{font-size:11px;color:var(--sub);margin-top:5px}
+  .infobox{background:var(--card);border:1px solid var(--line);border-radius:14px;
+           padding:14px 16px;font-size:13px;line-height:2}
+  .infobox b{color:var(--accent)}
+  #logbox{background:#0b0d10;color:#8fd6a2;font:11px/1.7 Menlo,Consolas,monospace;
+          border:1px solid var(--line);border-radius:14px;padding:12px 14px;
+          height:300px;overflow-y:auto;white-space:pre-wrap}
+  .scenechip{display:inline-block;background:rgba(255,180,84,.12);color:var(--accent);
+             border:1px solid rgba(255,180,84,.3);
+             border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;
+             font-variant-numeric:tabular-nums}
+  .toast{position:fixed;left:50%;bottom:84px;transform:translateX(-50%) translateY(14px);
+         background:#241505;color:var(--accent);border:1px solid rgba(255,180,84,.55);
+         border-radius:12px;padding:11px 18px;font-size:13px;font-weight:600;
+         box-shadow:0 6px 22px rgba(0,0,0,.55);z-index:9999;opacity:0;
+         transition:opacity .3s,transform .3s;max-width:86vw;pointer-events:none}
+  .toast.in{opacity:1;transform:translateX(-50%) translateY(0)}
+  .fadj{background:var(--card2);color:var(--sub);border:1px solid var(--line);
+        border-radius:8px;min-width:26px;padding:6px 4px;font-size:13px;line-height:1;
+        font-weight:700;flex:none}
+  .fadj:active{background:var(--accent);color:#141414}
+  @media (max-width:768px){ .fadj{min-width:30px;padding:9px 4px} }
+  /* ---- 混响控制 (FX 槽) ---- */
+  .fxpars{display:flex;flex-direction:column;gap:7px;margin-top:9px}
+  .fxrow{display:flex;align-items:center;gap:10px}
+  .fxlab{font-size:12px;color:var(--sub);width:66px;flex:none}
+  .fxrow input[type=range]{flex:1;min-width:0;height:28px;-webkit-appearance:none;appearance:none;
+                           background:transparent}
+  /* 与推子行同一套滑杆外观，免得混响页看起来像另一个产品 */
+  .fxrow input[type=range]::-webkit-slider-runnable-track{height:7px;border-radius:4px;
+    background:linear-gradient(90deg,#0d0f13,#31374a);box-shadow:inset 0 1px 3px rgba(0,0,0,.6)}
+  .fxrow input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;height:28px;
+    margin-top:-11px;border-radius:6px;background:linear-gradient(180deg,#3d4454,#22262f);
+    border:1px solid #4d566b;box-shadow:0 3px 8px rgba(0,0,0,.55)}
+  .fxrow input[type=range]::-moz-range-track{height:7px;border-radius:4px;
+    background:linear-gradient(90deg,#0d0f13,#31374a)}
+  .fxrow input[type=range]::-moz-range-thumb{width:20px;height:26px;border-radius:6px;
+    background:linear-gradient(180deg,#3d4454,#22262f);border:1px solid #4d566b}
+  .fxval{font-size:12px;width:70px;text-align:right;flex:none;color:var(--txt);
+         font-variant-numeric:tabular-nums}
+  /* 枚举参数用下拉 (选项是真台 enum 索引的中文名, 比滑杆直观) */
+  .fxrow select.fxsel{flex:1;min-width:0;height:28px;border-radius:6px;
+    background:var(--card2);color:var(--txt);border:1px solid var(--line);
+    font-size:12px;padding:0 6px}
+  /* 参数多的算法 (GEQ 32 项等) 宽屏双列; 手机窄屏仍单列, 不硬挤 */
+  .fxgrid{display:grid;grid-template-columns:1fr;gap:0 14px}
+  @media (min-width:760px){ .fxgrid{grid-template-columns:1fr 1fr} }
+  .fx-tag{margin-left:auto;white-space:nowrap}
+  #fxGroup .chip{display:inline-flex;align-items:center;gap:5px;padding:6px 10px;
+                 border:1px solid var(--line);border-radius:9px;background:var(--card2);font-size:12px}
+  #fxGroup .chip.on{border-color:var(--accent);background:rgba(255,180,84,.14);color:var(--accent)}
+  /* ---- 危险卡长按确认 ---- */
+  .tile{position:relative}
+  .card{position:relative}
+  .holdbar{position:absolute;left:0;bottom:0;height:4px;width:0;
+           background:var(--red);border-radius:3px;z-index:5;
+           box-shadow:0 0 8px rgba(255,107,107,.6)}
+  .readyok{color:#22c55e;font-weight:700}
+  .readyn{color:var(--sub)}
+  .schedrow{display:flex;gap:8px;align-items:center;background:rgba(255,180,84,.08);
+            border:1px dashed rgba(255,180,84,.4);border-radius:12px;
+            padding:8px 12px;margin-bottom:8px;font-size:13px;flex-wrap:wrap}
+  .schedrow b{color:var(--accent)}
+  .schedrow .cd{font-variant-numeric:tabular-nums;color:var(--sub)}
+
+/* ---- 通道参数面板 (增益/反相/延时/低切/插入/噪声门) ---- */
+/* 编号本身是入口: 做成可点的圆角小牌, 有处理启用时右上角亮一个橙点。
+   不加额外按钮 —— 通道条在 390px 屏上已经挤满, 再塞一个图标会挤掉推子。 */
+.chnum{display:inline-block;padding:1px 5px;border-radius:6px;cursor:pointer;
+       border:1px solid transparent;transition:background .12s,border-color .12s}
+.chnum:active{background:var(--card2);border-color:var(--line)}
+.chnum.on{position:relative;background:var(--card2);border-color:#3a4050}
+.chnum.on::after{content:'';position:absolute;top:-2px;right:-3px;width:6px;height:6px;
+                 border-radius:50%;background:var(--accent);box-shadow:0 0 5px var(--accent)}
+.chp-row{display:flex;align-items:center;gap:10px;padding:6px 2px;
+         border-bottom:1px solid var(--line)}
+.chp-row:last-child{border-bottom:0}
+.chp-l{width:66px;flex:none;font-size:13px;color:var(--txt)}
+.chp-v{width:74px;flex:none;text-align:right;font-size:12px;color:var(--sub);
+       font-variant-numeric:tabular-nums;white-space:nowrap}
+.chp-row input[type=range]{flex:1;-webkit-appearance:none;appearance:none;
+                           background:transparent;height:30px;min-width:0}
+.chp-row input[type=range]::-webkit-slider-runnable-track{height:6px;border-radius:4px;
+  background:linear-gradient(90deg,#0d0f13,#31374a);box-shadow:inset 0 1px 3px rgba(0,0,0,.6)}
+.chp-row input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;height:28px;
+  margin-top:-11px;border-radius:6px;background:linear-gradient(180deg,#3d4454,#22262f);
+  border:1px solid #4d566b;box-shadow:0 3px 8px rgba(0,0,0,.55)}
+.chp-row input[type=range]::-moz-range-track{height:6px;border-radius:4px;
+  background:linear-gradient(90deg,#0d0f13,#31374a)}
+.chp-row input[type=range]::-moz-range-thumb{width:20px;height:26px;border-radius:6px;
+  background:linear-gradient(180deg,#3d4454,#22262f);border:1px solid #4d566b}
+.chp-tog{flex:1;max-width:120px;padding:8px 10px;border-radius:9px;font-size:13px;font-weight:700;
+         border:1px solid var(--line);background:var(--card2);color:var(--sub)}
+.chp-tog.on{background:rgba(255,180,84,.16);border-color:var(--accent);color:var(--accent)}
+.chp-row select{flex:1;max-width:130px}
+.chp-row.off{opacity:.5}
+.chp-row.off .chp-l{color:var(--sub)}
+
+/* ---- 通道参数面板: 分页与键盘精调 ---- */
+.chp-tabs{display:flex;gap:6px;margin:8px 0 2px}
+.chp-tabs button{flex:1;padding:8px 4px;border-radius:9px;font-size:13px;font-weight:700;
+  border:1px solid var(--line);background:var(--card2);color:var(--sub)}
+.chp-tabs button.on{background:rgba(255,180,84,.16);border-color:var(--accent);color:var(--accent)}
+.chp-tab{display:none}
+.chp-tab.on{display:block}
+/* 数值标签当输入入口: 白天也要看得出"这里能点"—— 加虚线下划线 */
+.chp-v{cursor:text;text-decoration:underline dotted rgba(160,170,190,.45);
+  text-underline-offset:3px}
+.chp-v input.chp-in{width:74px;padding:2px 4px;font-size:12px;text-align:right;
+  border-radius:6px;border:1px solid var(--accent);background:var(--card2);
+  color:var(--txt);font-variant-numeric:tabular-nums}
+
+/* ---- 扫码连接（设置页）: 白底二维码 + 右侧说明 ---- */
+.qrrow{display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start}
+.qrbox{background:#fff;border-radius:14px;padding:10px;line-height:0;box-shadow:0 3px 12px rgba(0,0,0,.28)}
+.qrbox img{display:block;width:164px;height:164px}
+.qrhint{flex:1;min-width:210px}
+.qrurl{font-size:16px;font-weight:700;user-select:all;word-break:break-all;margin:6px 0 2px}
+.qracts{margin:8px 0 4px}
+/* 两张码并排：左浏览器、右 App。窄屏换行也不会挤成一条 */
+.qrdual{display:flex;gap:12px;flex:0 0 auto}
+.qrcell{text-align:center;min-width:0}
+.qrcap{font-size:11px;color:var(--sub);margin-top:6px;line-height:1.4}
+.qrcap b{color:var(--txt)}
+.qrbox.sm{padding:8px;border-radius:11px;box-shadow:0 2px 8px rgba(0,0,0,.26)}
+.qrbox.sm img{width:118px;height:118px}
+.pairsmall{font-size:11px;color:var(--sub);word-break:break-all;margin:2px 0 6px;user-select:all;opacity:.9}
+
+/* ---- 自动增益 / 自动推子 ---- */
+.rrow{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.rrow select,.rrow input[type=number]{padding:7px 8px;border-radius:8px;border:1px solid var(--line);
+  background:var(--card2);color:var(--txt);font-size:13px}
+.rrow input[type=number]{width:76px}
+.rsw{display:flex;gap:6px;align-items:center;font-size:13px}
+.rtarget{font-size:13px;display:flex;gap:6px;align-items:center}
+.rdel{margin-left:auto;background:#565d6d;color:#fff;font-size:12px;padding:6px 10px}
+.ridercard{margin-top:10px}
+.rmeter{height:10px;background:var(--track);border-radius:6px;overflow:hidden;margin:8px 0 4px}
+.rmeter span{display:block;height:100%;width:0;border-radius:6px;
+  background:linear-gradient(90deg,var(--green),#eab308,var(--red));transition:width .12s linear}
+
+/* ---- 目标曲线编辑器 ---- */
+.rrow2{margin-top:6px}
+.curvebox{margin:8px 0 2px}
+.curvesvg{width:100%;height:84px;display:block;background:var(--track);border-radius:10px;touch-action:none}
+.cgrid{fill:transparent}
+.cline{fill:none;stroke:var(--accent);stroke-width:2}
+.cdot{fill:var(--accent);stroke:#0b0d11;stroke-width:1.5;cursor:grab}
+.cfn{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:12px;color:var(--sub);margin:4px 0}
+.cbtn{background:#565d6d;color:#fff;font-size:12px;padding:5px 9px}
+
+/* ---- 效果器面板图 (v1.8) ---- */
+.fxshot{margin:6px 0 8px;border-radius:10px;overflow:hidden;
+  border:1px solid var(--line);background:#0d0f13;line-height:0}
+.fxshot img{width:100%;height:auto;display:block}
+.fxshot.empty{display:none}
+.fxgal{display:grid;grid-template-columns:1fr;gap:10px;margin-top:8px}
+.fxgal figure{margin:0;border:1px solid var(--line);border-radius:12px;overflow:hidden;
+  background:var(--card2)}
+.fxgal img{width:100%;height:auto;display:block;background:#0d0f13}
+.fxgal figcaption{padding:7px 10px;font-size:12.5px;display:flex;gap:8px;
+  align-items:center;justify-content:space-between}
+.fxgal .cn{color:var(--sub);font-size:11.5px}
+.fxgal .tag{font-size:11px;padding:1px 6px;border-radius:999px;
+  border:1px solid var(--line);color:var(--sub);flex:none}
+@media(min-width:700px){.fxgal{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<header><span class="dot" id="conn"></span>X32 虚拟调音台
+  <small id="hdinfo">连接中…</small></header>
+
+<div class="page" id="pg-mix"><h3>🎚 输入通道 1-32 <span class="scenechip" id="scene">场景 1</span></h3>
+  <div id="chlist"></div>
+  <h3>Aux In 辅助输入 1-6</h3><div id="auxlist"></div>
+  <h3>USB 播放返回 1-2</h3><div id="usblist"></div>
+  <h3>FX Return 效果返回 1-8</h3><div id="fxretlist"></div>
+  <h3>📤 输出 Bus 1-16 <span class="scenechip" id="scene2">场景 1</span></h3>
+  <div id="buslist"></div>
+  <h3>Matrix 矩阵输出 1-6</h3><div id="mtxlist"></div>
+  <h3>主输出 Main LR</h3><div id="mainrow"></div>
+  <h3>DCA 编组 1-8</h3><div id="dcalist"></div></div>
+
+<div class="page on" id="pg-cards"><h3>🎬 演出卡片 (点按运行 · 实时显示台面值)</h3>
+  <div class="ds">点卡片=执行,自动按顺序跑动作;执行前自动存撤销点,执行中再点一次停止。含「全体」类动作的危险卡需<b>长按 0.8 秒</b>执行。新卡片点最后的「➕ 添加」。</div>
+  <div id="schedRow"></div>
+  <div class="tilegrid" id="undoRow" style="grid-template-columns:repeat(auto-fill,minmax(220px,1fr))"></div>
+  <div class="tilegrid" id="tileCards"></div>
+  <h3>📌 台面预设 (可选范围 · 点按回归)</h3>
+  <div class="card"><div class="nm">保存当前台面为预设</div>
+    <div class="ds">可以只记推子/静音/名称/DCA 归属/FX 整槽，也能只挑几路。回归时<b>只写范围内的参数</b>——没勾的通道一个字节都不动，静音立即恢复、推子平滑滑回。</div>
+    <button onclick="openSnapModal()">💾 保存预设（可选范围）</button></div>
+  <div id="snaplist"></div>
+</div>
+
+<div class="page" id="pg-keys"><h3>⚡ 控制键 (点按微调)</h3>
+  <div class="ds">点按键=按步长(设置页可调)渐变增减目标推子,适合歌手耳返、主输出这类现场微调。新按键点最后的「➕ 添加」。</div>
+  <div class="tilegrid" id="tileKeys"></div>
+</div>
+
+<div class="page" id="pg-fx"><h3>🎛 效果器 FX 1-8 (61 种算法 · Tap 定拍 · 混响同步)</h3>
+  <div class="card">
+    <div class="nm">🎛 效果库来源：<span id="fxConsoleName">—</span>
+      <span class="ds" id="fxConsoleTag" style="margin:0"></span></div>
+    <div class="ds" id="fxConsoleNote">效果槽、算法清单与参数索引都来自<b>当前控台驱动</b> —— 在「设置」里换控台，这里会自动换库。</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:6px">
+      <button id="fxGalBtn" onclick="fxGallery()">🖼 效果器图鉴</button>
+      <button id="fxPullBtn" onclick="fxPull()">⟳ 从真台同步效果</button>
+      <span class="ds" id="fxPullNote" style="margin:0">读回真台各效果槽的算法/开关/参数（需桥接真台）</span>
+    </div>
+  </div>
+  <div class="ds">这里是 <b id="fxConsoleName2">当前控台</b> 的 <b>FX 效果槽 1-8</b>。给槽选一个算法后, 就能调它的<b>全部参数</b> —— 效果库 <b>61 种</b>算法 (混响/延迟/组合/调制/变调/均衡/动态/增强/吉他) 按分类分组, 数值是滑杆、枚举是下拉。<br>
+    算法名照<b>真台写法</b>（X32-Edit / 固件 FX 页上的英文名，如 Stereo Chorus），括号里是中文辅助 —— 照着台子上的字找就对得上。<br>
+    <b>Tap 定拍</b>只对带时间参数的算法有效（混响的衰减、延迟的拍值），再按「同步设置」铺给联动的其他槽。<br>
+    ⚠️ 标了「仅FX1-4」的算法占 DSP 算力, 装不进 FX 5-8 (真台同样限制)。</div>
+
+  <div class="card">
+    <div class="nm">🥁 Tap 定拍</div>
+    <div class="ds">连点 2 下以上。取最近 8 个间隔的均值算 BPM(比只看最后一拍稳得多); 间隔超过 2 秒自动重新开始, 靠得太近的抖动会被忽略。</div>
+    <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:10px 0">
+      <button id="tapBtn" onpointerdown="tapHit()"
+        style="font-size:22px;font-weight:800;letter-spacing:.08em;padding:18px 40px;border:0;
+               border-radius:16px;background:var(--accent);color:#141414;cursor:pointer">TAP</button>
+      <div style="font-size:13px;line-height:1.7">
+        <b id="tapBpm" style="font-size:17px;font-variant-numeric:tabular-nums">— BPM</b><br>
+        <span class="ds" id="tapInfo" style="margin:0">连点 2 下以上定拍</span>
+      </div>
+      <button style="background:#565d6d;color:#fff;padding:9px 14px" onclick="tapReset()">清零</button>
+      <button style="background:var(--green);color:#141414;padding:9px 16px;font-weight:700" onclick="tapApply()">↧ 换算并写入</button>
+    </div>
+    <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+      <label style="font-size:13px">时值
+        <select id="fxNote" onchange="fxSyncSet()" class="nkin"></select></label>
+      <label style="font-size:13px;display:flex;gap:5px;align-items:center">
+        <input type="checkbox" id="fxDotted" onchange="fxSyncSet()"> 附点 ×1.5</label>
+      <span class="ds" id="fxTapSecs" style="margin:0"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="nm">🔗 同步设置</div>
+    <div class="ds">决定「谁说了算」, 避免软件与真台互写产生回声回环。改动会自动下发真台(桥接模式)。</div>
+    <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:8px 0">
+      <label style="font-size:13px">模式
+        <select id="fxMode" onchange="fxSyncSet()" class="nkin">
+          <option value="software">软件主导 (软件改→铺全组; 真台改只镜像)</option>
+          <option value="console">台面主导 (真台改→铺全组; 软件改不外扩)</option>
+          <option value="both">双向互同步 (谁改都铺全组)</option>
+        </select></label>
+      <label style="font-size:13px;display:flex;gap:5px;align-items:center">
+        <input type="checkbox" id="fxFollow" onchange="fxSyncSet()"> 跟随 Tap (Tap 结果自动写入联动组)</label>
+    </div>
+    <div class="ds" style="margin:0 0 6px">联动组 — 勾选的槽互相同步混响时间(全不勾 = 所有混响槽):</div>
+    <div id="fxGroup" style="display:flex;gap:6px;flex-wrap:wrap"></div>
+  </div>
+
+  <h3>🎚 效果槽 1-8</h3>
+  <div id="fxlist"></div>
+</div>
+
+<div class="page" id="pg-set">
+  <div class="infobox">
+    UDP 端口 <b id="pinfoUdp">10023</b> · 网页端口 <b id="pinfoWeb">8080</b> · 电平表订阅者 <b id="subs">0</b><br>
+    手机 App:设置 → 调音台 IP 填本机局域网 IP,或用自动发现<br>
+    本网页与 UDP 共享同一台"虚拟调音台",改动实时互通
+  </div>
+  <h3>🔌 网络端口 (可自由设置 · 重启生效)</h3>
+  <div class="card">
+    <div class="ds">端口是模拟器<b>启动时绑定</b>的,运行中改不了 —— 保存后<b>重启模拟器</b>(Ctrl+C 后重新启动)
+      才生效。默认 OSC/UDP <b>10023</b>、网页 <b>8080</b>;两个端口不能相同。</div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:8px">
+      <label style="font-size:13px;display:flex;gap:6px;align-items:center">OSC / UDP
+        <input id="pUdp" class="nkin" style="width:92px" inputmode="numeric" placeholder="10023"
+               oninput="window.portDirty=true"></label>
+      <label style="font-size:13px;display:flex;gap:6px;align-items:center">网页
+        <input id="pWeb" class="nkin" style="width:92px" inputmode="numeric" placeholder="8080"
+               oninput="window.portDirty=true"></label>
+      <button onclick="savePorts()">💾 保存</button>
+      <button style="background:#565d6d;color:#fff" onclick="resetPorts()">↺ 恢复默认</button>
+      <span class="scenechip" id="portStat">…</span>
+    </div>
+    <div id="portNote" class="ds" style="margin-top:8px"></div>
+  </div>
+  <h3>🎛 控台型号 (驱动层)</h3>
+  <div class="card">
+    <div class="ds">卡片动作、控制键、桥接转发都走同一套「语义目标」管道,由控台驱动翻译成真实地址。
+      换控台只需在这里切换 —— X32 与 M32 同协议(M32 是 Midas 贴牌),驱动完全复用。</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <select id="ctrlSel" class="nkin" onchange="setConsole(this.value)" style="min-width:230px"></select>
+      <span class="scenechip" id="ctrlStat">…</span>
+    </div>
+    <div id="ctrlNote" class="ds" style="margin-top:8px"></div>
+    <div id="ctrlCaps" class="ds" style="margin-top:6px"></div>
+  </div>
+  <h3>📱 手机 / 安卓平板连接</h3>
+  <div class="card">
+    <div class="qrrow">
+      <div class="qrdual">
+        <div class="qrcell">
+          <div class="qrbox sm"><img id="lanqr" alt="浏览器扫码进入控制台" width="118" height="118"></div>
+          <div class="qrcap"><b>浏览器</b> · 扫码即开</div>
+        </div>
+        <div class="qrcell" id="paircell">
+          <div class="qrbox sm"><img id="pairqr" alt="手机 App 扫码配对" width="118" height="118"></div>
+          <div class="qrcap"><b>App</b> · 扫码配对</div>
+        </div>
+      </div>
+      <div class="qrhint">
+        <div class="nm">手机连<b>同一个 WiFi</b>，扫任意一张</div>
+        <div class="ds">左：相机 / 微信扫 → 直接打开网页控制台，不装 App 也能全功能操作。<br>
+          右：iOS / Android App 里点「扫码连接」→ 自动填好 IP 与端口；<br>
+          也可以让<b>系统相机 / 微信直接扫右边这张</b> → 自动打开 App 并连上。</div>
+        <div class="qrurl" id="lanurl">…</div>
+        <div class="qracts"><button onclick="copyLan()" id="lanCopy">📋 复制地址</button><button onclick="copyPair()" id="pairCopy" style="margin-left:8px">📋 复制配对码</button></div>
+        <div class="pairsmall" id="paircode">…</div>
+        <div class="ds" id="pairhint">配对码里带着 OSC 端口，改过端口也能一次连对。</div>
+        <div class="ds">安卓 Chrome 菜单 → <b>添加到主屏幕</b>，即可像 App 一样全屏使用（图标自动生成）<br>
+          其他设备（OSC 客户端）把调音台 IP 填为 <b id="lanip2">…</b>，端口 <b id="pinfoUdp2">10023</b></div>
+      </div>
+    </div>
+  </div>
+  <h3>OSC 收发日志 (最近 40 条)</h3><div id="logbox"></div>
+  <h3 id="sec-keycfg">🔧 控制键步长与渐变速度</h3>
+  <div class="card">
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <label style="font-size:13px">步长
+        <select id="stepSel" onchange="setKeyCfg()" style="padding:8px;border-radius:8px;border:1px solid var(--line);font-size:13px">
+          <option value="1.5">1.5 dB</option><option value="3" selected>3 dB</option><option value="6">6 dB</option>
+        </select></label>
+      <label style="font-size:13px">渐变
+        <select id="rampSel" onchange="setKeyCfg()" style="padding:8px;border-radius:8px;border:1px solid var(--line);font-size:13px">
+          <option value="0">瞬间</option><option value="0.4" selected>0.4 秒</option><option value="1">1 秒</option><option value="2">2 秒</option>
+        </select></label>
+    </div>
+  </div>
+  <h3>🏷 通道命名 (调音台 / 卡片 / 控制键显示同一名称)</h3>
+  <div class="card">
+    <div class="ds">给通道起名字,卡片和推子行就会显示「音乐」「人声」而不是「通道15」。连真台后这些名字也可以从台子直接读取。</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <select id="nmGroup" onchange="updNmIdx()" class="nkin">
+        <option value="ch">输入通道</option><option value="auxin">Aux In</option>
+        <option value="usb">USB 返回</option><option value="fxret">FX 返回</option>
+        <option value="bus">Bus 输出</option><option value="mtx">Matrix</option>
+        <option value="dca">DCA 编组</option><option value="main">主输出</option>
+      </select>
+      <select id="nmIdx" class="nkin"></select>
+      <input id="nmVal" class="nkin" style="flex:1;min-width:120px" placeholder="名称(最长12字),留空=清除" maxlength="12">
+      <button onclick="saveName()">💾 保存</button>
+    </div>
+  </div>
+  <h3>📦 配置导入 / 导出 (卡片 · 控制键 · 通道命名 · 设置)</h3>
+  <div class="card">
+    <div class="ds">导出一个 JSON 备份文件;导入会覆盖现有的卡片、控制键、命名与步长设置(台面推子状态不受影响)。换手机、备份演出配置都用它。</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <button onclick="doExport()">📤 导出配置文件</button>
+      <button style="background:#565d6d;color:#fff" onclick="$('#impFile').click()">📥 选择文件导入</button>
+      <input type="file" id="impFile" accept=".json,application/json" style="display:none" onchange="impFileChg(this)">
+    </div>
+    <textarea id="impText" class="nkin" style="width:100%;min-height:64px;margin-top:8px;display:none"
+      placeholder="或把配置 JSON 粘贴到这里"></textarea>
+    <div id="impRow" style="display:none;margin-top:8px;gap:8px;align-items:center;flex-wrap:wrap">
+      <button style="background:var(--green)" onclick="doImport()">✔ 确认导入</button>
+      <span class="ds" style="margin:0">导入前请确认文件来源可信</span>
+    </div>
+  </div>
+  <h3>🌉 桥接真台 (写入转发 · /xremote 保活 · 状态回读)</h3>
+  <div class="card">
+    <div class="ds">同一局域网内点「🔍 扫描」即可自动找到调音台,点一下就连上——手机端不用装任何东西。连接后:网页/卡片/控制键的写入自动转发到真台;真台面板上的手动改动回读同步到本页;卡片渐变中真台被人手动干预 → 只停该通道并通知。连过一台会被记住,下次开服务自动重连。</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <input id="brAddr" class="nkin" style="flex:1;min-width:170px" placeholder="真台地址,如 192.168.1.100:10023">
+      <button onclick="brGo()">🔌 连接</button>
+      <button style="background:#565d6d;color:#fff" onclick="api('/api/bridge',{addr:''});showToast('桥接已断开,已清除自动重连')">断开</button>
+      <span class="scenechip" id="brStat">未桥接</span>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px">
+      <button id="scanBtn" style="background:var(--accent);color:#141414" onclick="scanConsoles()">🔍 扫描局域网调音台</button>
+      <span class="ds" style="margin:0" id="scanHint">同一网段直连即可,无需配置</span>
+    </div>
+    <div id="scanRes" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"></div>
+  </div>
+  <h3>🗑 管理 (编辑 / 删除卡片·控制键)</h3>
+  <div id="cardlist"></div>
+  <div id="keylist"></div>
+  <h3>📭 数据读取与调用</h3>
+  <div class="card"><div class="nm">调用预设 → 空台子 → 回传数据</div>
+    <div class="ds">①「保存预设」记录台面 ②「空台子」全部推子拉底得到干净空台 ③「回传数据」把最近保存的预设平滑写回。<br>这套流程走标准 X32 OSC 指令,连真调音台同样适用。</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <button style="background:#565d6d;color:#fff" onclick="api('/api/console',{action:'clear'})">🧹 空台子</button>
+      <button onclick="api('/api/console',{action:'recall_last'})">↩️ 回传数据</button>
+    </div>
+  </div>
+</div>
+
+
+<div class="page" id="pg-rider">
+  <div class="infobox">
+    <b>自动增益 / 自动推子</b>：把通道电平稳在目标值（默认 -18 dBFS），可以边演边调。
+    <b>推子</b>模式动的是推子（接真台时电动推子看得见它在走）；<b>增益</b>模式动数字增益，推子不动。<br>
+    三档速度改的是「平均窗口 / 死区 / 每秒最大修正」——所以它不是每个字都拉一下，而是平滑地跟着走。
+  </div>
+  <div class="card">
+    <div class="rrow">
+      <label class="rsw"><input type="checkbox" id="riderOn" onchange="riderGlobal(this.checked)"> 总开关</label>
+      <input id="riderCh" class="nkin" style="width:76px" inputmode="numeric" placeholder="1-32">
+      <button onclick="riderAdd()">➕ 添加通道</button>
+      <button style="background:#565d6d;color:#fff" onclick="riderReset()">↺ 清空修正</button>
+    </div>
+    <div class="ds" id="riderHint">还没配置通道。填通道号（1-32）→ 添加 → 打开「启用」。</div>
+  </div>
+  <div id="riderlist"></div>
+</div>
+
+<nav>
+  <button class="on" data-p="cards"><span class="ic">🎬</span>卡片</button>
+  <button data-p="fx"><span class="ic">🎛</span>效果</button>
+  <button data-p="keys"><span class="ic">⚡</span>控制键</button>
+  <button data-p="rider"><span class="ic">🎚</span>自动</button>
+  <button data-p="mix"><span class="ic">🎚</span>调音台</button>
+  <button data-p="set"><span class="ic">⚙️</span>设置</button>
+</nav>
+
+<div class="modal" id="cardModal" onclick="if(event.target===this)closeCardModal()">
+  <div class="mdlg" role="dialog" aria-label="新建演出卡片">
+    <div class="mhd"><b id="cardModalTitle">➕ 新建演出卡片</b>
+      <button class="mclose" onclick="closeCardModal()" aria-label="关闭">✕</button></div>
+    <div class="ds">把一组动作按顺序拼成一张卡片:先瞬时动作(静音/切场景),再渐变动作。保存后出现在「卡片」页卡片墙,重启也不丢。</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0">
+      <input id="ncName" placeholder="卡片名称 *必填,如:🎤 开场模式" style="flex:1;min-width:150px" class="nkin"
+             oninput="this.classList.remove('inv');hideCardErr()">
+      <input id="ncDesc" placeholder="一句话描述(可选)" style="flex:2;min-width:180px" class="nkin">
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <select id="caKind" onchange="updCaParams()" class="nkin">
+        <option value="mute">静音通道 (可多选)</option><option value="mute_bus">静音 Bus (可多选)</option>
+        <option value="scene">切换场景（全局 / 局部）</option>
+        <option value="preset">📌 调用预设（带范围与渐变）</option>
+        <option value="unmute_all">全部取消静音</option>
+        <option value="wait">等待 / 停顿</option>
+        <option value="fade_all">全体推子渐变</option><option value="fade_odd_even">奇偶过渡</option>
+        <option value="fade_ch">通道渐变 (可多选)</option><option value="fade_bus">Bus 渐变 (可多选)</option>
+        <option value="fade_from">通道从指定值渐变</option><option value="fade_from_bus">Bus 从指定值渐变</option>
+        <option value="rel_db">相对增减 dB (可多选)</option>
+        <option value="set">⚡ 通用设置 (任意目标 + 值)</option>
+        <option value="osc">⚠️ 原始 OSC (高级 · 仅当前控台)</option>
+      </select>
+      <span id="caParams" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;width:100%"></span>
+      <button onclick="addAct()">＋加入动作</button>
+    </div>
+    <div id="actChips" style="margin-top:8px"></div>
+    <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
+      <span style="font-size:12px;color:var(--sub)">执行完自动接续:</span>
+      <select id="ncNext" class="nkin" style="flex:1"></select>
+    </div>
+    <div class="merr" id="cardErr"></div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px">
+      <button style="background:var(--card2);color:var(--txt)" onclick="closeCardModal()">取消</button>
+      <button id="cardSaveBtn" style="background:var(--green)" onclick="saveCard()">💾 保存卡片</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="snapModal" onclick="if(event.target===this)closeSnapModal()">
+  <div class="mdlg" role="dialog" aria-label="保存台面预设">
+    <div class="mhd"><b>📌 保存台面预设</b>
+      <button class="mclose" onclick="closeSnapModal()" aria-label="关闭">✕</button></div>
+    <div class="ds">先选「存哪些组」，再选「存哪些参数」；编号留空=该组全部，也可以只挑几路（如 1-8,13-16）。保存按当前台面取值。</div>
+    <input id="snapName" class="nkin" style="width:100%;margin:8px 0" maxlength="20"
+           placeholder="预设名称（可选），如：开场-人声突出">
+    <div style="display:flex;gap:10px;align-items:flex-start;margin:8px 0">
+      <b style="font-size:12px;color:var(--sub);min-width:34px;padding-top:6px">组</b>
+      <div id="snapGroups" class="chipgrid" style="flex:1"></div></div>
+    <div style="display:flex;gap:10px;align-items:flex-start;margin:8px 0">
+      <b style="font-size:12px;color:var(--sub);min-width:34px;padding-top:6px">参数</b>
+      <div id="snapParams" class="chipgrid" style="flex:1"></div></div>
+    <div style="display:flex;gap:10px;align-items:center;margin:8px 0">
+      <b style="font-size:12px;color:var(--sub);min-width:34px">编号</b>
+      <input id="snapIdx" class="nkin" style="flex:1;min-width:150px"
+             placeholder="留空=全部，如 1-8,13-16">
+    </div>
+    <div class="ds" id="snapCount" style="margin:4px 0;color:var(--accent)"></div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:12px">
+      <button style="background:var(--card2);color:var(--txt)" onclick="closeSnapModal()">取消</button>
+      <button style="background:var(--green)" onclick="doSaveSnap()">💾 保存</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="chParamModal" onclick="if(event.target===this)closeChParams()">
+  <div class="mdlg" role="dialog" aria-label="通道参数">
+    <div class="mhd"><b id="chpTitle">通道参数</b>
+      <button class="mclose" onclick="closeChParams()" aria-label="关闭">✕</button></div>
+    <div class="ds">面板按台面实际能力显示（Bus 是 6 段 EQ，FX 返回只有声像和发送）· 拖动即写入台面 · 点数值可键盘精调</div>
+    <div class="chp-tabs" id="chpTabBar">
+      <button type="button" data-tab="pre" onclick="chpTab('pre')">前置</button>
+      <button type="button" data-tab="gate" onclick="chpTab('gate')">门</button>
+      <button type="button" data-tab="dyn" onclick="chpTab('dyn')">动态</button>
+      <button type="button" data-tab="eq" onclick="chpTab('eq')">均衡</button>
+      <button type="button" data-tab="send" onclick="chpTab('send')">发送</button>
+    </div>
+    <div id="chParamBody"></div>
+  </div>
+</div>
+
+<div class="modal" id="fxGalModal" onclick="if(event.target===this)closeFxGallery()">
+  <div class="mdlg" role="dialog" aria-label="效果器图鉴">
+    <div class="mhd"><b>效果器图鉴</b>
+      <button class="mclose" onclick="closeFxGallery()" aria-label="关闭">✕</button></div>
+    <div class="ds">真实界面截图 —— X32 由官方编辑器逐算法渲染，WING 取自官方手册的 FX 选择页。
+      用来「对上号」：台面上显示的就是这个样子，不是我们画的示意图。</div>
+    <div class="chp-tabs" id="fxGalTabs">
+      <button type="button" data-g="x32" onclick="fxGalTab('x32')">X32 / M32</button>
+      <button type="button" data-g="premium" onclick="fxGalTab('premium')">WING 高级</button>
+      <button type="button" data-g="standard" onclick="fxGalTab('standard')">WING 标准</button>
+    </div>
+    <div id="fxGalBody" class="fxgal"></div>
+  </div>
+</div>
+
+<div class="modal" id="keyModal" onclick="if(event.target===this)closeKeyModal()">
+  <div class="mdlg" role="dialog" aria-label="新增控制键">
+    <div class="mhd"><b id="keyModalTitle">➕ 新增控制键</b>
+      <button class="mclose" onclick="closeKeyModal()" aria-label="关闭">✕</button></div>
+    <div class="ds">选一个目标推子和方向,按键就按当前步长(设置页可调)渐变增减它。图标随便填个 emoji,留空则用 ⚡。</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0">
+      <input id="nkIcon" placeholder="🎧 (可留空)" style="width:90px;text-align:center" class="nkin" maxlength="4">
+      <input id="nkName" placeholder="名称 *必填,如:人声 增大" style="flex:1;min-width:150px" class="nkin"
+             oninput="this.classList.remove('inv');hideKeyErr()">
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <select id="nkKind" onchange="updNkIdx()" class="nkin">
+        <option value="ch">输入通道</option><option value="auxin">Aux In</option>
+        <option value="usb">USB 返回</option><option value="fxret">FX 返回</option>
+        <option value="bus">Bus 输出</option><option value="mtx">Matrix</option>
+        <option value="dca">DCA 编组</option><option value="main">主输出</option>
+      </select>
+      <select id="nkIdx" class="nkin"></select>
+      <select id="nkSign" class="nkin">
+        <option value="1">＋ 增大</option><option value="-1">－ 减小</option>
+      </select>
+    </div>
+    <div class="merr" id="keyErr"></div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px">
+      <button style="background:var(--card2);color:var(--txt)" onclick="closeKeyModal()">取消</button>
+      <button id="keySaveBtn" style="background:var(--green)" onclick="saveKey()">💾 添加控制键</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+// 推子/发送电平的 dB 曲线: 协议 `level` 类型的 **4 段伪对数**
+//   f>=0.5 → 40f-30 | f>=0.25 → 80f-50 | f>=0.0625 → 160f-70 | 否则 480f-90
+// 锚点 0.75→0 dB, 0.5→-10, 0.25→-30, 0.0625→-60。与后端 params.level_db 同源;
+// 以前用的是 20*log10(f/0.75), 只有 0.75 一个点对得上 (0.25 处偏 +20 dB)。
+const dbOf = f => (f<=0 ? -90
+  : f>=0.5 ? f*40-30
+  : f>=0.25 ? f*80-50
+  : f>=0.0625 ? f*160-70
+  : f*480-90);
+const dbTxt = db => db<=-89 ? "-∞" : db.toFixed(1);
+let S = null;
+
+// ---- HTML 转义: 所有拼进 innerHTML 的用户可控串都必须过它 ----
+// ⚠️ 通道名/卡片名/描述/控制键名/图标/FX 名/快照名/扫描到的真台名 全部可以由
+//    外部（含局域网里任何一台机器）控制。本项目没有鉴权、监听 0.0.0.0，
+//    所以差一个转义就是"外部可控 → 任意 JS 执行 → 调全部 API 接管台面"。
+//    新增任何 innerHTML 拼接地，先问自己：这里面哪个字段是用户填的？
+function esc(s){
+  return String(s==null?'':s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+// ---- 通道名称: 调音台 / 卡片 / 控制键统一显示 ----
+const P2G={c:'ch',b:'bus',d:'dca',m:'main',a:'auxin',u:'usb',x:'fxret',t:'mtx'};
+function nameOf(g,i){
+  if(!S||!S.names) return '';
+  return g==='main' ? (S.names.main||'') : ((S.names[g]||{})[String(i)]||'');
+}
+function dispName(g,i){
+  const n=nameOf(g,i);
+  if(n) return n;
+  if(g==='main') return '主输出';
+  if(g==='bus') return 'B'+i;
+  if(g==='dca') return 'D'+i;
+  return String(i).padStart(2,'0');
+}
+
+function rowHTML(prefix, i){
+  const L={m:'<b>MAIN</b><small class="nm2"></small>', d:i=>`<b>D${i}</b><small class="nm2"></small>`, b:i=>`<b>B${i}</b><small class="nm2"></small>`,
+           a:i=>`<b>A${i}</b><small class="nm2"></small>`, u:i=>`<b>U${i}</b><small class="nm2"></small>`, x:i=>`<b>FX${i}</b><small class="nm2"></small>`, t:i=>`<b>M${i}</b><small class="nm2"></small>`};
+  // 每一种通道都能点进详情: 输入/ Bus / Aux In / FX 返回 / Matrix / 主输出
+  // 各有各的处理能力 (Bus 6 段 EQ、FX 返回只有声像和发送), 面板按服务端参数表生成。
+  const GRP={c:'ch',b:'bus',a:'auxin',x:'fxret',t:'mtx',m:'main',u:'usb',d:'dca'};
+  const g=GRP[prefix];
+  const openable = g && g!=='usb' && g!=='dca';
+  const num = prefix==='m'
+    ? `<b class="${openable?'chnum':''}"${openable?` onclick="openChParams('main',0)"`:''} title="主输出: 均衡/动态/插入/声像/发送">MAIN</b><small class="nm2"></small>`
+    : (L[prefix] && !openable ? L[prefix](i)
+      : `<b class="chnum" onclick="openChParams('${g}',${i})" title="通道处理: 均衡/门/压缩/插入/增益/发送/声像">${L[prefix]?L[prefix](i).replace(/<[^>]+>/g,''):String(i).padStart(2,'0')}</b><small class="nm2"></small>`);
+  return `<div class="row" id="r-${prefix}-${i}">
+    <div class="meter"><i></i></div>
+    <div class="num">${num}</div>
+    <input type="range" min="0" max="1" step="0.01" value="0.75"
+      oninput="drag('${prefix}',${i},this)" onchange="dragEnd('${prefix}',${i},this)"
+      ondblclick="zeroFader('${prefix}',${i})" title="双击回 0 dB">
+    <span class="db">0.0 dB</span>
+    <button class="fadj" onclick="nudge('${prefix}',${i},-0.5)" title="-0.5 dB">−</button>
+    <button class="fadj" onclick="nudge('${prefix}',${i},0.5)" title="+0.5 dB">＋</button>
+    <button class="mute" onclick="toggle('${prefix}',${i},this)">M</button>
+  </div>`;
+}
+// ±0.5 dB 精调 (与后端 level_db 4 段曲线一致) / 双击回 0 dB
+function dbToFader(db){
+  db=Math.min(Math.max(db,-90),10);
+  if(db>=-10) return (db+30)/40;
+  if(db>=-30) return (db+50)/80;
+  if(db>=-60) return (db+70)/160;   // -60..-30 段 (分界 -60, 不是 -50)
+  return (db+90)/480;
+}
+function nudge(p,i,d){
+  const r=document.getElementById('r-'+p+'-'+i); if(!r) return;
+  const sl=r.querySelector('input');
+  const db=Math.min(Math.max(dbOf(+sl.value)+d,-90),10);
+  const v=dbToFader(db);
+  sl.value=v; sl.dataset.target=v; delete anim[r.id];
+  r.querySelector('.db').textContent=(db<=-89.5?'-∞':db.toFixed(1))+' dB';
+  send(p,i,'fader',+v.toFixed(4));
+}
+function zeroFader(p,i){
+  const r=document.getElementById('r-'+p+'-'+i); if(!r) return;
+  const sl=r.querySelector('input');
+  sl.value=0.75; sl.dataset.target=0.75; delete anim[r.id];
+  r.querySelector('.db').textContent='0.0 dB';
+  send(p,i,'fader',0.75);
+}
+
+function init(){
+  let h=''; for(let i=1;i<=32;i++) h+=rowHTML('c',i); $('#chlist').innerHTML=h;
+  h='';  for(let i=1;i<=6;i++)  h+=rowHTML('a',i); $('#auxlist').innerHTML=h;
+  h='';  for(let i=1;i<=2;i++)  h+=rowHTML('u',i); $('#usblist').innerHTML=h;
+  h='';  for(let i=1;i<=8;i++)  h+=rowHTML('x',i); $('#fxretlist').innerHTML=h;
+  h='';  for(let i=1;i<=16;i++)  h+=rowHTML('b',i); $('#buslist').innerHTML=h;
+  h='';  for(let i=1;i<=6;i++)  h+=rowHTML('t',i); $('#mtxlist').innerHTML=h;
+  h='';  for(let i=1;i<=8;i++)  h+=rowHTML('d',i); $('#dcalist').innerHTML=h;
+  $('#mainrow').innerHTML=rowHTML('m',0);
+  buildFx();
+  document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{
+    document.querySelectorAll('nav button').forEach(x=>x.classList.remove('on'));
+    document.querySelectorAll('.page').forEach(x=>x.classList.remove('on'));
+    b.classList.add('on'); $('#pg-'+b.dataset.p).classList.add('on');
+  });
+  chpLoadSpecs().then(fillParamTables);
+  poll();
+  pollMeters();
+}
+
+function drag(p,i,el){
+  const r=el.closest('.row');
+  const db=dbOf(+el.value);
+  r.querySelector('.db').textContent=(+el.value<=0.001?'-∞':db.toFixed(1))+' dB';
+  send(p,i,'fader',+el.value);
+}
+function dragEnd(){}
+function toggle(p,i,el){
+  const on = el.classList.contains('on') ? 1 : 0;
+  send(p,i,'on',on);
+}
+// 写入节流: 拖动中 50ms 窗口合并, 多条走 /api/setbatch, 少请求量
+const pend={}; let pendT=null;
+function send(p,i,param,value,bus,sgroup){
+  const KMAP={c:'ch',b:'bus',d:'dca',m:'main',a:'auxin',u:'usb',x:'fxret',t:'mtx',S:'send'};
+  const kind=KMAP[p]||'ch';
+  const it={kind:kind,idx:i,param:param,value:value};
+  // 发送是二维目标: 目标号与源组一起进合并键, 否则 CH01→Bus1 和 CH01→Bus2 会互相覆盖
+  if(kind==='send'){ it.bus=bus|0; if(sgroup&&sgroup!=='ch') it.sgroup=sgroup; }
+  pend[kind+'|'+i+'|'+(kind==='send'?((sgroup||'ch')+':'+(bus|0)):'')+'|'+param]=it;
+  if(!pendT) pendT=setTimeout(flushSend,50);
+}
+function flushSend(){
+  pendT=null;
+  const arr=Object.keys(pend).map(k=>pend[k]);
+  for(const k in pend) delete pend[k];
+  if(!arr.length) return;
+  fetch(arr.length===1?'/api/set':'/api/setbatch',
+    {method:'POST',headers:{'Content-Type':'application/json'},
+     body:JSON.stringify(arr.length===1?arr[0]:{sets:arr})});
+}
+// ---- 通道参数面板: 由服务端参数表**生成**, 不再手抄控件表 ----
+// 为什么改: 以前这里有一份 56 行的 CH_PARAM_UI, 必须与后端 params.py 逐项一致,
+// 靠一条回归盯着。现在放进 6 种通道 (Bus 6 段 EQ / Matrix / Main / Aux In /
+// FX 返回各有不同能力) 后, 手抄会变成 200+ 行、且必然漂移。
+// 现在只描述"哪一组有哪些页", 控件本身从 /api/paramspecs 来。
+const CHP_GROUPS={
+  ch:   {l:'输入通道', pre:'CH',  rowp:'c', send:'ch',    tap:true,  gain:true},
+  bus:  {l:'Mix Bus',  pre:'BUS', rowp:'b', send:'bus',   tap:false},
+  auxin:{l:'Aux In',   pre:'AUX', rowp:'a', send:'auxin', tap:true},
+  fxret:{l:'FX 返回',  pre:'FX',  rowp:'x', send:'fxret', tap:true},
+  mtx:  {l:'Matrix',   pre:'MTX', rowp:'t', send:null},
+  main: {l:'主输出',   pre:'MAIN',rowp:'m', send:'main',  tap:false},
+};
+const CHP_SEND_BUSES={ch:16,auxin:16,fxret:16,bus:6,main:6};
+const CHP_MODE={ch:1,bus:1,auxin:1,fxret:1,main:1};   // 可以进详情页的组 (mtx 见下)
+let CHP_SPECS=null, CHP_SPECS_P=null;
+let chp={g:'ch', i:1, tab:'pre', vals:{}, gain:null, send:null, bus:1, buses:16};
+function chpLoadSpecs(){
+  if(CHP_SPECS_P) return CHP_SPECS_P;
+  CHP_SPECS_P=fetch('/api/paramspecs').then(r=>r.json()).then(d=>{
+    CHP_SPECS=(d&&d.specs)||{}; return CHP_SPECS;
+  }).catch(()=>{CHP_SPECS_P=null; return {};});
+  return CHP_SPECS_P;
+}
+// 字段 → 页。**规则在服务端** (params.spec_section, 随 ui_specs 下发 sec),
+// 网页/iOS/Android 共用同一份 —— 这里只做兜底 (老服务端没有 sec 字段时)。
+// 声像放在"前置"第一行: 它是推子前的混音控制, 用户找它就在这附近。
+function chpTabOf(r){
+  if(r && r.sec) return r.sec;
+  const f=(r&&r.f)||r||'';
+  if(f==='pan') return 'pre';
+  if(f.indexOf('gate_')===0) return 'gate';
+  if(f.indexOf('dyn_')===0) return 'dyn';
+  if(f.indexOf('eq')===0) return 'eq';
+  return 'pre';
+}
+const CHP_TAB_ORDER=[['pre','前置'],['gate','门'],['dyn','动态'],['eq','均衡'],['send','发送']];
+const CHP_POS_MAX=1000;
+function chpPos(r,v){
+  const lo=Math.max(r.lo,1e-6), hi=r.hi;
+  const x=Math.min(Math.max(+v||lo,lo),hi);
+  return Math.round(Math.log(x/lo)/Math.log(hi/lo)*CHP_POS_MAX);
+}
+function chpVal(r,pos){
+  const lo=Math.max(r.lo,1e-6), hi=r.hi;
+  return lo*Math.pow(hi/lo,Math.min(Math.max(+pos||0,0),CHP_POS_MAX)/CHP_POS_MAX);
+}
+function chpFmt(r,v){
+  if(r.t==='bool') return (r.lb? r.lb[(+v)?1:0] : ((+v)?'开':'关'));
+  // 声像按台面习惯显示 L50 / C / R50, 而不是 -50 / 0 / 50 —— 现场没人用负数读声像
+  if(r.f==='pan'){ const x=Math.round(+v||0);
+    return Math.abs(x)<1?'C':(x<0?'L'+(-x):'R'+x); }
+  if(r.t==='int'&&r.lb){ const k=Math.round(+v||0); return r.lb[k]||String(k); }
+  const x=+v||0;
+  const txt=(r.dec?x.toFixed(r.dec):String(Math.round(x)));
+  return txt+(r.u?(' '+r.u):'');
+}
+function chpRows(g){
+  if(!CHP_SPECS||!CHP_SPECS[g]) return [];
+  return CHP_SPECS[g];
+}
+function chpRowHTML(r){
+  const id='chp-'+r.f;
+  if(r.t==='bool')
+    return `<div class="chp-row" id="${id}-row"><span class="chp-l">${r.l}</span>`
+      +`<button type="button" class="chp-tog" id="${id}" onclick="chpTog('${r.f}')">—</button>`
+      +`<span class="chp-v"></span></div>`;
+  if(r.t==='int'&&(r.lb||r.en)){
+    const opts = r.lb ? r.lb.map((x,k)=>[k,x]) : r.en.map(x=>[x,x]);
+    return `<div class="chp-row" id="${id}-row"><span class="chp-l">${r.l}</span>`
+      +`<select class="nkin" id="${id}" onchange="chpSet('${r.f}',this.value)">`
+      +opts.map(x=>`<option value="${x[0]}">${x[1]}</option>`).join('')+`</select>`
+      +`<span class="chp-v">${r.u||''}</span></div>`;
+  }
+  const lg=+r.lg>0;
+  const st=lg?1:(r.st||0.01);
+  return `<div class="chp-row" id="${id}-row"><span class="chp-l">${r.l}</span>`
+    +`<input type="range" id="${id}" min="${lg?0:r.lo}" max="${lg?CHP_POS_MAX:r.hi}"`
+    +` step="${st}" oninput="chpSlide('${r.f}',this)">`
+    +`<span class="chp-v" id="${id}-v" onclick="chpEdit('${r.f}')" title="点一下输入精确值"></span></div>`;
+}
+function chpBodyHTML(){
+  let h='';
+  const g=chp.g, rows=chpRows(g);
+  CHP_TAB_ORDER.forEach(([k])=>{
+    let inner='';
+    if(k==='send'){
+      if(!CHP_GROUPS[g].send) return;
+      inner = `<div class="chp-row"><span class="chp-l">目标</span>`
+        +`<select class="nkin" id="chpBus" onchange="chpBusChg(this.value)">`
+        +Array.from({length:CHP_SEND_BUSES[g]},(_,i)=>`<option value="${i+1}">`
+          +`${g==='bus'||g==='main'?'Matrix ':'Bus '}${String(i+1).padStart(2,'0')}</option>`).join('')
+        +`</select><span class="chp-v">${CHP_SEND_BUSES[g]} 路</span></div>`
+        +`<div id="chpSendRows"></div>`;
+    } else if(k==='pre'){
+      // 话放增益 (模拟增益) 只对输入通道: /headamp 是独立一组, 索引 = 通道号-1
+      if(CHP_GROUPS[g].gain && chp.gain)
+        inner += chpRowHTML(chp.gain);
+      inner += rows.filter(r=>chpTabOf(r)===k).map(chpRowHTML).join('');
+    } else {
+      inner = rows.filter(r=>chpTabOf(r)===k).map(chpRowHTML).join('');
+    }
+    if(!inner) return;
+    h+=`<div class="chp-tab" data-tab="${k}">${inner}</div>`;
+  });
+  return h;
+}
+function chpBuildTabs(){
+  const bar=$('#chpTabBar'); if(!bar) return;
+  const has={pre:true};
+  chpRows(chp.g).forEach(r=>{has[chpTabOf(r)]=true;});
+  if(CHP_GROUPS[chp.g].send) has.send=true;
+  bar.innerHTML=CHP_TAB_ORDER.filter(([k])=>has[k])
+    .map(([k,l])=>`<button type="button" data-tab="${k}" onclick="chpTab('${k}')">${l}</button>`).join('');
+}
+let CHP_TRIM=18;
+function chpLoadLimits(){
+  fetch('/api/info').then(r=>r.json()).then(d=>{
+    if(!d||!d.trimRange||d.trimRange===CHP_TRIM) return;
+    CHP_TRIM=+d.trimRange;
+    if(CHP_SPECS&&CHP_SPECS.ch) CHP_SPECS.ch.forEach(r=>{
+      if(r.f==='trim'){ r.lo=-CHP_TRIM; r.hi=CHP_TRIM; }
+    });
+  }).catch(()=>{});
+}
+function openChParams(g,i){
+  if(typeof g==='number'){ i=g; g='ch'; }        // 旧调用: openChParams(3)
+  if(!CHP_GROUPS[g]) return;
+  chp.g=g; chp.i=(g==='main')?0:(+i||1); chp.tab='pre';
+  chp.vals={}; chp.gain=null; chp.send=null;
+  chp.buses=CHP_SEND_BUSES[g]||0; chp.bus=1;
+  chpLoadLimits();
+  const nm=nameOf(g,chp.i)||'';
+  $('#chpTitle').textContent=(CHP_GROUPS[g].pre+' '+String(chp.i).padStart(2,'0'))+(nm?' · '+nm:'');
+  $('#chParamBody').innerHTML='<div class="ds" style="padding:12px">正在读取参数…</div>';
+  $('#chParamModal').classList.add('on');
+  document.body.style.overflow='hidden';
+  chpLoadSpecs().then(()=>{
+    const ps=[fetch('/api/params?group='+g+'&idx='+chp.i).then(r=>r.json()).catch(()=>null)];
+    if(CHP_GROUPS[g].gain) ps.push(fetch('/api/params?group=headamp&idx='+(chp.i-1))
+      .then(r=>r.json()).catch(()=>null));
+    return Promise.all(ps);
+  }).then(([d,gain])=>{
+    chp.vals=(d&&d.params)||{};
+    if(gain&&gain.params) chp.gain={f:'__gain', l:'话放增益', t:'float',
+      lo:-12, hi:60, st:0.5, dec:1, u:'dB', lg:0, dv:0, _v:gain.params.gain};
+    $('#chParamBody').innerHTML=chpBodyHTML();
+    chpBuildTabs();
+    chpTab('pre');
+  });
+}
+function closeChParams(){
+  $('#chParamModal').classList.remove('on'); document.body.style.overflow='';
+}
+function chpTab(k){
+  if(!CHP_GROUPS[chp.g]) return;
+  chp.tab=k;
+  const body=$('#chParamBody'); if(!body) return;
+  body.querySelectorAll('.chp-tab').forEach(el=>el.classList.toggle('on', el.dataset.tab===k));
+  const bar=$('#chpTabBar');
+  if(bar) bar.querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.tab===k));
+  if(k==='send') chpLoadSends(); else chpSync();
+  if(k==='send') chpSyncSend();
+}
+function chpSpec(f){
+  if(f.indexOf('send_')===0){ for(const r of SEND_UI) if(r.f===f) return r; return null; }
+  if(f==='__gain'&&chp.gain) return chp.gain;
+  for(const r of chpRows(chp.g)) if(r.f===f) return r;
+  return null;
+}
+function chpValOf(f){
+  if(f.indexOf('send_')===0){
+    const row=chpSendRow(), k=f.slice(5);
+    let v=row[k];
+    if(k==='level') v=(+v||0)*100;
+    return v;
+  }
+  if(f==='__gain') return chp.gain?chp.gain._v:0;
+  const v=chp.vals?chp.vals[f]:undefined;
+  if(v===undefined||v===null){ const r=chpSpec(f); return r?r.dv:0; }
+  return v;
+}
+function chpSync(){
+  const m=$('#chParamModal');
+  if(!m||!m.classList.contains('on')||chp.tab==='send') return;
+  chpRows(chp.g).concat(chp.gain?[chp.gain]:[]).forEach(r=>{
+    const el=document.getElementById('chp-'+r.f); if(!el) return;
+    const v=chpValOf(r.f);
+    if(r.t==='bool'){
+      const on=!!v; el.textContent=on?(r.lb?r.lb[1]:'开'):(r.lb?r.lb[0]:'关');
+      el.classList.toggle('on',on);
+    } else if(r.t==='int'&&(r.lb||r.en)){
+      if(document.activeElement!==el) el.value=String(+v);
+    } else {
+      const lg=+r.lg>0;
+      if(document.activeElement!==el) el.value=lg?chpPos(r,v):v;
+      const lab=document.getElementById('chp-'+r.f+'-v');
+      if(lab&&!lab.querySelector('input')) lab.textContent=chpFmt(r,v);
+    }
+  });
+}
+function chpBusChg(v){ chp.bus=+v||1; chpLoadSends(); }
+function chpWrite(f,v){
+  if(f.indexOf('send_')===0){
+    const key=f.slice(5);                       // on / level / tap
+    send('S', chp.i, chpSendKind(key), v, chp.bus, chp.g);
+    const k=String(chp.bus);
+    const row=chp.send[k]||(chp.send[k]={level:0,on:0,tap:4});
+    row[key]=v;
+    return;
+  }
+  if(f==='__gain'){
+    const it={kind:'headamp', idx:chp.i-1, param:'gain', value:v};
+    if(chp.gain) chp.gain._v=v;
+    return fetch('/api/set',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(it)});
+  }
+  send(CHP_GROUPS[chp.g].rowp, chp.i, f, v);
+  chp.vals[f]=v;
+}
+function chpSlide(f,el){
+  const r=chpSpec(f); if(!r) return;
+  const lg=+r.lg>0;
+  const v=lg?chpVal(r,el.value):(+el.value);
+  const lab=document.getElementById('chp-'+f+'-v');
+  if(lab&&!lab.querySelector('input')) lab.textContent=chpFmt(r,v);
+  chpWrite(f,v);
+}
+function chpSet(f,v){ chpWrite(f,+v); }
+function chpTog(f){
+  const cur=chpValOf(f)?1:0, nv=cur?0:1;
+  chpWrite(f,nv);
+  // 乐观切换: 写盘+轮询有 ~250ms 延迟, 不先动一下会觉得"点了没反应"
+  const r=chpSpec(f), el=document.getElementById('chp-'+f);
+  if(r&&el){ el.textContent=nv?(r.lb?r.lb[1]:'开'):(r.lb?r.lb[0]:'关'); el.classList.toggle('on',!!nv); }
+}
+// 键盘精调: 点数值 → 原地变输入框
+function chpEdit(f){
+  const r=chpSpec(f); if(!r||r.t==='bool'||r.lb||r.en) return;
+  const lab=document.getElementById('chp-'+f+'-v'); if(!lab) return;
+  if(lab.querySelector('input')) return;
+  const cur=chpValOf(f);
+  const step=r.dec?Math.max(r.st||0,Math.pow(10,-r.dec)):(r.st||1);
+  lab.innerHTML=`<input class="chp-in" type="number" inputmode="decimal"`
+    +` min="${r.lo}" max="${r.hi}" step="${step}" value="${(+cur).toFixed(r.dec)}">`;
+  const inp=lab.querySelector('input');
+  let done=false;
+  const commit=(ok)=>{
+    if(done) return; done=true;
+    const v=parseFloat(inp.value);
+    if(ok&&!isNaN(v)){
+      const w=Math.min(Math.max(v,r.lo),r.hi);
+      lab.textContent=chpFmt(r,w);
+      chpWrite(f,w);
+      const sl=document.getElementById('chp-'+f);
+      if(sl&&document.activeElement!==sl) sl.value=(+r.lg>0)?chpPos(r,w):w;
+    } else {
+      lab.textContent=chpFmt(r,cur);
+    }
+  };
+  inp.addEventListener('keydown',e=>{
+    if(e.key==='Enter'){ e.preventDefault(); commit(true); inp.blur(); }
+    else if(e.key==='Escape'){ e.preventDefault(); commit(false); inp.blur(); }
+  });
+  inp.addEventListener('blur',()=>commit(true));
+  inp.focus(); inp.select();
+}
+// ---- 发送 (二维: 源 × 目标) ----
+function chpSendKind(f){
+  const g=chp.g;
+  return (g==='ch'?'send':g+'_send')+'_'+f;
+}
+function chpSendRow(){ return (chp.send||{})[String(chp.bus)]||{level:0,on:0,tap:4}; }
+function chpLoadSends(){
+  if(!$('#chParamModal')||!$('#chParamModal').classList.contains('on')) return;
+  const g=chp.g;
+  fetch('/api/sends?group='+g+'&src='+chp.i).then(r=>r.json()).then(d=>{
+    chp.send=d.sends||{}; chpRenderSend(); 
+  }).catch(()=>{});
+}
+const SEND_UI=[
+  {f:'send_on',    l:'发送开关', t:'bool', lb:['关','开']},
+  {f:'send_level', l:'发送电平', t:'num',  u:'%', lo:0, hi:100, step:0.625, dec:1, dv:75, pct:1, db:1},
+  {f:'send_tap',   l:'发送取点', t:'enum', opts:[[0,'<-EQ'],[1,'EQ->'],[2,'PRE'],[3,'POST'],[4,'GRP']]},
+];
+function chpRenderSend(){
+  const box=$('#chpSendRows'); if(!box) return;
+  const tap=CHP_GROUPS[chp.g].tap;
+  box.innerHTML=SEND_UI.filter(r=>tap||r.f!=='send_tap').map(chpRowHTML).join('');
+  chpSyncSend();
+}
+function chpSyncSend(){
+  const row=chpSendRow();
+  SEND_UI.forEach(r=>{
+    const el=document.getElementById('chp-'+r.f); if(!el) return;
+    let v=row[r.f==='send_level'?'level':(r.f==='send_on'?'on':'tap')];
+    if(r.pct) v=(+v||0)*100;
+    if(r.t==='bool'){
+      el.textContent=v?r.lb[1]:r.lb[0]; el.classList.toggle('on',!!v);
+    } else if(r.t==='enum'){
+      if(document.activeElement!==el) el.value=String(Math.round(+v||0));
+    } else {
+      if(document.activeElement!==el) el.value=v;
+      const lab=document.getElementById('chp-'+r.f+'-v');
+      if(lab&&!lab.querySelector('input')) lab.textContent=chpFmt(r,v);
+    }
+  });
+}
+function runShow(id){ fetch('/api/show',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({id:id})}); }
+function stopShow(){ fetch('/api/show',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({id:null})}); }
+// ⚠️ 保存类接口失败时必须让用户看见: 后端对"落盘失败/非法输入"返回
+//    {"ok":false,"error":"..."} (HTTP 4xx/5xx), 曾经的 fire-and-forget 会把
+//    "没存上"表现成"存好了" —— 持久化假成功的最外一环。
+function api(path,obj){ fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(obj)}).then(r=>r.json().catch(()=>({}))).then(d=>{
+      if(d&&(d.error||d.ok===false)) showToast(d.error||'操作失败');
+    }).catch(()=>{}); }
+// ---- 台面预设：可选范围的保存 ----
+const PS_GROUPS=[['ch','输入通道'],['bus','Mix Bus'],['dca','DCA'],['auxin','Aux In'],
+  ['usb','USB'],['fxret','FX 返回'],['mtx','Matrix'],['main','主输出'],
+  ['fx','FX 机架'],['scene','场景号']];
+// 处理参数由服务端参数表补齐 (见 fillParamTables): 各组能力不同, 这里不写死。
+let PS_PARAMS=[['fader','推子'],['on','静音'],['name','名称'],['dca','DCA 归属'],
+  ['send_level','发送电平'],['send_on','发送开关'],['send_tap','发送取点']];
+const PS_CAP={ch:32,bus:16,dca:8,auxin:6,usb:2,fxret:8,mtx:6,main:1,fx:8,scene:1};
+const PS_PATH_GROUPS=['ch','bus','dca','auxin','usb','fxret','mtx','main'];
+let psGroups=['ch','bus','dca','auxin','usb','fxret','mtx','main'], psParams=['fader','on'];
+function openSnapModal(){
+  psGroups=['ch','bus','dca','auxin','usb','fxret','mtx','main']; psParams=['fader','on'];
+  $('#snapName').value=''; $('#snapIdx').value='';
+  renderPsChips(); $('#snapModal').classList.add('on'); document.body.style.overflow='hidden';
+}
+function closeSnapModal(){ $('#snapModal').classList.remove('on'); document.body.style.overflow=''; }
+function psUsable(g,p){
+  if(p==='dca') return g==='ch';
+  if(p==='fader'||p==='on'||p==='name') return g!=='fx'&&g!=='scene';
+  if(chpSpec(p)) return g==='ch';      // 增益/延时/低切… 只有输入通道有
+  return false;
+}
+function renderPsChips(){
+  const gEl=$('#snapGroups'), pEl=$('#snapParams');
+  if(!gEl||!pEl) return;
+  gEl.innerHTML=PS_GROUPS.map(([g,l])=>{
+    const on=psGroups.indexOf(g)>=0;
+    return `<span class="chip${on?' on':''}" onclick="psTog('g','${g}',this)">${l}</span>`;
+  }).join('');
+  pEl.innerHTML=PS_PARAMS.map(([p,l])=>{
+    const usable=psGroups.some(g=>psUsable(g,p));
+    const on=psParams.indexOf(p)>=0;
+    return `<span class="chip${on?' on':''}${usable?'':' dis'}" ${usable?'':'title="当前所选组不支持该参数"'}
+      onclick="psTog('p','${p}',this)">${l}</span>`;
+  }).join('');
+  psCount();
+}
+function psTog(what,v,el){
+  if(el.classList.contains('dis')) return;
+  const arr=what==='g'?psGroups:psParams;
+  const i=arr.indexOf(v);
+  if(i>=0){ if(arr.length<=1) return; arr.splice(i,1); } else arr.push(v);
+  renderPsChips();
+}
+function psIdxList(g){
+  const raw=($('#snapIdx')?$('#snapIdx').value:'').trim();
+  if(!raw) return null;
+  const cap=PS_CAP[g]||0, out=[];
+  raw.split(',').forEach(part=>{
+    part=part.trim();
+    const m=part.match(/^(\d+)\s*-\s*(\d+)$/);
+    if(m){
+      let a=+m[1], b=+m[2]; if(a>b){const t=a;a=b;b=t;}
+      for(let i=a;i<=b;i++){ if(i>=1&&i<=cap&&out.indexOf(i)<0) out.push(i); }
+    } else {
+      const n=+part;
+      if(n>=1&&n<=cap&&out.indexOf(n)<0) out.push(n);
+    }
+  });
+  return out.length?out.sort((x,y)=>x-y):null;
+}
+function psScope(){
+  const idx={};
+  PS_PATH_GROUPS.forEach(g=>{
+    if(psGroups.indexOf(g)<0) return;
+    const list=psIdxList(g);
+    if(list&&g!=='main') idx[g]=list;
+  });
+  // FX 机架/场景号没有"推子/静音"这类参数：只勾它们时自动带上整槽/场景，
+  // 否则会存出一条"范围里什么都没有"的空预设
+  const params=psParams.slice();
+  if(psGroups.indexOf('fx')>=0 && params.indexOf('slot')<0) params.push('slot');
+  if(psGroups.indexOf('scene')>=0 && params.indexOf('scene')<0) params.push('scene');
+  return {groups:psGroups.slice(),params:params,indices:idx};
+}
+function psCount(){
+  const sc=psScope(); let n=0;
+  PS_PATH_GROUPS.forEach(g=>{
+    if(psGroups.indexOf(g)<0) return;
+    const rows=(g==='main')?1:(sc.indices[g]?sc.indices[g].length:(PS_CAP[g]||0));
+    psParams.forEach(p=>{ if(psUsable(g,p)) n+=rows; });
+  });
+  if(psGroups.indexOf('fx')>=0) n+=8*4+8*3;
+  if(psGroups.indexOf('scene')>=0) n+=1;
+  const el=$('#snapCount');
+  if(el) el.textContent='将保存约 '+n+' 个值（FX 整槽按 8 槽 × 4 属性 + 算法参数计）';
+}
+function doSaveSnap(){
+  const sc=psScope();
+  if(!sc.groups.length) return;
+  api('/api/snapshot',{action:'save',name:($('#snapName').value||'').trim(),scope:sc});
+  closeSnapModal();
+}
+function recallSnap(id,sel){ api('/api/snapshot',{action:'recall',id:id,seconds:+sel.value}); }
+function delSnap(id){ api('/api/snapshot',{action:'delete',id:id}); }
+function stopRecall(){ api('/api/snapshot',{action:'stop'}); }
+function setKeyCfg(){ api('/api/keycfg',{step_db:+$('#stepSel').value,ramp:+$('#rampSel').value}); }
+
+// ---- 控台驱动切换 ----
+function setConsole(id){
+  fetch('/api/ctrlprofile',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({id:id})}).then(r=>r.json()).then(d=>{
+      if(!d.ok){ showToast(d.error||'切换失败'); return; }
+      showToast('控台 → '+d.label+(d.warning?'（未标定）':'')
+        +(d.fxNote?(' · '+d.fxNote):''));
+    }).catch(()=>showToast('切换失败'));
+}
+// ---- 网络端口 (设置页) ----
+// 250ms 的状态轮询会重渲染设置页 —— 用户已经改了但还没保存的输入不能被冲掉,
+// 所以用 window.portDirty 标记「手上有未保存的改动」, 有标记时就不回填输入框。
+window.portDirty=false;
+function portNum(v,allowZero){
+  v=String(v==null?'':v).trim();
+  if(v==='') return null;                       // 空 = 恢复该类端口的内置默认
+  if(!/^[0-9]+$/.test(v)) return NaN;           // 非纯数字 → 明确报错, 不静默
+  const n=parseInt(v,10);
+  if(allowZero && n===0) return 0;              // 网页端口 0 = 关闭
+  return (n>=1 && n<=65535) ? n : NaN;
+}
+function savePorts(){
+  const u=portNum($('#pUdp').value,false), w=portNum($('#pWeb').value,true);
+  if(isNaN(u)){ showToast('OSC/UDP 端口需为 1–65535 的整数'); return; }
+  if(isNaN(w)){ showToast('网页端口需为 0–65535 的整数（0 = 关闭网页）'); return; }
+  if(w!==null && w>0 && w===(u===null?(S&&S.ports?S.ports.defUdp:10023):u)){
+    showToast('两个端口不能相同'); return;
+  }
+  fetch('/api/ports',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({udp:u,web:w})})
+   .then(r=>r.json()).then(d=>{
+     if(!d.ok){ showToast(d.error||'保存失败'); return; }
+     window.portDirty=false;
+     showToast(d.restart?'已保存 —— 重启模拟器后生效':'已保存，与当前生效端口一致');
+   }).catch(()=>showToast('保存失败'));
+}
+function resetPorts(){
+  fetch('/api/ports',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({udp:null,web:null})})
+   .then(r=>r.json()).then(d=>{
+     if(!d.ok){ showToast(d.error||'恢复失败'); return; }
+     window.portDirty=false;
+     showToast('已恢复默认端口'+(d.restart?'，重启后生效':''));
+   }).catch(()=>showToast('恢复失败'));
+}
+function renderPorts(){
+  const p=S&&S.ports; if(!p) return;
+  const u=$('#pUdp'), w=$('#pWeb');
+  if(!window.portDirty){                        // 有未保存改动时不动输入框
+    if(u && document.activeElement!==u) u.value=(p.savedUdp==null?'':p.savedUdp);
+    if(w && document.activeElement!==w) w.value=(p.savedWeb==null?'':p.savedWeb);
+  }
+  const st=$('#portStat');
+  if(st){
+    st.textContent=p.pending?'⚠ 待重启生效':'✓ 当前生效中';
+    st.style.color=p.pending?'#d9a13c':'#22c55e';
+  }
+  const iu=$('#pinfoUdp'), iw=$('#pinfoWeb'), iu2=$('#pinfoUdp2');
+  if(iu) iu.textContent=p.udp;
+  if(iw) iw.textContent=(p.web>0?p.web:'已关闭');
+  if(iu2) iu2.textContent=p.udp;
+  const nt=$('#portNote');
+  if(nt){
+    let h='当前生效: OSC/UDP <b>'+p.udp+'</b> · 网页 <b>'+(p.web>0?p.web:'已关闭')+'</b>'
+      +`（内置默认 ${p.defUdp} / ${p.defWeb}）`;
+    if(p.envLocked){
+      h+='<br>⚠️ 本实例是<b>线上部署</b>，网页端口由平台环境变量指定，在此修改不会生效。';
+    } else if(p.savedWeb===0){
+      h+='<br>提示: 网页端口填 <b>0</b> 表示关闭网页控制台，只保留 OSC/UDP 服务。';
+    }
+    if(p.pending){
+      h+='<br><b style="color:#d9a13c">已保存但尚未生效</b> —— 当前仍在用旧端口，'
+        +'请 Ctrl+C 停掉模拟器后重新启动。';
+    }
+    if(window.portDirty){
+      h+='<br>✏️ 输入框里有<b>未保存</b>的改动 —— 点「💾 保存」提交。';
+    }
+    nt.innerHTML=h;
+  }
+}
+function renderConsole(){
+  const sel=$('#ctrlSel');
+  if(!sel||!S||!S.console) return;
+  const c=S.console;
+  if(sel.options.length!==c.all.length){
+    sel.innerHTML=c.all.map(p=>
+      `<option value="${esc(p.id)}">${esc(p.label)}${p.ready?'':'（待标定）'}</option>`).join('');
+  }
+  if(document.activeElement!==sel) sel.value=c.id;
+  const st=$('#ctrlStat');
+  if(st){
+    st.textContent=c.ready?(c.verified?'✓ 已标定':'⚠ 未核对'):'⚠ 待标定';
+    st.style.color=c.ready?(c.verified?'#22c55e':'#d9a13c'):'#ef4444';
+  }
+  const nt=$('#ctrlNote');
+  if(nt){
+    if(c.ready&&c.verified){
+      nt.innerHTML=`地址表已与真机核对 · 通道 <b>${c.counts.ch}</b> · Bus <b>${c.counts.bus}</b>`
+        +` · DCA <b>${c.counts.dca}</b> · FX <b>${c.counts.fx}</b> 槽`
+        +(c.fxLib?` · 效果库 <b>${c.fxLib}</b> 种（效果器页已同步）`:'');
+    } else if(c.ready){
+      nt.innerHTML='⚠️ '+esc(c.note||'地址表未经真机核对');
+    } else {
+      nt.innerHTML=`⚠️ <b>${esc(c.label)}</b> 的驱动尚未标定：${esc(c.note||'')}<br>`
+        +`此状态下所有写入会被<b>拒绝并记日志</b>,卡片不会真正控制到台子 —— 这是刻意的,`
+        +`免得蒙错地址写到别的参数上。`;
+    }
+  }
+  const cp=$('#ctrlCaps');
+  if(cp){
+    cp.textContent=(!c.ready&&c.pending.length)
+      ? ('需要提供的地址映射: '+c.pending.slice(0,8).join(' / ')+(c.pending.length>8?' …':''))
+      : '';
+  }
+}
+
+// 控制键长按连发: 按下立即触发一次, 按住 500ms 后每 150ms 重复
+let kpT=null,kpI=null;
+function kpStart(id){
+  api('/api/key',{id:id});
+  kpStop();
+  kpT=setTimeout(()=>{ kpI=setInterval(()=>api('/api/key',{id:id}),150); },500);
+}
+function kpStop(){
+  if(kpT){ clearTimeout(kpT); kpT=null; }
+  if(kpI){ clearInterval(kpI); kpI=null; }
+}
+document.addEventListener('pointerup',kpStop);
+document.addEventListener('pointercancel',kpStop);
+
+// ---- 新增控制键 ----
+function updNkIdx(){
+  const k=$('#nkKind').value;
+  const N={ch:32,bus:16,dca:8,auxin:6,usb:2,fxret:8,mtx:6,main:1}[k]||1;
+  let h=''; for(let i=1;i<=N;i++) h+=`<option value="${i}">${esc(dispName(k,i))}</option>`;
+  $('#nkIdx').innerHTML=h;
+}
+
+// ---- 通道命名编辑器 (设置页) ----
+const NM_COUNT={ch:32,bus:16,dca:8,auxin:6,usb:2,fxret:8,mtx:6};
+function updNmIdx(){
+  const g=$('#nmGroup').value,n=NM_COUNT[g];
+  let h='';
+  for(let i=1;i<=n;i++){
+    const nm=nameOf(g,i);
+    h+=`<option value="${i}">${String(i).padStart(2,'0')}${nm?' · '+esc(nm):''}</option>`;
+  }
+  $('#nmIdx').innerHTML=h;
+}
+function saveName(){
+  api('/api/name',{group:$('#nmGroup').value,idx:+$('#nmIdx').value,name:$('#nmVal').value.trim()});
+  $('#nmVal').value='';
+}
+let editKeyId = null;
+function saveKey(){
+  const name=$('#nkName').value.trim();
+  $('#nkName').classList.toggle('inv', !name);
+  if(!name){ keyErr('请填写按键名称(必填)'); return; }
+  const btn=$('#keySaveBtn');
+  btn.classList.add('btnspin'); btn.textContent='保存中…';
+  hideKeyErr();
+  const url=editKeyId?'/api/keyedit':'/api/keyadd';
+  const payload=editKeyId
+    ?{id:editKeyId, icon:$('#nkIcon').value.trim()||'⚡', name:name,
+      kind:$('#nkKind').value, idx:+$('#nkIdx').value, sign:+$('#nkSign').value}
+    :{icon:$('#nkIcon').value.trim()||'⚡', name:name,
+      kind:$('#nkKind').value, idx:+$('#nkIdx').value, sign:+$('#nkSign').value};
+  fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(payload)})
+  .then(r=>{
+    if(!r.ok) throw new Error('服务器错误 '+r.status);
+    return r.json();
+  })
+  .then(d=>{
+    if(!d || !d.ok) throw new Error('保存被拒绝');
+    $('#nkName').value=''; $('#nkIcon').value='';
+    closeKeyModal();
+  })
+  .catch(err=>keyErr('保存失败: '+(err&&err.message?err.message:'网络异常,请重试')))
+  .finally(()=>{
+    btn.classList.remove('btnspin'); btn.textContent='💾 添加控制键';
+  });
+}
+function openKeyModal(key){
+  editKeyId = key ? key.id : null;
+  $('#keyModalTitle').textContent = key ? '✏️ 编辑控制键' : '➕ 新增控制键';
+  $('#keySaveBtn').textContent = key ? '💾 保存修改' : '💾 添加控制键';
+  $('#keyModal').classList.add('on');
+  document.body.style.overflow='hidden';
+  if(key){
+    $('#nkIcon').value = key.icon || '';
+    $('#nkName').value = key.name || '';
+    $('#nkKind').value = String(key.kind || '').replace('_fader','');
+    updNkIdx();
+    $('#nkIdx').value = String(key.idx || 1);
+    $('#nkSign').value = key.sign < 0 ? '-1' : '1';
+  } else {
+    $('#nkIcon').value=''; $('#nkName').value='';
+    updNkIdx();
+  }
+  hideKeyErr();
+  setTimeout(()=>$('#nkName').focus(),120);
+}
+function closeKeyModal(){
+  $('#keyModal').classList.remove('on');
+  document.body.style.overflow='';
+  hideKeyErr();
+  editKeyId = null;
+  $('#nkName').classList.remove('inv');
+}
+function editCard(id){
+  const c=(S.cards||[]).find(x=>x.id===id);
+  if(c) openCardModal(c);
+}
+function editKey(id){
+  const k=(S.quickKeys||[]).find(x=>x.id===id);
+  if(k) openKeyModal(k);
+}
+function keyErr(msg){ const e=$('#keyErr'); e.textContent=msg; e.classList.add('on'); }
+function hideKeyErr(){ $('#keyErr').classList.remove('on'); }
+document.addEventListener('keydown',e=>{ if(e.key==='Escape'){ closeCardModal(); closeKeyModal(); } });
+function delKey(id){ api('/api/keydel',{id:id}); }
+
+// ---- 新建演出卡片 ----
+let caActs=[];
+let caMulti=[];                       // 当前动作类型下勾选的目标编号
+const CA_MULTI={mute:'ch',mute_bus:'bus',fade_ch:'ch',fade_bus:'bus'};
+const CA_LABEL={mute:'静音通道',mute_bus:'静音 Bus',scene:'切场景',unmute_all:'全部取消静音',wait:'等待',
+  fade_all:'全体推子渐变',fade_odd_even:'奇偶过渡',fade_ch:'通道渐变',fade_bus:'Bus 渐变',
+  fade_from:'通道从指定值渐变',fade_from_bus:'Bus 从指定值渐变',rel_db:'相对增减 dB',
+  set:'通用设置',osc:'原始 OSC'};
+
+// ---- 通用动作 set 的分组 / 参数表（必须与服务端 SET_GROUPS/SET_PARAMS 对齐）----
+// 分组是**语义**的,落到哪个地址由控台驱动决定 —— 所以同一张卡片能换控台使用。
+const ST_GROUPS=[['ch','输入通道',32],['bus','Bus 输出',16],['dca','DCA 编组',8],
+  ['main','主输出',1],['auxin','Aux In',6],['usb','USB 返回',2],['fxret','FX 返回',8],
+  ['mtx','Matrix',6],['fx','FX 效果槽',8],['scene','场景',99],
+  ['send','发送 (通道→Bus)',32]];
+const ST_PARAMS={ch:['fader','on'],bus:['fader','on'],dca:['fader','on'],
+  main:['fader','on'],auxin:['fader','on'],usb:['fader','on'],
+  fxret:['fader','on'],mtx:['fader','on'],
+  fx:['time','predelay','damp','mix','on','type','name'],scene:['load'],
+  send:['send_level','send_on','send_tap']};
+const ST_PLABEL={fader:'推子 %',on:'开关 (1开启/0静音)',mix:'混合比 (0-1)',
+  time:'混响时间 (秒)',predelay:'预延迟 (毫秒)',damp:'阻尼 (0-1)',
+  type:'算法 (效果库 61 种, 见效果器页)',name:'名称 (文本)',load:'切场景'};
+// 处理参数的中文名/单位/枚举文案全部来自服务端参数表 —— 前端不再抄一份。
+// (抄一份的下场: 后端改了量程或文案, 界面照旧, 只能等用户发现"拖到 X 就没反应")
+function fillParamTables(specs){
+  if(!specs) return;
+  const seen={};
+  Object.keys(specs).forEach(g=>{
+    const rows=specs[g]||[];
+    if(ST_PARAMS[g]) rows.forEach(r=>{
+      if(ST_PARAMS[g].indexOf(r.f)<0) ST_PARAMS[g].push(r.f);
+    });
+    rows.forEach(r=>{
+      if(!seen[r.f]){
+        seen[r.f]=1;
+        PS_PARAMS.push([r.f, r.l]);
+      }
+      ST_PLABEL[r.f]=r.l+(r.u?(' ('+r.u+')'):'')
+        +(r.t==='bool'?' (1开启/0关闭)':'');
+    });
+  });
+}
+function numIn(id,label,def){
+  return `<input id="${id}" type="number" value="${def}" placeholder="${label}"
+    title="${label}" aria-label="${label}" class="nkin" style="width:84px">`;
+}
+function curveSel(){
+  return `<select id="caCurve" class="nkin"><option value="linear">直线</option><option value="ease_out">先快后慢</option><option value="ease_in">先慢后快</option><option value="smooth">S 形</option></select>`;
+}
+function chipGrid(g,n){
+  let h='<div class="chipgrid" id="caChips">';
+  for(let i=1;i<=n;i++){
+    const nm=nameOf(g,i);
+    h+=`<span class="chip" data-i="${i}" onclick="togChip(this)">${g==='ch'?String(i).padStart(2,'0'):'B'+i}${nm?'<em>'+nm+'</em>':''}</span>`;
+  }
+  return h+'</div>';
+}
+function togChip(el){
+  el.classList.toggle('on');
+  const i=+el.dataset.i;
+  const p=caMulti.indexOf(i);
+  if(p>=0) caMulti.splice(p,1); else caMulti.push(i);
+  hideCardErr();
+}
+function updCaParams(){
+  const k=$('#caKind').value;
+  caMulti=[]; hideCardErr();
+  let h='';
+  if(CA_MULTI[k]) h+=chipGrid(CA_MULTI[k],CA_MULTI[k]==='ch'?32:16);
+  if(k==='mute'||k==='mute_bus'){ $('#caParams').innerHTML=h; return; }
+  if(k==='scene'){
+    h+=`<span class="ds" style="margin:0">场景</span>`+numIn('caScene','场景号',1);
+    h+=`<select id="caSceneMode" class="nkin" onchange="caSceneModeChg()">`
+      +`<option value="global">全局调用（整场还原）</option>`
+      +`<option value="partial">局部调用（只动预设范围）</option></select>`;
+    h+=`<span id="caSceneExtra" style="display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap"></span>`;
+    h+=`<div class="ds" id="caSceneNote" style="width:100%;margin:2px 0 0;color:#d9a13c"></div>`;
+  }
+  else if(k==='preset') h+=`<select id="caPreset" class="nkin">${presetOpts()}</select>`
+    +numIn('caSec','渐变秒数',2)+`<span class="ds" style="margin:0">秒</span>`+curveSel();
+  else if(k==='wait') h+=numIn('caSec','等待秒数',3);
+  else if(k==='unmute_all'){ /* 无参数 */ }
+  else if(k==='fade_all') h+=numIn('caP1','目标 %',0)+numIn('caSec','秒数',3)+curveSel();
+  else if(k==='fade_odd_even') h+=numIn('caP1','奇数 %',80)+numIn('caP2','偶数 %',0)+numIn('caSec','秒数',4)+curveSel();
+  else if(k==='fade_ch'||k==='fade_bus') h+=numIn('caP1','到 %',80)+numIn('caSec','秒数',3)+curveSel()
+    +`<button type="button" class="learnbtn" onclick="learnTo()">⭐ 取当前值</button>`;
+  else if(k==='fade_from') h+=numIn('caCh','通道号',15)+numIn('caP0','从 %',0)+numIn('caP1','到 %',90)+numIn('caSec','秒数',5)+curveSel();
+  else if(k==='fade_from_bus') h+=numIn('caBus','Bus 号',1)+numIn('caP0','从 %',0)+numIn('caP1','到 %',90)+numIn('caSec','秒数',5)+curveSel();
+  else if(k==='rel_db') h+=`<select id="caGrp" class="nkin" onchange="caMulti=[];updRelChips()">
+      <option value="ch">输入通道</option><option value="bus">Bus 输出</option><option value="dca">DCA 编组</option></select>`
+    +`<span id="caRelChips" style="display:inline-flex"></span>`
+    +numIn('caDb','±dB',3)+numIn('caSec','秒数',2)+curveSel();
+  else if(k==='set') h+=setFormHTML();
+  else if(k==='osc') h+=oscFormHTML();
+  $('#caParams').innerHTML=h;
+  if(k==='rel_db') updRelChips();
+  if(k==='set') stGroupChg();
+  if(k==='scene') caSceneModeChg();
+}
+// ---- 通用设置表单 ----
+function setFormHTML(){
+  return `<select id="stGroup" class="nkin" onchange="stGroupChg()">`
+    + ST_GROUPS.map(x=>`<option value="${x[0]}">${x[1]}</option>`).join('') + `</select>`
+    + `<input id="stId" type="number" value="1" min="1" class="nkin" style="width:78px" title="目标编号">`
+    + `<span id="stBusWrap"></span>`
+    + `<select id="stParam" class="nkin" onchange="stParamChg()"></select>`
+    + `<span id="stValWrap"></span>`
+    + `<input id="stDur" type="number" value="0" min="0" step="0.5" class="nkin" style="width:104px"
+             title="仅推子类支持渐变;0 = 瞬间到位">`
+    + `<button type="button" class="learnbtn" onclick="learnSet()">⤓ 抓取台面值</button>`;
+}
+function stGroupChg(){
+  const g=$('#stGroup').value;
+  const ps=ST_PARAMS[g]||['fader'];
+  $('#stParam').innerHTML=ps.map(p=>`<option value="${p}">${ST_PLABEL[p]||p}</option>`).join('');
+  const idEl=$('#stId');
+  const row=ST_GROUPS.find(x=>x[0]===g)||['','',32];
+  const cap=row[2]||32;
+  if(g==='main'){ idEl.value=0; idEl.disabled=true; }
+  else { idEl.disabled=false; idEl.max=cap; if(!+idEl.value||+idEl.value>cap) idEl.value=1; }
+  // 发送是二维目标: 编号是通道, 还要一个 Bus。不给这一栏, 用户只能写"第 5 个打包值",
+  // 那种数字对内没有任何意义。
+  const bw=$('#stBusWrap');
+  if(bw) bw.innerHTML=(g==='send')
+    ? `<select id="stBus" class="nkin" title="发往哪个 Bus">`
+      +Array.from({length:16},(_,i)=>`<option value="${i+1}">Bus ${String(i+1).padStart(2,'0')}</option>`).join('')
+      +`</select>`
+    : '';
+  stParamChg();
+}
+function stParamChg(){
+  const p=$('#stParam').value, w=$('#stValWrap');
+  if(!w) return;
+  const sp=chpSpec(p);
+  if(p==='on') w.innerHTML=`<select id="stValSel" class="nkin"><option value="1">开启</option><option value="0">静音 / 旁通</option></select>`;
+  else if(p==='type') w.innerHTML=`<select id="stValSel" class="nkin">`
+    + fxAlgoOpts('(清空)') + `</select>`;
+  else if(p==='name') w.innerHTML=`<input id="stValTxt" class="nkin" style="width:120px" maxlength="12" placeholder="名称">`;
+  else if(p==='load') w.innerHTML=`<span class="ds" style="margin:0">按上面的编号切换场景</span>`;
+  else if(sp&&sp.t==='bool')
+    w.innerHTML=`<select id="stValSel" class="nkin">`
+      +`<option value="1">${sp.lb?sp.lb[1]:'开'}</option>`
+      +`<option value="0">${sp.lb?sp.lb[0]:'关'}</option></select>`;
+  else if(sp&&sp.t==='enum')
+    w.innerHTML=`<select id="stValSel" class="nkin">`
+      +sp.opts.map(o=>`<option value="${o[0]}">${o[1]}</option>`).join('')+`</select>`
+      +`<span class="ds" style="margin:0 0 0 6px;min-width:34px">${sp.u||''}</span>`;
+  else if(sp)
+    w.innerHTML=`<input id="stValNum" type="number" class="nkin" style="width:100px"`
+      +` min="${sp.lo}" max="${sp.hi}" step="${sp.step}" value="${sp.dv!==undefined?sp.dv:sp.lo}">`
+      +`<span class="ds" style="margin:0 0 0 6px;min-width:34px">${sp.u||''}</span>`;
+  // ⚠️ 单位必须**贴着输入框**显示：混响参数吃的是原生单位（秒 / 毫秒），
+  //    而 fader/mix 又是 0–1。少了单位标签，用户极易把"混响时间 80"填成 0.8 秒，
+  //    跑起来"没什么效果"还以为是台子坏了。
+  else {
+    const u={fader:'%',time:'秒',predelay:'毫秒',damp:''}[p]||'';
+    const dv=p==='fader'?80:(p==='time'?2.4:(p==='predelay'?20:0.45));
+    w.innerHTML=`<input id="stValNum" type="number" class="nkin" style="width:100px" step="0.01" value="${dv}">`
+      +`<span class="ds" style="margin:0 0 0 6px;min-width:34px">${u}</span>`;
+  }
+}
+// ---- 原始 OSC 表单 ----
+function oscFormHTML(){
+  return `<input id="oscAddr" class="nkin" style="flex:1;min-width:190px" placeholder="/ch/05/mix/fader" maxlength="128">`
+    + `<input id="oscArgs" class="nkin" style="flex:1;min-width:140px" placeholder="参数,逗号分隔(可留空) 如 0.8">`
+    + `<div class="ds" style="width:100%;color:#d9a13c">⚠️ 原始 OSC 是<b>控台专有</b>的:地址写死,换到别的控台可能指向别的参数、甚至完全无效。通用需求请优先用上面的「通用设置」。</div>`;
+}
+function updRelChips(){
+  const g=$('#caGrp')?$('#caGrp').value:'ch';
+  $('#caRelChips').innerHTML=chipGrid(g,g==='ch'?32:g==='bus'?16:8);
+}
+function learnTo(){
+  const k=$('#caKind').value;
+  const g=CA_MULTI[k]; if(!g) return;
+  if(caMulti.length!==1){ cardErr('「取当前值」需要先在列表里只勾选 1 个目标'); return; }
+  const i=caMulti[0];
+  const src=g==='ch'?(S.ch[i]||{}):(S.bus[i]||{});
+  if(src.fader===undefined){ cardErr('暂时读不到当前值,请稍候'); return; }
+  const el=document.getElementById('caP1');
+  if(el) el.value=Math.round(src.fader*100);
+  hideCardErr();
+}
+function presetOpts(){
+  const list=(S.snapshots||[]);
+  if(!list.length) return '<option value="0">（还没有预设：先到卡片页「保存预设」）</option>';
+  return list.map(sp=>`<option value="${sp.id}">${esc(sp.name)} · ${sp.count||0} 值</option>`).join('');
+}
+function caSceneModeChg(){
+  const modeEl=$('#caSceneMode'), box=$('#caSceneExtra'), note=$('#caSceneNote');
+  if(!modeEl||!box) return;
+  if(modeEl.value==='partial'){
+    box.innerHTML=`<select id="caScenePreset" class="nkin">${presetOpts()}</select>`
+      +numIn('caSec','推子秒数',1)+`<span class="ds" style="margin:0">秒</span>`+curveSel();
+    if(note) note.textContent='局部调用不发场景号：只把预设范围内的参数应用过来，其余通道一个字节都不动。';
+  } else {
+    box.innerHTML='';
+    if(note) note.textContent='全局调用会按场景整场还原（包括卡片里没写过的通道）；真台上还受 Scene Safes 影响。';
+  }
+}
+// 通用设置：从当前台面抓一个值填进来（省得手抄 dB / 混响秒数）
+function curValue(g,p,i){
+  try{
+    if(g==='fx'){
+      const fx=(S.fx||[]).find(x=>x.slot===i);
+      if(!fx) return null;
+      if(p==='type') return fx.type||'';
+      if(p==='name') return fx.name||'';
+      if(p==='on') return fx.on?1:0;
+      if(p==='mix') return fx.mix;
+      if(p==='time'||p==='predelay'||p==='damp'){
+        const v=fx[p];
+        return (v===undefined||v===null)?null:v;
+      }
+      return null;
+    }
+    if(g==='scene') return +S.scene||1;
+    const row=(g==='main')?S.main:(S[g]||{})[String(i)];
+    if(!row) return null;
+    if(p==='on') return row.on?1:0;
+    if(p==='name'){ const nm=(S.names||{})[g]||{}; return nm[String(i)]||''; }
+    if(p==='fader') return row.fader;
+    // 新增通道参数: 行字典里同名字段直接返回 (缺省 = 该组没这个参数 → null)
+    if(row[p]!==undefined) return row[p];
+  }catch(e){}
+  return null;
+}
+function learnSet(){
+  const g=$('#stGroup').value, p=$('#stParam').value;
+  const i=(g==='main')?0:(+($('#stId').value)||1);
+  const sp=chpSpec(p);
+  if(g==='send'){
+    // 发送值不在 /api/state 里 (512 项会把状态包撑爆), 抓取时单独拉一次
+    const bus=+((($('#stBus')||{}).value)||1);
+    fetch('/api/sends?ch='+i).then(r=>r.json()).then(d=>{
+      const row=(d.sends||{})[String(bus)];
+      if(!row){ cardErr('读不到 CH'+i+' → Bus'+bus); return; }
+      const v=(p==='send_level')?row.level:(p==='send_on'?row.on:row.tap);
+      fillStVal(sp,p,v);
+    }).catch(()=>cardErr('读取发送值失败'));
+    return;
+  }
+  const v=curValue(g,p,i);
+  if(v===null){ cardErr('读不到「'+g+' '+i+'」的当前值（编号越界，或该参数尚未建模）'); return; }
+  fillStVal(sp,p,v);
+}
+function fillStVal(sp,p,v){
+  if(p==='on'||p==='load'){
+    const sel=$('#stValSel'); if(sel) sel.value=String(v?1:0);
+    cardInfo('已抓取：'+(v?'开启':'静音'));
+  } else if(sp&&sp.t==='bool'){
+    const sel=$('#stValSel'); if(sel) sel.value=String(v?1:0);
+    cardInfo('已抓取：'+(v?sp.lb[1]:sp.lb[0]));
+  } else if(sp&&sp.t==='enum'){
+    const sel=$('#stValSel'); if(sel) sel.value=String(v);
+    cardInfo('已抓取：'+v+' '+(sp.u||''));
+  } else if(p==='type'){
+    const sel=$('#stValSel'); if(sel) sel.value=v||'';
+    cardInfo('已抓取算法：'+(v||'(空)'));
+  } else if(p==='name'){
+    const el=$('#stValTxt'); if(el) el.value=v||'';
+    cardInfo('已抓取名称：'+(v||'(空)'));
+  } else {
+    const el=$('#stValNum');
+    const isPct=(p==='fader'||p==='send_level');
+    if(el) el.value=isPct?Math.round(v*100):v;
+    cardInfo('已抓取：'+(isPct?Math.round(v*100)+'%':(sp?chpFmt(sp,v):v)));
+  }
+}
+function cardInfo(msg){
+  const e=$('#cardErr'); if(!e) return;
+  e.textContent=msg; e.classList.add('on'); e.style.color='var(--green)';
+  setTimeout(()=>{ e.style.color=''; },2200);
+}
+function pct(v){ return Math.min(Math.max(+(v||0),0),100)/100; }
+function addAct(){
+  const k=$('#caKind').value, a={kind:k};
+  const g=id=>{const e=document.getElementById(id);return e?e.value:null;};
+  if(k==='rel_db'){
+    const grp=$('#caGrp')?$('#caGrp').value:'ch';
+    if(!caMulti.length){
+      const cg=$('#caChips');
+      if(cg){ cg.classList.add('inv'); setTimeout(()=>cg.classList.remove('inv'),1200); }
+      cardErr('请先勾选要增减的目标,再点「＋加入动作」');
+      return;
+    }
+    a.group=grp;
+    a[{ch:'chs',bus:'buses',dca:'dcas'}[grp]]=caMulti.slice().sort((x,y)=>x-y);
+    a.delta_db=Math.min(Math.max(+g('caDb')||3,-30),30);
+    a.duration=Math.max(+g('caSec')||2,0.5);
+    a.curve=g('caCurve');
+    caActs.push(a); renderActs(); return;
+  }
+  if(k==='set'){
+    const grp=$('#stGroup').value, p=$('#stParam').value;
+    let i=+($('#stId').value)||0;
+    if(grp==='main') i=0;
+    if(grp!=='main'&&grp!=='scene'&&i<1){ cardErr('请填写目标编号'); return; }
+    if(grp==='scene'&&i<1){ cardErr('请填写场景号'); return; }
+    a.target={group:grp,param:p,id:i};
+    // 发送: id 是通道, 再带上 Bus。后端按 send_pack(通道, Bus) 落地
+    if(grp==='send') a.target.bus=+((($('#stBus')||{}).value)||1);
+    const sp=chpSpec(p);
+    if(p==='on') a.value=(+($('#stValSel')?$('#stValSel').value:0))?1:0;
+    else if(sp&&sp.t==='bool') a.value=(+($('#stValSel')?$('#stValSel').value:0))?1:0;
+    else if(sp&&sp.t==='enum') a.value=+($('#stValSel')?$('#stValSel').value:0);
+    else if(p==='type') a.value=($('#stValSel')?$('#stValSel').value:'');   // 库来自当前控台
+    else if(p==='name') a.value=($('#stValTxt')?$('#stValTxt').value.trim():'');
+    else if(p==='load') a.value=1;
+    else {
+      let v=+($('#stValNum')?$('#stValNum').value:0)||0;
+      if(p==='fader'||p==='send_level') v=pct(v);   // 表单里填百分比, 传 0..1
+      a.value=v;                          // 新通道参数吃原生单位 (dB/ms/Hz), 不做百分比换算
+    }
+    const d=+($('#stDur')?$('#stDur').value:0)||0;
+    if(d>0&&p==='fader') a.duration=Math.max(d,0.5);   // 只有推子类能渐变
+    else if(d>0) cardErr('提示:非推子参数不支持渐变,已按瞬间执行');
+    caActs.push(a); renderActs(); return;
+  }
+  if(k==='osc'){
+    const addr=($('#oscAddr')?$('#oscAddr').value.trim():'');
+    if(!addr){ cardErr('请填写 OSC 地址'); return; }
+    if(addr[0]!=='/'){ cardErr('OSC 地址必须以 / 开头,例如 /ch/05/mix/fader'); return; }
+    if(addr.indexOf(' ')>=0){ cardErr('OSC 地址不能含空格'); return; }
+    a.address=addr;
+    const raw=($('#oscArgs')?$('#oscArgs').value.trim():'');
+    if(raw){
+      a.args=raw.split(',').map(s=>s.trim()).filter(s=>s!=='').map(s=>
+        (/^-?\d+(\.\d+)?$/.test(s))?+s:s);      // 纯数字转数值, 其余当字符串
+    }
+    caActs.push(a); renderActs(); return;
+  }
+  if(CA_MULTI[k]){
+    if(!caMulti.length){
+      const cg=$('#caChips');
+      if(cg){ cg.classList.add('inv'); setTimeout(()=>cg.classList.remove('inv'),1200); }
+      cardErr('请先在列表里勾选目标'+(k==='mute'||k==='fade_ch'?'通道':'Bus')+',再点「＋加入动作」');
+      return;
+    }
+    const sel=caMulti.slice().sort((x,y)=>x-y);
+    if(k==='mute') a.chs=sel;
+    else if(k==='mute_bus') a.buses=sel;
+    else if(k==='fade_ch'){ a.chs=sel; a.to=pct(g('caP1')); a.duration=Math.max(+g('caSec')||3,0.5); a.curve=g('caCurve'); }
+    else { a.buses=sel; a.to=pct(g('caP1')); a.duration=Math.max(+g('caSec')||3,0.5); a.curve=g('caCurve'); }
+  }
+  else if(k==='scene'){
+    a.scene=+(g('caScene')||1);
+    const mode=g('caSceneMode')||'global';
+    a.mode=mode;
+    if(mode==='partial'){
+      const pid=+(g('caScenePreset')||0);
+      if(!pid){ cardErr('局部调用需要先选一条预设（没有就先到卡片页保存一条）'); return; }
+      a.presetId=pid;
+      a.duration=Math.max(+g('caSec')||1,0.05);
+      a.curve=g('caCurve');
+    }
+  }
+  else if(k==='preset'){
+    const pid=+(g('caPreset')||0);
+    if(!pid){ cardErr('请先选要调用的预设'); return; }
+    a.presetId=pid;
+    a.duration=Math.max(+g('caSec')||2,0.5);
+    a.curve=g('caCurve');
+  }
+  else if(k==='wait') a.duration=Math.max(+g('caSec')||3,0.5);
+  else if(k==='unmute_all'){ /* 无参数 */ }
+  else if(k==='fade_all'){ a.to=pct(g('caP1')); a.duration=Math.max(+g('caSec')||3,0.5); a.curve=g('caCurve'); }
+  else if(k==='fade_odd_even'){ a.odd_to=pct(g('caP1')); a.even_to=pct(g('caP2')); a.duration=Math.max(+g('caSec')||4,0.5); a.curve=g('caCurve'); }
+  else if(k==='fade_from'){ a.ch=+(g('caCh')||15); a.frm=pct(g('caP0')); a.to=pct(g('caP1')); a.duration=Math.max(+g('caSec')||5,0.5); a.curve=g('caCurve'); }
+  else if(k==='fade_from_bus'){ a.bus=+(g('caBus')||1); a.frm=pct(g('caP0')); a.to=pct(g('caP1')); a.duration=Math.max(+g('caSec')||5,0.5); a.curve=g('caCurve'); }
+  caActs.push(a); renderActs();
+}
+function actTxt(a){
+  const cv={linear:'直线',ease_out:'先快后慢',ease_in:'先慢后快',smooth:'S 形'};
+  const t=x=>Math.round(x*100)+'%';
+  const lst=(g,arr)=>(arr||[]).map(i=>dispName(g,i)).join('、');
+  if(a.kind==='mute') return '静音 '+lst('ch',a.chs||(a.ch?[a.ch]:[]));
+  if(a.kind==='mute_bus') return '静音 '+lst('bus',a.buses||(a.bus?[a.bus]:[]));
+  if(a.kind==='scene'){
+    if((a.mode||'global')==='partial'){
+      const sp=(S.snapshots||[]).find(x=>x.id===a.presetId);
+      return `场景 ${a.scene} 局部（${sp?'预设「'+sp.name+'」':'预设已删除'}）`;
+    }
+    return '切到场景 '+a.scene;
+  }
+  if(a.kind==='preset'){
+    const sp=(S.snapshots||[]).find(x=>x.id===a.presetId);
+    return `调用预设「${sp?sp.name:'已删除'}」`;
+  }
+  if(a.kind==='unmute_all') return '全部取消静音';
+  if(a.kind==='wait') return '等待 '+(+a.duration||1)+' 秒';
+  if(a.kind==='fade_all') return `全体推子→${t(a.to)} ${a.duration}秒 ${cv[a.curve]}`;
+  if(a.kind==='fade_odd_even') return `奇数→${t(a.odd_to)} 偶数→${t(a.even_to)} ${a.duration}秒 ${cv[a.curve]}`;
+  if(a.kind==='fade_ch') return `${lst('ch',a.chs||(a.ch?[a.ch]:[]))} →${t(a.to)} ${a.duration}秒 ${cv[a.curve]}`;
+  if(a.kind==='fade_bus') return `${lst('bus',a.buses||(a.bus?[a.bus]:[]))} →${t(a.to)} ${a.duration}秒 ${cv[a.curve]}`;
+  if(a.kind==='fade_from') return `${dispName('ch',a.ch)} 从${t(a.frm)} 经${a.duration}秒→${t(a.to)} ${cv[a.curve]}`;
+  if(a.kind==='fade_from_bus') return `${dispName('bus',a.bus)} 从${t(a.frm)} 经${a.duration}秒→${t(a.to)} ${cv[a.curve]}`;
+  if(a.kind==='rel_db'){
+    const g2=a.group||'ch';
+    const ids=a[{ch:'chs',bus:'buses',dca:'dcas'}[g2]]||[];
+    return `${lst(g2,ids)} ${a.delta_db>=0?'+':'−'}${Math.abs(+a.delta_db||0)}dB ${a.duration}秒 ${cv[a.curve]}`;
+  }
+  if(a.kind==='set'){
+    const tg=a.target||{}, g2=tg.group, p=tg.param||'fader', i=(g2==='main')?0:(+tg.id||0);
+    const gname=((ST_GROUPS.find(x=>x[0]===g2)||['',g2])[1]);
+    if(g2==='scene') return '切到场景 '+i;
+    if(g2==='fx'){
+      if(p==='on') return `FX${i} ${a.value?'开启':'旁通'}`;
+      if(p==='type') return `FX${i} 算法=${a.value||'(清空)'}`;
+      if(p==='name') return `FX${i} 名称=${a.value}`;
+      if(p==='mix') return `FX${i} 混合比=${(+a.value||0).toFixed(2)}`;
+      return `FX${i} ${(ST_PLABEL[p]||p)} = ${a.value}`;
+    }
+    // 标签必须能区分"CH05 推子"和"CH05→Bus03 发送电平": 发送是二维目标,
+    // 只写通道号会出现两条一模一样的摘要, 用户没法核对卡片。
+    const lbl=(g2==='main')?'主输出':(g2==='send')
+      ? `CH${String(i).padStart(2,'0')}→Bus${String((a.target&&a.target.bus)||1).padStart(2,'0')}`
+      : `${gname} ${String(i).padStart(2,'0')}`;
+    if(p==='on') return `${lbl} ${a.value?'开启':'静音'}`;
+    if(p==='send_on') return `${lbl} 发送${a.value?'开':'关'}`;
+    if(p==='send_level') return `${lbl} 电平=${Math.round((+a.value||0)*100)}%`;
+    if(p==='send_tap')
+      return `${lbl} 取点=${(['<-EQ','EQ->','PRE','POST','GRP'][+a.value||0])||''}`;
+    const dd=(+a.duration>0)?` 经${a.duration}秒`:'';
+    const sp0=(p==='fader')?null:chpSpec(p);
+    if(sp0&&sp0.t!=='bool')
+      return `${lbl} ${sp0.l}=${(+a.value||0)}${sp0.u?(' '+sp0.u):''}`;
+    return `${lbl} →${Math.round((+a.value||0)*100)}%${dd}`;
+  }
+  if(a.kind==='osc') return `⚠️ 原始 OSC ${a.address}${(a.args&&a.args.length)?' '+a.args.join(' '):''}`;
+  return '?';
+}
+function renderActs(){
+  $('#actChips').innerHTML=caActs.map((a,i)=>
+    `<span style="display:inline-flex;align-items:center;gap:6px;background:var(--card2);color:var(--txt);border:1px solid var(--line);border-radius:14px;padding:4px 10px;font-size:12px;margin:2px">
+      ${i+1}. ${esc(actTxt(a))} <b style="cursor:pointer;color:var(--red)" onclick="caActs.splice(${i},1);renderActs()">×</b></span>`).join('')
+    || '<div class="ds" style="font-size:12px">还没有动作,选类型后点「＋加入动作」。</div>';
+}
+let editCardId = null;
+function saveCard(){
+  const name=$('#ncName').value.trim();
+  $('#ncName').classList.toggle('inv', !name);
+  if(!name){ cardErr('请填写卡片名称(必填)'); return; }
+  if(!caActs.length){ cardErr('请至少加入一个动作,再保存卡片'); return; }
+  const btn=$('#cardSaveBtn');
+  btn.classList.add('btnspin'); btn.textContent='保存中…';
+  hideCardErr();
+  const url=editCardId?'/api/cardedit':'/api/cardadd';
+  const cardData={name:name,desc:$('#ncDesc').value,actions:caActs,
+                  next:($('#ncNext')?$('#ncNext').value:'')};
+  const payload=editCardId
+    ?{id:editCardId, card:cardData}
+    :{card:cardData};
+  fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(payload)})
+  .then(r=>{
+    if(!r.ok) throw new Error('服务器错误 '+r.status);
+    return r.json();
+  })
+  .then(d=>{
+    if(!d || !d.ok) throw new Error((d&&d.error)||'保存被拒绝');
+    // 服务端会回报"清洗时丢了几个动作、为什么"—— 必须让用户看见，
+    // 否则就是"保存成功但跑起来少了东西"的假成功。
+    const dp=d.dropped||[];
+    if(dp.length) toast('⚠️ 已保存，但有 '+dp.length+' 个动作被丢弃：'+dp.join('；'));
+    else toast(editCardId?'✏️ 卡片已更新':'🎬 卡片已创建');
+    caActs=[]; renderActs(); $('#ncName').value=''; $('#ncDesc').value='';
+    closeCardModal();
+  })
+  .catch(err=>cardErr('保存失败: '+(err&&err.message?err.message:'网络异常,请重试')))
+  .finally(()=>{
+    btn.classList.remove('btnspin'); btn.textContent='💾 保存卡片';
+  });
+}
+function openCardModal(card){
+  editCardId = card ? card.id : null;
+  $('#cardModalTitle').textContent = card ? '✏️ 编辑演出卡片' : '➕ 新建演出卡片';
+  $('#cardSaveBtn').textContent = card ? '💾 保存修改' : '💾 保存卡片';
+  // ⚠️ 三个字段都必须**无条件**重置。曾经的写法把 name/desc/caActs 全放在
+  //    `if(card){...}` 里 —— 新建卡片加几个动作 → 不保存直接关 → 再点"新建"，
+  //    上次的动作和名字都还在，用户会以为"自动保存了"。
+  $('#ncName').value = card ? (card.name || '') : '';
+  $('#ncDesc').value = card ? (card.desc || '') : '';
+  caActs = card ? JSON.parse(JSON.stringify(card.actions || [])) : [];
+  // 接续选择: 除自身外的所有卡片
+  const nxt=$('#ncNext');
+  nxt.innerHTML='<option value="">(无 · 执行完就停)</option>'
+    +(S.cards||[]).filter(x=>x.id!==editCardId)
+      .map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join('');
+  nxt.value=(card&&card.next)||'';
+  $('#cardModal').classList.add('on');
+  document.body.style.overflow='hidden';
+  updCaParams(); renderActs(); hideCardErr();
+  setTimeout(()=>$('#ncName').focus(),120);
+}
+function closeCardModal(){
+  $('#cardModal').classList.remove('on');
+  document.body.style.overflow='';
+  hideCardErr();
+  if(editCardId){
+    editCardId = null;
+    caActs = []; renderActs();
+    $('#ncName').value=''; $('#ncDesc').value='';
+  }
+  $('#ncName').classList.remove('inv');
+}
+function cardErr(msg){ const e=$('#cardErr'); e.textContent=msg; e.classList.add('on'); }
+function hideCardErr(){ $('#cardErr').classList.remove('on'); }
+document.addEventListener('keydown',e=>{ if(e.key==='Escape') closeCardModal(); });
+function delCard(id){ api('/api/carddel',{id:id}); }
+updNkIdx(); updCaParams(); renderActs(); updNmIdx();
+
+// ---- 效果器: FX 槽 1-8 / Tap 定拍 / 混响时间同步 ----
+// 页面覆盖全部 61 种算法（混响/延迟/组合/调制/变调/均衡/动态/增强/吉他），
+// 不是"混响专用"：算法名一律用真台英文名，中文只作括号里的辅助。
+// 与服务端同一套语义: BPM 取最近 8 个间隔均值, 抖动(<0.15s)忽略, 超时(>2s)重开;
+// 时间 = 拍数 × 60/BPM (附点 ×1.5); 实际写入由服务端按算法范围钳制。
+// 算法清单不再写死 —— 由服务端按**当前控台驱动**下发 (S.fx.algos)。
+// 换控台 = 换一套效果库, 下拉选项跟着重建; 这样"选的就是这台台子上真有的效果"。
+// 61 种算法平铺成一个长列表根本找不到东西 → 按分类分组 (optgroup);
+// heavy 算法带"仅FX1-4"标记, 免得用户选了才被拒。
+function fxAlgoOpts(emptyLabel){
+  const lib = (S && S.fx && S.fx.algos) || {};
+  const keys = Object.keys(lib);
+  if (!keys.length) return '<option value="">— 效果库未就绪 —</option>';
+  const el = (emptyLabel === undefined) ? '— 空槽 —' : emptyLabel;
+  const catLab = ((S.fx && S.fx.console) || {}).catLabel || {};
+  const byCat = {};
+  keys.forEach(k => { const c = lib[k].cat || 'misc'; (byCat[c] = byCat[c] || []).push(k); });
+  const order = Object.keys(catLab);
+  const groups = Object.keys(byCat).sort((a, b) => {
+    const ia = order.indexOf(a), ib = order.indexOf(b);
+    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+  }).map(c => '<optgroup label="' + esc(catLab[c] || c) + '">'
+      + byCat[c].map(k => {
+          // 真台名在前、中文在后：用户照着台子/X32-Edit 上的字找效果器，
+          // 只给中文等于让他自己翻译（"立体声合唱" ↔ "Stereo Chorus"）。
+          const en = lib[k].en || k, zh = lib[k].label || '';
+          const nm = (!zh || zh === en) ? en : (en + '（' + zh + '）');
+          return '<option value="' + esc(k) + '">' + esc(nm)
+              + (lib[k].heavy ? ' · 仅FX1-4' : '') + '</option>';
+        }).join('')
+      + '</optgroup>').join('');
+  return '<option value="">' + esc(el) + '</option>' + groups;
+}
+const FX_BEATS = {'1/16':0.25, '1/8':0.5, '1/4':1, '1/2':2, '1':4, '2':8};
+const FX_NOTE_OPTS = [['1/16','1/16 音符'], ['1/8','1/8 音符'], ['1/4','1/4 音符'],
+                      ['1/2','1/2 音符'], ['1','全音符'], ['2','2 小节']];
+function fxNoteSecs(bpm, note, dotted){
+  let beats = FX_BEATS[note] || 1;
+  if (dotted) beats *= 1.5;
+  bpm = Math.min(Math.max(+bpm || 120, 30), 300);
+  return beats * 60 / bpm;
+}
+// 参数控件不再为每种算法写死 —— 服务端按标定表下发全部参数 (field/label/
+// unit/lo/hi/kind/opts/value/unset), 这里统一渲染: 数值=滑杆, 枚举=下拉。
+// 未设置 (unset) 的参数不拿 0 冒充: 大量参数 lo>0 (频率/时间), 0 越界会把
+// 滑杆骗到一端 —— 显示"未设置", 拖一下才真正写上台面。
+// ⚠️ 步长候选必须**升序**取第一个满足"≤200 档"的: 曾经写成降序, 于是永远
+//    返回 100 —— 0.2–5.0 的混响时间滑杆 step=100, 浏览器把 3.5 吸附回 0.2,
+//    界面看着正常、值根本拖不动 (只能靠交互测试抓出来)。
+function fxStep(lo, hi){
+  const span = Math.abs((+hi) - (+lo)) || 1;
+  for (const st of [0.001, 0.01, 0.05, 0.1, 0.5, 1, 5, 10, 50, 100])
+    if (span / st <= 200) return st;
+  return 1000;
+}
+function fxDec(lo, hi){
+  const st = fxStep(lo, hi);
+  return st >= 1 ? 0 : (st >= 0.1 ? 1 : 2);
+}
+function fxParsHTML(s, st){
+  if (!st || !st.loaded){
+    const lib = (S && S.fx && S.fx.algos) || {};
+    const c = (S && S.fx && S.fx.console) || {};
+    if (c.locked || !Object.keys(lib).length)
+      return '<div class="ds" style="margin:0">控台「' + esc(c.label || '当前控台')
+           + '」的效果库还没标定，这个槽暂时不可用（写入会被拒绝并记日志）。</div>';
+    // 库小就列名字 (5 种混响的时代), 库大 (61 种) 只报数 —— 全列出来是刷屏
+    const names = Object.keys(lib);
+    const hint = names.length <= 12
+      ? ('空槽 — 把上面的类型选成 ' + names.map(k => esc(lib[k].label)).join(' / ') + ' 中的一个。')
+      : ('空槽 — 从上面的类型下拉选一个算法（' + names.length + ' 种, 按分类分组）。');
+    return '<div class="ds" style="margin:0">' + hint + '</div>';
+  }
+  if (!st.known)
+    return '<div class="ds" style="margin:0">⚠ 真台上这个槽装的是「' + esc(st.type)
+         + '」，不在本控台「' + esc(((S.fx.console || {}).label) || '当前')
+         + '」的效果库里 — 没有标定参数，这个槽只能看不能调。</div>';
+  const clamp0 = (lo, hi) => Math.min(Math.max(0, +lo), +hi);
+  const rows = (st.params || []).map(p => {
+    const unit = p.unit ? ' ' + p.unit : '';
+    // w=false: 当前控台（如 WING）没有这个参数的地址 —— 只读不给滑杆。
+    // 留一个能拖的假滑杆比不给更糟: 用户以为台子坏了。
+    const off = (p.w === false);
+    const dis = off ? ' disabled' : '';
+    const offTip = off ? ' <span class="ds">(本控台未标定)</span>' : '';
+    if (p.kind === 'i'){
+      const opts = (p.opts || []).map((o, i) =>
+        `<option value="${i}">${esc(o)}</option>`).join('');
+      const unset = (p.value === null || p.value === undefined);
+      const shown = unset ? '未设置'
+        : esc(String((p.opts || [])[p.value] != null ? (p.opts)[p.value] : p.value));
+      return `<div class="fxrow"${off ? ' style="opacity:.55"' : ''}><span class="fxlab">${esc(p.label)}${offTip}</span>
+        <select class="fxsel"${dis} data-f="${p.field}" onchange="fxSet(${s},'${p.field}',+this.value)">
+          ${unset ? '<option value="">未设置</option>' : ''}${opts}</select>
+        <span class="fxval" data-v="${p.field}">${shown}</span></div>`;
+    }
+    const dec = fxDec(p.lo, p.hi), step = fxStep(p.lo, p.hi);
+    const unset = (p.value === null || p.value === undefined);
+    const val = unset ? clamp0(p.lo, p.hi) : +p.value;
+    return `<div class="fxrow"${off ? ' style="opacity:.55"' : ''}><span class="fxlab">${esc(p.label)}${offTip}</span>
+      <input type="range" class="fxsl"${dis} data-f="${p.field}" data-unit="${esc(p.unit || '')}"
+        data-dec="${dec}" min="${p.lo}" max="${p.hi}" step="${step}" value="${val.toFixed(dec)}"
+        oninput="fxSlide(${s},'${p.field}',this)">
+      <span class="fxval" data-v="${p.field}">${unset ? '未设置' : val.toFixed(dec) + unit}</span></div>`;
+  }).join('');
+  // mix 是槽级字段 (不在算法参数表里), 固定排在最后
+  // 参数多于 8 个的算法 (GEQ 32 项 / P1A2 20 项…) 在宽屏排双列, 窄屏仍单列
+  const body = (st.params || []).length > 8
+    ? '<div class="fxgrid">' + rows + '</div>' : rows;
+  return body + `<div class="fxrow"><span class="fxlab">混合比</span>
+      <input type="range" class="fxsl" data-f="mix" data-unit="" data-dec="2"
+        min="0" max="1" step="0.01" value="${(+st.mix).toFixed(2)}"
+        oninput="fxSlide(${s},'mix',this)">
+      <span class="fxval" data-v="mix">${(+st.mix).toFixed(2)}</span></div>`;
+}
+function fxCardHTML(s){
+  const opts = fxAlgoOpts();
+  return `<div class="card" id="fxc-${s}">
+    <div class="nm">FX${s}
+      <select class="nkin fx-type" onchange="fxSet(${s},'type',this.value)">${opts}</select>
+      <input class="nkin fx-name" style="width:110px" maxlength="12" placeholder="名称"
+        onchange="fxSet(${s},'name',this.value)">
+      <button class="mute fx-on" onclick="fxToggle(${s})" title="效果开关">M</button>
+      <span class="ds fx-tag" style="margin:0"></span></div>
+    <div class="fxshot empty"><img alt="效果器面板" loading="lazy"></div>
+    <div class="fxpars"></div></div>`;
+}
+// ---- 效果器图鉴 (v1.8) ----
+// 图片是真机界面截图: X32 由 X32-Edit 4.4 逐算法渲染后截取(61 种全),
+// WING 取自官方手册的 FX 选择页(52 种)。只作"对号"用, 不参与参数运算。
+// 元数据在 /fx/fxlib.json, 由 X32Simulator/tools/export_fx_gallery.py 生成。
+let fxGalData = null, fxGalGroup = 'x32';
+function fxGallery(){
+  $('#fxGalModal').classList.add('on');
+  if (fxGalData){ fxGalRender(); return; }
+  const body = $('#fxGalBody');
+  body.innerHTML = '<div class="ds">加载中…</div>';
+  fetch('/fx/fxlib.json').then(r => r.json()).then(d => {
+    fxGalData = d; fxGalRender();
+  }).catch(e => {
+    body.innerHTML = '<div class="ds">图鉴元数据加载失败: ' + esc(String(e)) + '</div>';
+  });
+}
+function closeFxGallery(){ $('#fxGalModal').classList.remove('on'); }
+function fxGalTab(g){ fxGalGroup = g; fxGalRender(); }
+function fxGalRender(){
+  if (!fxGalData) return;
+  [...$('#fxGalTabs').children].forEach(b => b.classList.toggle('on', b.dataset.g === fxGalGroup));
+  let rows = [];
+  if (fxGalGroup === 'x32'){
+    rows = (fxGalData.x32.items || []).map(it => ({
+      img: it.img, name: it.en, sub: it.cn,
+      tag: it.heavy ? '仅 FX1-4' : (it.n + ' 参数')}));
+  } else {
+    const g = fxGalData.wing[fxGalGroup] || {items: []};
+    rows = g.items.map(it => ({img: it.img, name: it.name, sub: '', tag: ''}));
+  }
+  $('#fxGalBody').innerHTML = rows.length ? rows.map(r =>
+      '<figure><img src="/fx/' + esc(r.img) + '" loading="lazy" alt="' + esc(r.name) + '">'
+      + '<figcaption><span><b>' + esc(r.name) + '</b>'
+      + (r.sub ? ' <span class="cn">' + esc(r.sub) + '</span>' : '') + '</span>'
+      + (r.tag ? '<span class="tag">' + esc(r.tag) + '</span>' : '')
+      + '</figcaption></figure>').join('')
+    : '<div class="ds">这一类还没有图。</div>';
+}
+function buildFx(){
+  $('#fxNote').innerHTML = FX_NOTE_OPTS.map(([v,t]) => `<option value="${v}">${t}</option>`).join('');
+  let g = '';
+  for (let s = 1; s <= 8; s++)
+    g += `<label class="chip" id="fxg-${s}"><input type="checkbox" onchange="fxGroupSet()">FX${s}</label>`;
+  $('#fxGroup').innerHTML = g;
+  let h = '';
+  for (let s = 1; s <= 8; s++) h += fxCardHTML(s);
+  $('#fxlist').innerHTML = h;
+}
+function updFx(){
+  if (!S || !S.fx) return;
+  const slots = S.fx.slots || [], sync = S.fx.sync || {}, tap = S.fx.tap || {};
+  // 效果库换了（＝切了控台）→ 重建算法下拉。libId 就是控台 id, 由服务端下发,
+  // 前端不做任何"猜"—— 库内容永远以服务端为准。
+  if (window.fxLibId !== S.fx.libId){
+    window.fxLibId = S.fx.libId;
+    renderFxLibrary();
+  }
+  renderFxConsole(S.fx.console || {});
+  slots.forEach(st => {
+    const card = document.getElementById('fxc-' + st.slot);
+    if (!card) return;
+    const ts = card.querySelector('.fx-type');
+    if (ts){
+      // 真台上可能装着本控台效果库里没有的算法 —— 给它补一个条目, 否则 select
+      // 会落成空白, 用户就看不到"真台上到底装了什么"了。
+      if (st.type && ![...ts.options].some(o => o.value === st.type)){
+        const o = document.createElement('option');
+        o.value = st.type;
+        o.textContent = st.type + '（不在本控台效果库）';
+        ts.appendChild(o);
+      }
+      if (document.activeElement !== ts && ts.value !== st.type) ts.value = st.type;
+    }
+    const nm = card.querySelector('.fx-name');
+    if (document.activeElement !== nm && nm.value !== st.name) nm.value = st.name;
+    card.querySelector('.fx-on').classList.toggle('on', !st.on);
+    const tag = card.querySelector('.fx-tag');
+    // 下拉里已经有算法名了，这里显示该算法的时间范围（Tap 换算会被钳制到这个区间）；
+    // 非混响类算法没有时间参数，退而显示参数个数
+    const txt = !st.loaded ? '空槽'
+               : (!st.known ? '⚠ 未知算法（不在本控台效果库）'
+               : (st.time != null ? (st.tmin + '–' + st.tmax + ' ' + (st.tunit || 's'))
+                                  : (((st.params || []).length) + ' 个参数')));
+    if (tag.textContent !== txt) tag.textContent = txt;
+    // 面板图: 用真台算法代码查内嵌截图。算法不在库里/空槽就收起整块,
+    // 不留一个空白框 —— 空框会被当成"图没加载出来"。
+    const box = card.querySelector('.fxshot');
+    if (box) {
+      const img = box.querySelector('img');
+      const src = st.loaded && st.known
+        ? '/fx/x32/' + String(st.type).replace('/', '_') + '.webp' : '';
+      if (src) {
+        if (img.getAttribute('src') !== src) img.src = src;
+        box.classList.remove('empty');
+      } else {
+        img.removeAttribute('src');
+        box.classList.add('empty');
+      }
+    }
+    // 算法变了就重建这一张卡的参数区 (range 的 min/max 随算法范围变)
+    const pars = card.querySelector('.fxpars');
+    // 算法变了、或控台锁定状态变了 → 重建参数区（range 的 min/max 随算法范围变；
+    // 空槽的提示文案也随"当前控台是否标定"变，只看 type 会漏掉换控台那一次）
+    const sig = (st.type || '') + '|' + (((S.fx.console || {}).locked) ? 'L' : '');
+    if (pars.dataset.algo !== sig){
+      pars.dataset.algo = sig;
+      pars.innerHTML = fxParsHTML(st.slot, st);
+    }
+    // 值刷新: 算法参数 + 槽级 mix 一把抓。enum 是下拉, 数值是滑杆;
+    // 未设置 (value=null) 只更新文字, 不动滑杆 (滑杆停在钳制后的 0 位)。
+    (st.params || []).concat([{field: 'mix', unit: '', kind: 'f', lo: 0, hi: 1,
+                               value: st.mix}]).forEach(p => {
+      if (p.kind === 'i'){
+        const sel = pars.querySelector(`.fxsel[data-f="${p.field}"]`);
+        if (sel && document.activeElement !== sel)
+          sel.value = (p.value === null || p.value === undefined) ? '' : p.value;
+        return;
+      }
+      const sl = pars.querySelector(`.fxsl[data-f="${p.field}"]`); if (!sl) return;
+      const ve = pars.querySelector(`.fxval[data-v="${p.field}"]`);
+      if (p.value === null || p.value === undefined){
+        if (ve) ve.textContent = '未设置';
+        return;
+      }
+      const dec = fxDec(p.lo, p.hi);
+      const shown = (+p.value).toFixed(dec);
+      if (document.activeElement !== sl && +sl.value !== +shown) sl.value = shown;
+      if (ve) ve.textContent = shown + (p.unit ? ' ' + p.unit : '');
+    });
+  });
+  const msel = $('#fxMode');
+  if (msel && document.activeElement !== msel && msel.value !== sync.mode) msel.value = sync.mode;
+  const fck = $('#fxFollow'); if (fck && fck.checked !== !!sync.followTap) fck.checked = !!sync.followTap;
+  const nsel = $('#fxNote');
+  if (nsel && document.activeElement !== nsel && nsel.value !== sync.note) nsel.value = sync.note;
+  const dck = $('#fxDotted'); if (dck && dck.checked !== !!sync.dotted) dck.checked = !!sync.dotted;
+  const gset = new Set(sync.group || []);
+  for (let s = 1; s <= 8; s++){
+    const el = document.getElementById('fxg-' + s); if (!el) continue;
+    const inp = el.querySelector('input');
+    if (inp && inp.checked !== gset.has(s)) inp.checked = gset.has(s);
+    el.classList.toggle('on', gset.has(s));
+  }
+  const bpm = tap.bpm || 0;
+  $('#tapBpm').textContent = bpm ? (bpm.toFixed(1) + ' BPM') : '— BPM';
+  $('#tapInfo').textContent = bpm
+    ? ('已点 ' + (tap.count || 0) + ' 下 · 取最近 8 个间隔的均值')
+    : '连点 2 下以上定拍';
+  $('#fxTapSecs').textContent = bpm
+    ? ('当前时值换算 = ' + fxNoteSecs(bpm, sync.note, sync.dotted).toFixed(3) + ' 秒') : '';
+}
+// ---- 效果器页：效果库随控台自动切换 ----
+// 只在"效果库真的换了"时重建下拉（见 updFx 的 libId 判断）——
+// 否则 250ms 一次的轮询会把用户正在选的下拉反复重画。
+function renderFxLibrary(){
+  const slots = (S && S.fx && S.fx.slots) || [];
+  slots.forEach(st => {
+    const card = document.getElementById('fxc-' + st.slot);
+    if (!card) return;
+    const sel = card.querySelector('.fx-type');
+    if (!sel) return;
+    const cur = st.type || '';
+    sel.innerHTML = fxAlgoOpts();
+    if (cur && ![...sel.options].some(o => o.value === cur)){
+      const o = document.createElement('option');
+      o.value = cur; o.textContent = cur + '（不在本控台效果库）';
+      sel.appendChild(o);
+    }
+    sel.value = cur;
+  });
+}
+function renderFxConsole(c){
+  const nm = $('#fxConsoleName'), nm2 = $('#fxConsoleName2'),
+        tag = $('#fxConsoleTag'), note = $('#fxConsoleNote'),
+        btn = $('#fxPullBtn'), pn = $('#fxPullNote');
+  if (nm)  nm.textContent  = c.label || '—';
+  if (nm2) nm2.textContent = c.label || '当前控台';
+  if (tag){
+    tag.textContent = c.verified ? '✅ 效果库已标定'
+                    : (c.ready ? '⚠ 结构已填 · 未上真机核对' : '⚠ 待标定');
+  }
+  const nk = (c.label || '') + '|' + (c.libCount || 0) + '|' + !!c.locked;
+  if (note && note.dataset.k !== nk){
+    note.dataset.k = nk;
+    note.innerHTML = c.locked
+      ? ('控台「' + esc(c.label || '?') + '」的效果库还没标定 —— 效果器页暂时<b>只能看不能写</b>。'
+         + '写入会被拒绝并记进日志：地址蒙错会写到别的参数上，比干脆不动作难查得多。')
+      : ('本控台效果库共 <b>' + (c.libCount || 0) + '</b> 种算法，占用 <b>' + (c.slots || 0)
+         + '</b> 个效果槽。下面的算法下拉就是这台台子上真正有的效果。');
+  }
+  const list = $('#fxlist');
+  if (list){                       // 用 pointer-events 而不是 disabled：参数区是重建的，
+    const locked = !!c.locked;     // disabled 会随重建丢失，pointer-events 不会
+    list.style.pointerEvents = locked ? 'none' : '';
+    list.style.opacity = locked ? '0.42' : '';
+  }
+  const on = !!(S && S.bridge && S.bridge.on);
+  if (btn){
+    btn.disabled = !on;
+    btn.style.opacity = on ? '' : '0.55';
+    btn.style.background = on ? '' : '#565d6d';
+    btn.style.color = on ? '' : '#cfd4de';
+    btn.textContent = on ? '⟳ 从真台同步效果' : '⟳ 从真台同步效果（未桥接）';
+  }
+  if (pn && pn.dataset.b !== String(on)){
+    pn.dataset.b = String(on);
+    pn.textContent = on
+      ? ('读回真台各效果槽的算法/开关/参数（已桥接 ' + (S.bridge.addr || '真台') + '）')
+      : '读回真台各效果槽的算法/开关/参数（需先用 --bridge 桥接真台）';
+  }
+}
+function fxPull(){
+  fetch('/api/fx',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({action:'pull'})})
+   .then(r=>r.json()).then(d=>{
+     if(!d.ok){ showToast(d.error||'同步失败'); return; }
+     showToast('⟳ ' + (d.message || '已向真台请求效果状态'));
+   }).catch(()=>showToast('同步失败'));
+}
+function fxSet(s, field, value){ api('/api/fx', {slot:s, field:field, value:value}); }
+function fxToggle(s){
+  const st = ((S.fx && S.fx.slots) || []).find(x => x.slot === s);
+  if (!st) return;
+  api('/api/fx', {slot:s, field:'on', value: st.on ? 0 : 1});
+}
+// 拖参数时 60ms 合并一次请求, 免得刷爆
+const fxPend = {}; let fxPendT = null;
+function fxSlide(s, field, el){
+  const v = +el.value;
+  const card = document.getElementById('fxc-' + s);
+  const ve = card && card.querySelector(`.fxval[data-v="${field}"]`);
+  // 小数位/单位在渲染时写进 dataset (不同算法量程差几个数量级, 不能写死)
+  if (ve) ve.textContent = v.toFixed(+(el.dataset.dec === undefined ? 2 : el.dataset.dec))
+    + (el.dataset.unit ? ' ' + el.dataset.unit : '');
+  fxPend[s + '|' + field] = {slot:s, field:field, value:v};
+  if (!fxPendT) fxPendT = setTimeout(() => {
+    fxPendT = null;
+    const arr = Object.keys(fxPend).map(k => fxPend[k]);
+    for (const k in fxPend) delete fxPend[k];
+    arr.forEach(p => api('/api/fx', p));
+  }, 60);
+}
+function fxGroupSet(){
+  const g = [];
+  for (let s = 1; s <= 8; s++){
+    const el = document.getElementById('fxg-' + s);
+    if (el && el.querySelector('input').checked) g.push(s);
+  }
+  api('/api/fxsync', {group:g});
+}
+function fxSyncSet(){
+  api('/api/fxsync', {mode: $('#fxMode').value, followTap: $('#fxFollow').checked,
+                      note: $('#fxNote').value, dotted: $('#fxDotted').checked});
+}
+// Tap 计时放在服务端 (与协议规范同一份实现), 网页只管发点击
+function tapHit(){
+  fetch('/api/tap', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({action:'tap'})})
+  .then(r => r.json()).then(d => {
+    if (!d || !d.ok) return;
+    $('#tapBpm').textContent = d.bpm ? (d.bpm.toFixed(1) + ' BPM') : '— BPM';
+    $('#tapInfo').textContent = '已点 ' + d.count + ' 下' + (d.locked ? ' · 已成拍' : ' · 再点一下定拍');
+  }).catch(() => {});
+}
+function tapReset(){
+  api('/api/tap', {action:'reset'});
+  $('#tapBpm').textContent = '— BPM';
+  $('#tapInfo').textContent = '连点 2 下以上定拍';
+}
+function tapApply(){
+  const note = $('#fxNote') ? $('#fxNote').value : '1/4';
+  const dotted = $('#fxDotted') ? $('#fxDotted').checked : false;
+  api('/api/fxsync', {note: note, dotted: dotted});
+  fetch('/api/tap', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({action:'apply'})})
+  .then(r => r.json()).then(d => {
+    if (!d || !d.ok){ showToast('Tap 写入失败: ' + ((d && d.error) || '未知')); return; }
+    showToast('🎛 按 ' + note + (dotted ? ' 附点' : '') + ' 换算 = ' + d.seconds
+      + ' 秒, 已写入 ' + (d.written || []).length + ' 个效果槽');
+  }).catch(() => showToast('Tap 写入失败: 网络异常'));
+}
+
+// ---- 电动推子平滑动画: 显示值以缓动逼近目标值 ----
+// ⚠️ 这里必须用 forEach 逐个 try 之外, 还要先判空: 「控制键」/「卡片管理」等地方也用
+// .row 做布局, 但里面根本没有 <input>。早期版本直接 `sl.dataset.target` —— 一旦这些
+// 行被渲染出来(渲染发生在首帧之后), tick() 就抛 TypeError, 而
+// `requestAnimationFrame(tick)` 写在函数末尾, 异常一抛**整个缓动循环永久停摆**
+// (推子从"电动滑行"退化成"瞬移", 且只在控制台留一条报错)。改为跳过没有 input 的行。
+const anim = {};
+function tick(){
+  document.querySelectorAll('.row').forEach(r=>{
+    const sl=r.querySelector('input');
+    if(!sl) return;
+    if(document.activeElement===sl) return;
+    const t=parseFloat(sl.dataset.target);
+    if(isNaN(t)) return;
+    let c=anim[r.id];
+    if(c===undefined) c=t;
+    const d=t-c;
+    if(Math.abs(d)>0.001){
+      c += d*0.16;
+      anim[r.id]=c;
+      sl.value=c;
+      r.querySelector('.db').textContent=(c<=0.001?'-∞':dbOf(c).toFixed(1))+' dB';
+    } else {
+      delete anim[r.id];
+      sl.value=t;
+    }
+  });
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+
+// ---- 卡片实时值: 从台面状态生成一行摘要 (E1: 卡片显示实时参数) ----
+function cardLive(c){
+  if(!S) return '';
+  const parts=[];
+  for(const a of (c.actions||[])){
+    if(a.kind==='mute'){
+      const ids=a.chs||(a.ch?[a.ch]:[]);
+      if(!ids.length) continue;
+      const muted=ids.every(i=>S.ch[i]&&!S.ch[i].on);
+      parts.push(ids.map(i=>dispName('ch',i)).join('、')+(muted?' 已静音':' 出声中'));
+    } else if(a.kind==='mute_bus'){
+      const ids=a.buses||(a.bus?[a.bus]:[]);
+      if(!ids.length) continue;
+      const muted=ids.every(i=>S.bus[i]&&!S.bus[i].on);
+      parts.push(ids.map(i=>dispName('bus',i)).join('、')+(muted?' 已静音':' 出声中'));
+    } else if(a.kind==='fade_ch'||a.kind==='fade_from'){
+      const i=(a.chs||[a.ch])[0];
+      if(!i) continue;
+      const f=S.ch[i]?S.ch[i].fader:0;
+      parts.push(dispName('ch',i)+' '+Math.round(f*100)+'%'+(a.to!==undefined?'→'+Math.round(a.to*100)+'%':''));
+    } else if(a.kind==='fade_bus'||a.kind==='fade_from_bus'){
+      const i=(a.buses||[a.bus])[0];
+      if(!i) continue;
+      const f=S.bus[i]?S.bus[i].fader:0;
+      parts.push(dispName('bus',i)+' '+Math.round(f*100)+'%'+(a.to!==undefined?'→'+Math.round(a.to*100)+'%':''));
+    } else if(a.kind==='wait'){
+      parts.push('停 '+(+a.duration||1)+'s');
+    } else if(a.kind==='rel_db'){
+      const g2=a.group||'ch';
+      const ids=a[{ch:'chs',bus:'buses',dca:'dcas'}[g2]]||[];
+      if(!ids.length) continue;
+      const f=S[g2]&&S[g2][ids[0]]?S[g2][ids[0]].fader:0;
+      parts.push(ids.map(i=>dispName(g2,i)).join('、')+' '+Math.round(f*100)+'%'
+        +(a.delta_db>=0?' +':' −')+Math.abs(+a.delta_db||0)+'dB');
+    }
+    if(parts.length>=2) break;
+  }
+  return parts.join(' · ');
+}
+function undoLast(){ api('/api/undo',{}); }
+
+// ---- 危险卡防误触: 含全体类动作的卡片需长按 0.8 秒 (P2) ----
+const DANGER=['unmute_all','fade_all','fade_odd_even'];
+function isDanger(c){ return (c.actions||[]).some(a=>DANGER.includes(a.kind)); }
+let holdRAF=null, holdEl=null, holdFired=false;
+function holdStart(ev,id){
+  const c=(S.cards||[]).find(x=>x.id===id);
+  if(!c) return;
+  if(!isDanger(c)){ runShow(id); return; }
+  holdEl=ev.currentTarget; holdFired=false;
+  ev.preventDefault();
+  const bar=document.createElement('div'); bar.className='holdbar';
+  holdEl.appendChild(bar);
+  const t0=Date.now();
+  const step=()=>{
+    const p=Math.min(1,(Date.now()-t0)/800);
+    bar.style.width=(p*100)+'%';
+    if(p>=1){ holdFired=true; holdCancel(); runShow(id); return; }
+    holdRAF=requestAnimationFrame(step);
+  };
+  holdRAF=requestAnimationFrame(step);
+}
+function holdCancel(){
+  if(holdRAF){ cancelAnimationFrame(holdRAF); holdRAF=null; }
+  if(holdEl){
+    const b=holdEl.querySelector('.holdbar'); if(b) b.remove();
+    if(!holdFired) showToast('⚠️ 危险卡片 — 需长按 0.8 秒确认执行');
+    holdEl=null;
+  }
+}
+document.addEventListener('pointerup',()=>holdCancel());
+
+// ---- 卡片状态高亮: 动作目标已生效的计数 (P2) ----
+function actSatisfied(a){
+  const T=0.02;
+  if(a.kind==='mute'){
+    const ids=a.chs||(a.ch?[a.ch]:[]); if(!ids.length) return null;
+    return ids.every(i=>S.ch[i]&&!S.ch[i].on);
+  }
+  if(a.kind==='mute_bus'){
+    const ids=a.buses||(a.bus?[a.bus]:[]); if(!ids.length) return null;
+    return ids.every(i=>S.bus[i]&&!S.bus[i].on);
+  }
+  if(a.kind==='scene') return S.scene===a.scene;
+  if(a.kind==='unmute_all'){
+    const all=x=>Object.values(x).every(v=>v.on);
+    return all(S.ch)&&all(S.bus)&&all(S.dca)&&all(S.auxin)&&all(S.usb)&&all(S.fxret)&&all(S.mtx)&&S.main.on;
+  }
+  if(a.kind==='fade_ch'||a.kind==='fade_from'||a.kind==='fade_bus'||a.kind==='fade_from_bus'){
+    const g=a.kind.indexOf('bus')>=0?'bus':'ch';
+    const ids=a.chs||a.buses||(a.ch||a.bus?[a.ch||a.bus]:[]);
+    if(!ids.length) return null;
+    return ids.every(i=>S[g]&&S[g][i]&&Math.abs(S[g][i].fader-(a.to||0))<T);
+  }
+  if(a.kind==='rel_db') return null;
+  return null;
+}
+function cardReady(c){
+  let ok=0,tot=0;
+  for(const a of (c.actions||[])){
+    const s=actSatisfied(a);
+    if(s!==null){ tot++; if(s) ok++; }
+  }
+  return tot?[ok,tot]:null;
+}
+function readyBadge(c){
+  const r=cardReady(c);
+  if(!r) return '';
+  const [ok,tot]=r;
+  return ok===tot
+    ?` <span class="readyok">✔ ${ok}/${tot} 已就绪</span>`
+    :` <span class="readyn">✔ ${ok}/${tot} 已生效</span>`;
+}
+
+// ---- 卡片定时触发 (P2) ----
+function schedAsk(id){
+  const v=prompt('定时启动卡片:\n输入等待秒数(如 30)\n或今天的时刻(如 20:30)','30');
+  if(!v) return;
+  const s=v.trim();
+  let payload;
+  if(/^[0-2]?\d:[0-5]\d$/.test(s)) payload={id:id,mode:'clock',time:s};
+  else{
+    const n=parseFloat(s);
+    if(!(n>0)){ alert('格式不对:输入秒数或 HH:MM'); return; }
+    payload={id:id,mode:'delay',delay:n};
+  }
+  fetch('/api/schedule',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(payload)});
+}
+function fmtCd(sec){
+  sec=Math.max(0,Math.round(sec));
+  const h=Math.floor(sec/3600),m=Math.floor(sec%3600/60),s2=sec%60;
+  return (h?h+':':'')+String(m).padStart(2,'0')+':'+String(s2).padStart(2,'0');
+}
+function renderSched(){
+  const el=$('#schedRow'); if(!el) return;
+  const list=S.schedules||[];
+  if(!list.length){ if(el._sig!==''){el._sig='';el.innerHTML='';} return; }
+  const html=list.map(s=>{
+    const cd=fmtCd(s.runAt-Date.now()/1000);
+    const when=s.mode==='clock'?timeStr(s.runAt):(' '+cd+' 后');
+    return `<div class="schedrow">⏱ 定时 <b>${esc(s.name)}</b>
+      <span class="cd">${s.mode==='clock'?'今天 '+when:when+' 启动'}</span>
+      <button style="background:#565d6d;color:#fff;padding:5px 12px" onclick="api('/api/schedcancel',{sid:${s.sid}})">取消</button></div>`;
+  }).join('');
+  if(el._sig!==html){ el._sig=html; el.innerHTML=html; }
+}
+function timeStr(epoch){
+  const d=new Date(epoch*1000);
+  return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')+':'+String(d.getSeconds()).padStart(2,'0');
+}
+
+// ---- 配置导入 / 导出 (P2) ----
+function doExport(){ window.open('/api/export','_blank'); }
+function impFileChg(inp){
+  const f=inp.files&&inp.files[0]; if(!f) return;
+  const r=new FileReader();
+  r.onload=()=>{
+    $('#impText').style.display='block';
+    $('#impText').value=r.result;
+    $('#impRow').style.display='flex';
+  };
+  r.readAsText(f);
+}
+function doImport(){
+  let cfg;
+  try{ cfg=JSON.parse($('#impText').value); }
+  catch(e){ alert('JSON 解析失败: '+e.message); return; }
+  if(!cfg||typeof cfg!=='object'||!cfg.cards){ alert('不是有效的配置文件(缺 cards 字段)'); return; }
+  if(!confirm('导入将覆盖现有的卡片/控制键/通道命名,确定继续?')) return;
+  fetch('/api/import',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({config:cfg})})
+  .then(r=>r.json()).then(d=>{
+    if(d.ok){ $('#impText').value=''; $('#impRow').style.display='none'; $('#impFile').value=''; }
+    else alert('导入失败: '+(d.error||'未知错误'));
+  }).catch(()=>alert('导入失败: 网络异常'));
+}
+
+// ---- 桥接真台 ----
+function brGo(){
+  const addr=$('#brAddr').value.trim();
+  if(!addr){ alert('请填写真台地址,格式 IP:端口'); return; }
+  fetch('/api/bridge',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({addr:addr})})
+  .then(r=>r.json()).then(d=>{
+    showToast(d.ok?('🌉 '+d.msg):('桥接失败: '+(d.msg||'')));
+  });
+}
+// 局域网扫描: 广播 /xinfo 发现调音台, 点结果即连 (手机零安装的关键一步)
+function scanConsoles(){
+  const btn=$('#scanBtn'), hint=$('#scanHint'), box=$('#scanRes');
+  btn.disabled=true; btn.textContent='🔍 扫描中…';
+  hint.textContent='正在广播发现指令…';
+  box.innerHTML='';
+  fetch('/api/scan').then(r=>r.json()).then(d=>{
+    const found=(d&&d.found)||[];
+    if(!found.length){
+      hint.textContent='没找到调音台 — 请确认台子已通电、网线接好、与电脑在同一网段';
+      box.innerHTML='';
+      return;
+    }
+    hint.textContent='发现 '+found.length+' 台,点一下即连';
+    box.innerHTML=found.map(f=>`
+      <button class="scenechip" style="cursor:pointer;font-size:13px;padding:8px 14px"
+        onclick="brPick('${f.ip}:${f.port}')">
+        🎛 ${esc(f.name||'调音台')} · ${esc(f.ip)}${f.local?' (本机模拟器)':''}
+      </button>`).join('');
+  }).catch(()=>{ hint.textContent='扫描失败: 网络异常'; })
+   .finally(()=>{ btn.disabled=false; btn.textContent='🔍 扫描局域网调音台'; });
+}
+function brPick(addr){
+  $('#brAddr').value=addr;
+  brGo();
+}
+
+// ---- 冲突通知: 手动干预 → 只停该通道, 弹提示 (D 维安全策略) ----
+let evtSeen=-1;
+function showToast(t){
+  const d=document.createElement('div'); d.className='toast'; d.textContent=t;
+  document.body.appendChild(d);
+  requestAnimationFrame(()=>d.classList.add('in'));
+  setTimeout(()=>{ d.classList.remove('in'); setTimeout(()=>d.remove(),400); },6000);
+}
+function pollEvents(){
+  const evs=S.events||[];
+  if(evtSeen<0){ evtSeen=evs.length?evs[evs.length-1].id:0; return; }
+  evs.forEach(e=>{ if(e.id>evtSeen){ evtSeen=e.id; showToast(e.time+' '+e.text); } });
+}
+
+function render(){
+  if(!S) return;
+  const upd=(p,map)=>{
+    for(const k in map){
+      const r=document.getElementById('r-'+p+'-'+k); if(!r) continue;
+      const f=map[k].fader, on=map[k].on;
+      const sl=r.querySelector('input');
+      if(document.activeElement!==sl) sl.dataset.target=f;
+      r.querySelector('.db').textContent=(f<=0.001?'-∞':dbOf(f).toFixed(1))+' dB';
+      r.querySelector('.mute').classList.toggle('on',!on);
+      const nmEl=r.querySelector('.nm2');
+      if(nmEl){ const nm=nameOf(P2G[p],+k); nmEl.textContent=nm; }
+      // 该通道有任一处理在启用 (反相/延时/低切/插入/噪声门) → 编号上点个灯,
+      // 不用逐个点开就知道"哪几路带了处理"
+      const cn=r.querySelector('.chnum');
+      if(cn) cn.classList.toggle('on',
+        !!(map[k].invert||map[k].delay_on||map[k].hpf_on||map[k].ins_on||map[k].gate_on));
+    }
+  };
+  upd('c',S.ch); upd('b',S.bus); upd('d',S.dca); upd('m',{0:S.main});
+  upd('a',S.auxin); upd('u',S.usb); upd('x',S.fxret); upd('t',S.mtx);
+  chpSync();
+
+  // 电平表: 前 32 路是输入通道,后 16 路是输出 Bus
+  drawMeters();
+  $('#scene').textContent='场景 '+S.scene;
+  if($('#scene2')) $('#scene2').textContent='场景 '+S.scene;
+  $('#subs').textContent=S.subscribers;
+  renderConsole();
+  renderPorts();
+  $('#hdinfo').textContent='UDP '+((S.ports&&S.ports.udp)||10023)+' · 场景 '+S.scene+' · 订阅 '+S.subscribers
+    +(S.bridge&&S.bridge.on?(' · 🌉'+(S.bridge.live?'真台':'真台?')+' '+S.bridge.addr):'');
+  $('#conn').style.background=S?'#22c55e':'#ef4444';
+  if($('#brStat')){
+    const b=S.bridge||{};
+    $('#brStat').textContent=!b.on?'未桥接':(b.live?'🌉 已连接 '+b.addr:'⏳ 等待真台 '+b.addr);
+    $('#brStat').style.color=b.on&&b.live?'#22c55e':'';
+    const inp=$('#brAddr');
+    if(inp && document.activeElement!==inp && !inp.value && b.target) inp.value=b.target;
+    if($('#scanHint') && b.target && !b.on)
+      $('#scanHint').textContent='已记住 '+b.target+',服务启动时会自动重连';
+  }
+  renderSched();
+  updFx();
+
+  // 名称有变化时刷新命名编辑器与各处下拉 (避免每 250ms 重建破坏交互)
+  if($('#nmGroup')){
+    const sig=JSON.stringify(S.names||{});
+    if(window._nmSig!==sig){ window._nmSig=sig; updNmIdx(); }
+  }
+
+  // 快捷键 (签名相同不重建, 避免打断交互)
+  if($('#keylist') && S.quickKeys){
+    $('#stepSel').value=String(S.keyCfg.step_db);
+    $('#rampSel').value=String(S.keyCfg.ramp);
+    setHTML('keylist',S.quickKeys.map(k=>`
+      <div class="row" style="justify-content:space-between">
+        <div style="font-size:15px;font-weight:600">${esc(k.icon)} ${esc(k.name)}</div>
+        <div style="display:flex;gap:6px;align-items:center">
+          <button class="keybtn" onpointerdown="kpStart('${k.id}')" title="按住可连发">${k.sign>0?'＋':'－'} ${S.keyCfg.step_db} dB</button>
+          <button style="background:#565d6d;color:#fff;padding:8px 10px" onclick="editKey('${k.id}')">✏️</button>
+          <button style="background:#565d6d;color:#fff;padding:8px 10px" onclick="delKey('${k.id}')">🗑</button>
+        </div>
+      </div>`).join(''));
+  }
+
+  // 卡片 (置顶优先; 执行中显示当前动作)
+  const rv=S.show.running;
+  const cards=[...(S.cards||[])].sort((a,b)=>(b.pin?1:0)-(a.pin?1:0));
+  setHTML('cardlist',cards.map(c=>{
+    const run=rv===c.id;
+    const nxt=c.next?(cards.find(x=>x.id===c.next)||{}).name:'';
+    const danger=isDanger(c);
+    return `<div class="card"${c.pin?' style="border-color:rgba(255,180,84,.45)"':''}><div class="nm">${c.pin?'📌 ':''}${esc(c.name)}${readyBadge(c)}</div>
+      <div class="ds">${esc(c.desc)}${nxt?` <span style="color:var(--accent)">→ 接续「${esc(nxt)}」</span>`:''}</div>
+      ${run
+        ?`<button class="stop" onclick="stopShow()">■ 停止</button>
+          <div class="bar"><i style="width:${Math.round(S.show.progress*100)}%"></i></div>
+          <div class="prog">执行中 ${Math.round(S.show.progress*100)}%${S.show.step?' · '+S.show.step:''}</div>`
+        :`<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <button ${danger?'title="危险卡片:长按 0.8 秒执行"':''}
+              onpointerdown="holdStart(event,'${c.id}')" onpointerup="holdCancel()"
+              onpointerleave="holdCancel()" oncontextmenu="event.preventDefault()">▶ 运行${danger?' ⚠️':''}</button>
+            <button style="background:#565d6d;color:#fff" onclick="schedAsk('${c.id}')">⏱ 定时</button>
+            <button style="background:#565d6d;color:#fff" onclick="api('/api/cardpin',{id:'${c.id}'})">📌 ${c.pin?'取消置顶':'置顶'}</button>
+            <button style="background:#565d6d;color:#fff" onclick="editCard('${c.id}')">✏️ 编辑</button>
+            <button style="background:#565d6d;color:#fff" onclick="delCard('${c.id}')">🗑 删除</button>
+          </div>`}
+    </div>`;
+  }).join(''));
+
+  // 快照列表 + 回归进度
+  const rc=S.recall.running;
+  setHTML('snaplist',S.snapshots.map(sp=>{
+    const run=rc===sp.id;
+    return `<div class="card"><div class="nm">📌 ${esc(sp.name)} <small style="color:var(--sub);font-weight:400">· ${sp.time}</small></div>
+      <div class="ds" style="margin:2px 0 6px">${esc(sp.scopeText||'全部通道 · 推子+静音')} · ${sp.count||0} 个值</div>
+      ${run
+        ?`<button class="stop" onclick="stopRecall()">■ 停止回归</button>
+          <div class="bar"><i style="width:${Math.round(S.recall.progress*100)}%"></i></div>
+          <div class="prog">电动推子回归中 ${Math.round(S.recall.progress*100)}% — 切到"通道"页看全部推子滑动</div>`
+        :`<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <button onclick="recallSnap(${sp.id},document.getElementById('dur-${sp.id}'))">⏪ 回归</button>
+            <select id="dur-${sp.id}" style="padding:7px;border-radius:8px;border:1px solid var(--line);font-size:12px">
+              <option value="1.5">1.5 秒</option><option value="3" selected>3 秒</option>
+              <option value="6">6 秒</option><option value="10">10 秒</option>
+            </select>
+            <button style="background:#565d6d;color:#fff" onclick="delSnap(${sp.id})">删除</button>
+          </div>`}
+    </div>`;
+  }).join('') || '<div class="ds" style="color:var(--sub);font-size:12px;padding:4px">还没有预设。调好台面后点上方"保存预设",再拖乱推子,点"回归"看它们自动滑回去。</div>');
+
+  // 卡片遥控器页
+  if($('#tileCards')){
+    const rv2=S.show.running;
+    setHTML('undoRow',S.canUndo
+      ?`<div class="tile undo" onclick="undoLast()">↩<small>撤销上一次卡片执行 · 台面自动滑回执行前</small></div>`:'');
+    setHTML('tileCards',cards.map(c=>{
+      const run=rv2===c.id;
+      const evts=run?`onclick="stopShow()"`
+        :`onpointerdown="holdStart(event,'${c.id}')" onpointerup="holdCancel()"
+          onpointerleave="holdCancel()" oncontextmenu="event.preventDefault()"`;
+      return `<div class="tile ${run?'run':''}" ${evts}>${esc(c.name)}${isDanger(c)?' ⚠️':''}
+        ${run?`<div class="bar"><i style="width:${Math.round(S.show.progress*100)}%"></i></div><small>${S.show.step||'点按停止'}</small>`
+             :`<small class="live">${(cardLive(c)||'点按运行')+readyBadge(c)}</small>`}</div>`;
+    }).join('') + `<div class="tile add" onclick="openCardModal()">➕<small>新建演出卡片</small></div>`);
+    setHTML('tileKeys',S.quickKeys.map(k=>
+      `<div class="tile" onpointerdown="kpStart('${k.id}')" title="按住可连发">${esc(k.icon)}<small>${esc(k.name)} ${k.sign>0?'＋':'－'}${S.keyCfg.step_db}dB</small></div>`).join('')
+      + `<div class="tile add" onclick="openKeyModal()">➕<small>新增控制键</small></div>`);
+  }
+
+  const lg=$('#logbox');
+  const txt=S.log.join('\n');
+  if(lg.dataset.t!==txt){ lg.textContent=txt; lg.scrollTop=lg.scrollHeight; lg.dataset.t=txt; }
+}
+
+// 电平表单独刷新 (数据来自 /api/meters, 不进 /api/state 的内容指纹)
+function drawMeters(){
+  if(!S||!S.meters) return;
+  const meters=[...document.querySelectorAll('#chlist .meter i'),
+                ...document.querySelectorAll('#buslist .meter i')];
+  meters.forEach((el,idx)=>{
+    if(idx<S.meters.length){
+      const db=S.meters[idx];
+      el.style.height=(db<=-60?0:Math.min(100,(db+60)/60*100))+'%';
+    }
+  });
+}
+
+function poll(){
+  // 条件轮询: 带上一次的状态指纹 v, 服务端没变更就只回 ~30 字节
+  // (全量轮询曾达 271-300MB/h; 电平改走 /api/meters, 不进指纹)
+  let q=(window._logSeq===undefined?'/api/state':('/api/state?logseq='+window._logSeq));
+  q+=(q.indexOf('?')<0?'?':'&')+'v='+encodeURIComponent(window._stateVer||'');
+  fetch(q).then(r=>r.json()).then(d=>{
+    if(window._logSeq===undefined){ window._logAcc=(d.log||[]).slice(); }
+    else if(d.log && d.log.length){
+      window._logAcc=window._logAcc.concat(d.log);
+      if(window._logAcc.length>300) window._logAcc=window._logAcc.slice(-300);
+    }
+    window._logSeq=d.logseq;
+    if(d.unchanged){
+      // 状态没变: 只更新日志框, 不重建界面 (打断输入/按钮交互的元凶)
+      if(S){
+        S.log=window._logAcc||[];
+        const lg=$('#logbox'); const txt=S.log.join('\n');
+        if(lg.dataset.t!==txt){ lg.textContent=txt; lg.scrollTop=lg.scrollHeight; lg.dataset.t=txt; }
+      }
+      $('#conn').style.background='#22c55e';
+    }else{
+      d.log=window._logAcc||d.log||[];
+      if(d.ver) window._stateVer=d.ver;
+      S=d; $('#conn').style.background='#22c55e'; pollEvents(); render();
+    }
+  }).catch(()=>{ $('#conn').style.background='#ef4444'; $('#hdinfo').textContent='连接断开,重试中…'; })
+   .finally(()=>setTimeout(poll,pollMs(250)));
+}
+
+// 页面不可见时降频: 手机揣兜里、切到别的 App、锁屏, 都是"看不见屏幕"。
+// 演出 4 小时里这类时间往往占七成, 而 4 Hz 的电平轮询是流量大头 ——
+// 藏起来就降到 2s 一次 (状态也一起降), 回到前台立刻恢复。
+const POLL_HIDDEN_MS=2000;
+function pollMs(active){ return document.hidden?POLL_HIDDEN_MS:active; }
+function pollMeters(){
+  fetch('/api/meters').then(r=>r.json()).then(d=>{
+    if(!S) return;
+    if(document.hidden) return;          // 藏起来就别画了, 省一次 DOM 重建
+    S.meters=d.meters||S.meters; drawMeters();
+  }).catch(()=>{}).finally(()=>setTimeout(pollMeters,pollMs(250)));
+}
+// 局部刷新: 内容没变不重建 innerHTML (避免打断按钮交互/选中状态)
+function setHTML(id,html){
+  const el=document.getElementById(id);
+  if(el && el._sig!==html){ el._sig=html; el.innerHTML=html; }
+}
+function loadInfo(){
+  fetch('/api/info').then(r=>r.json()).then(d=>{
+    const u = d.lanUrl || '';
+    $('#lanurl').textContent = u;
+    $('#lanip2').textContent = d.lanIp;
+    // 二维码内容就是上面显示的地址（所见即所得）；后端只负责渲染，不联网。
+    const img = $('#lanqr');
+    if(img && u) img.src = '/qr.svg?u=' + encodeURIComponent(u.replace(/\/?$/, '/'));
+
+    // App 配对码：和网页地址的区别是它带 **OSC 端口**。用户把 UDP 端口改成
+    // 10025 之后，网页地址里的 8080 不能拿来当 OSC 端口用 —— 所以另给一张码。
+    const pc = d.pairCode || '';
+    const pimg = $('#pairqr'), pcell = $('#paircell');
+    if(pc && pimg && pcell){
+      pcell.style.display = '';
+      $('#paircode').textContent = pc;
+      $('#pairhint').textContent = '配对码里带着 OSC 端口，改过端口也能一次连对。';
+      pimg.src = '/pair.svg?h=' + encodeURIComponent(d.lanIp || '') +
+                 '&o=' + (d.udpPort || 10023) + '&w=' + (d.webPort || 8080);
+    }else if(pcell){
+      pcell.style.display = 'none';
+      const code = $('#paircode'); if(code) code.textContent = '';
+      const hint = $('#pairhint');
+      if(hint) hint.textContent = '未探测到局域网地址（断 VPN / 连上 WiFi 后刷新），App 配对码暂不可用。';
+    }
+  }).catch(()=>{});
+}
+// 复制连接地址（老浏览器没有 clipboard API 时退回 execCommand）
+function copyText(txt, btn){
+  const flash = () => {
+    if(!btn) return;
+    const old = btn.textContent;
+    btn.textContent = '✓ 已复制';
+    setTimeout(()=>{ btn.textContent = old; }, 1200);
+  };
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(txt).then(flash).catch(()=>{});
+    return;
+  }
+  const ta = document.createElement('textarea');
+  ta.value = txt; document.body.appendChild(ta); ta.select();
+  try{ document.execCommand('copy'); flash(); }catch(e){}
+  document.body.removeChild(ta);
+}
+function copyLan(){
+  copyText($('#lanurl').textContent || '', $('#lanCopy'));
+}
+function copyPair(){
+  copyText($('#paircode').textContent || '', $('#pairCopy'));
+}
+init();
+loadInfo();
+if ('serviceWorker' in navigator) {
+  try { navigator.serviceWorker.register('/sw.js').catch(()=>{}); } catch(e) {}
+}
+
+
+// ==================== 自动增益 / 自动推子 ====================
+// 控制律在服务端 (x32sim/rider.py)，这里只管配置与显示。
+// 速度三档: 慢/中/快 = 平均窗口 0.9/0.35/0.12 s、死区 0.6/0.4/0.3 dB、
+// 每秒最大修正 1.5/5/15 dB —— 页面只暴露"体感"，不暴露这些数字。
+const RIDER_SPD=[['slow','慢'],['medium','中'],['fast','快']];
+
+function loadRider(){
+  fetch('/api/rider').then(r=>r.json()).then(renderRider).catch(()=>{});
+}
+function riderPost(body){
+  fetch('/api/rider',{method:'POST',headers:{'Content-Type':'application/json'},
+                      body:JSON.stringify(body)})
+    .then(r=>r.json()).then(d=>{ if(d && d.rider) renderRider(d.rider); }).catch(()=>{});
+}
+function riderGlobal(on){ riderPost({enabled:!!on}); }
+function riderReset(){ riderPost({action:'reset'}); }
+function riderAdd(){
+  const el=$('#riderCh'); const v=parseInt(el && el.value, 10);
+  if(!(v>=1 && v<=32)){ if(el) el.focus(); return; }
+  riderPost({channel:v, on:true, target:-18, mode:'fader', speed:'medium'});
+  if(el) el.value='';
+}
+function riderSet(ch,patch){ riderPost(Object.assign({channel:ch}, patch)); }
+function riderDel(ch){ riderPost({channel:ch, remove:true}); }
+
+function renderRider(cfg){
+  window._rider=cfg;
+  const sw=$('#riderOn'); if(sw) sw.checked=!!cfg.enabled;
+  const box=$('#riderlist'); if(!box) return;
+  const ks=Object.keys(cfg.channels||{}).sort((a,b)=>(+a)-(+b));
+  const hint=$('#riderHint');
+  if(hint) hint.textContent = ks.length
+    ? '改动立即生效（下一拍 50ms 内按新参数跑）。电平取通道表，写入走台面同一条管道。'
+    : '还没配置通道。填通道号（1-32）→ 添加 → 打开「启用」。';
+  box.innerHTML = ks.map(k=>{
+    const c=cfg.channels[k];
+    const opts=RIDER_SPD.map(([v,l])=>`<option value="${v}"`+(c.speed===v?' selected':'')+`>${l}</option>`).join('');
+    return '<div class="card ridercard" data-ch="'+k+'">'
+      + '<div class="nm">CH'+String(k).padStart(2,'0')+' · '+(c.mode==='fader'?'自动推子':'自动增益')+'</div>'
+      + '<div class="rrow">'
+      +   '<label class="rsw"><input type="checkbox" '+(c.on?'checked':'')+' onchange="riderSet('+k+',{on:this.checked})"> 启用</label>'
+      +   '<select onchange="riderSet('+k+',{mode:this.value})">'
+      +     '<option value="fader"'+(c.mode==='fader'?' selected':'')+'>推子</option>'
+      +     '<option value="gain"'+(c.mode==='gain'?' selected':'')+'>增益</option></select>'
+      +   '<select onchange="riderSet('+k+',{speed:this.value})">'+opts+'</select>'
+      +   '<label class="rtarget">目标 <input type="number" step="0.5" min="-60" max="0" value="'+c.target+'"'
+      +     (c.curve?' disabled title="已启用目标曲线，固定目标不生效"':'')
+      +     ' onchange="riderSet('+k+',{target:this.value})"> dBFS</label>'
+      +   '<button class="rdel" onclick="riderDel('+k+')">删除</button>'
+      + '</div>'
+      + '<div class="rrow rrow2">'
+      +   '<label class="rtarget">表源 <select onchange="riderSet('+k+',{tap:this.value})">'
+      +     '<option value="post"'+(c.tap!=='pre'?' selected':'')+'>推子后</option>'
+      +     '<option value="pre"'+(c.tap==='pre'?' selected':'')+'>推子前</option></select></label>'
+      +   '<label class="rtarget">侧链 <input type="number" min="0" max="32" step="1" value="'+(c.sidechain||0)+'"'
+      +     ' onchange="riderSet('+k+',{sidechain:this.value})"> <span class="ds">0=本通道</span></label>'
+      + '</div>'
+      + curveArea(k, c)
+      + '<div class="rmeter"><span id="rbar-'+k+'"></span></div>'
+      + '<div class="ds" id="rlv-'+k+'">等待电平…</div>'
+      + '</div>';
+  }).join('');
+  riderLive();
+}
+
+function riderLive(){
+  const r=(S && S.rider)||null; if(!r) return;   // ⚠️ S 是 let，不在 window 上
+  const map={}; (r.on||[]).forEach(x=>{ map[x.ch]=x; });
+  document.querySelectorAll('.ridercard').forEach(card=>{
+    const ch=+card.dataset.ch, x=map[ch];
+    const bar=document.getElementById('rbar-'+ch), lv=document.getElementById('rlv-'+ch);
+    if(!bar||!lv) return;
+    if(!r.enabled){ bar.style.width='0%'; lv.textContent='总开关已关'; return; }
+    if(!x){ bar.style.width='0%'; lv.textContent='未启用'; return; }
+    if(x.level===null||x.level===undefined){
+      bar.style.width='0%'; lv.textContent='无信号（冻结中 · 不会往上推）'; return;
+    }
+    const pct=Math.max(0,Math.min(100,(x.level+60)/60*100));
+    bar.style.width=pct.toFixed(1)+'%';
+    const app=(x.applied===null||x.applied===undefined)?'—':(+x.applied).toFixed(1);
+    lv.textContent='电平 '+(+x.level).toFixed(1)+' dBFS · 修正 '+app+' dB · 目标 '+(+x.target).toFixed(1)
+                  +(x.curve?'（曲线）':'')
+                  +(x.sidechain?' · 侧链 CH'+String(x.sidechain).padStart(2,'0'):'')
+                  +(x.tap==='pre'?' · 推子前':'')
+                  +(x.paused?' · 人工接管中':'');
+  });
+}
+
+
+// ---------- 目标曲线编辑器（点击加点 / 拖动改点 / 双击删点）----------
+const CURVE_W=300, CURVE_H=84;
+function curveArea(ch, c){
+  const cv=c.curve||null, pts=(cv&&cv.points)||[];
+  const last=pts.length?pts[pts.length-1][0]:60;
+  const T=Math.max(10, (cv&&cv.loop)||last);
+  const pos=(t,db)=>[ (t/T)*CURVE_W, CURVE_H-((db+60)/60)*CURVE_H ];
+  const poly=pts.map(p=>{const q=pos(p[0],p[1]);return q[0].toFixed(1)+','+q[1].toFixed(1);}).join(' ');
+  const dots=pts.map((p,i)=>{const q=pos(p[0],p[1]);
+    return '<circle class="cdot" data-ch="'+ch+'" data-i="'+i+'" cx="'+q[0].toFixed(1)+'" cy="'+q[1].toFixed(1)+'" r="5"></circle>';}).join('');
+  return '<div class="curvebox">'
+    +  '<div class="cfn"><span>目标曲线'+(pts.length?' · '+pts.length+' 点 · 循环 '+(cv.loop||0)+'s':'（点图加点，双击点删除）')+'</span>'
+    +    '<button class="cbtn" onclick="riderCurveClear('+ch+')">清除</button></div>'
+    +  '<svg class="curvesvg" data-ch="'+ch+'" data-t="'+T+'" viewBox="0 0 '+CURVE_W+' '+CURVE_H+'">'
+    +    '<rect x="0" y="0" width="'+CURVE_W+'" height="'+CURVE_H+'" class="cgrid"></rect>'
+    +    (poly?'<polyline class="cline" points="'+poly+'"></polyline>':'')
+    +    dots
+    +  '</svg>'
+    +  '<div class="cfn"><span class="ds">横轴 0-'+(+T).toFixed(0)+'s · 纵轴 -60..0 dBFS</span>'
+    +    '<label class="rtarget">循环 <input type="number" min="0" max="3600" step="1" value="'+((cv&&cv.loop)||0)+'"'
+    +      ' onchange="riderCurveLoop('+ch+',this.value)"> s</label></div>'
+    + '</div>';
+}
+function curveOf(ch){
+  const c=window._rider&&window._rider.channels&&window._rider.channels[String(ch)];
+  return (c&&c.curve)||null;
+}
+function riderCurveClear(ch){ riderSet(ch,{curve:null}); }
+function riderCurveLoop(ch,v){
+  const cv=curveOf(ch); if(!cv) return;
+  riderSet(ch,{curve:{loop:parseFloat(v)||0, points:cv.points}});
+}
+const RCURVE_DRAG={ch:0,i:-1};
+function curveXY(svg,e){
+  const r=svg.getBoundingClientRect();
+  const T=parseFloat(svg.dataset.t)||60;
+  const t=Math.max(0,Math.min(T,(e.clientX-r.left)/r.width*T));
+  // 上边 = 0 dBFS, 下边 = -60 dBFS（绘制时 db=0 在顶部，这里必须同向）
+  const db=Math.max(-60,Math.min(0,-(e.clientY-r.top)/r.height*60));
+  return [Math.round(t*10)/10, Math.round(db*10)/10];
+}
+function curveApply(ch, pts, loop){
+  const c=window._rider.channels[String(ch)];
+  c.curve={loop:loop||0, points:pts};
+  renderRider(window._rider);
+}
+document.addEventListener('pointerdown', e=>{
+  const dot=e.target.closest('.cdot');
+  if(dot){ RCURVE_DRAG.ch=+dot.dataset.ch; RCURVE_DRAG.i=+dot.dataset.i; e.preventDefault(); return; }
+  const svg=e.target.closest('.curvesvg');
+  if(!svg) return;
+  const ch=+svg.dataset.ch, cv=curveOf(ch);
+  const [t,db]=curveXY(svg,e);
+  const pts=(cv&&cv.points?cv.points.map(p=>[p[0],p[1]]):[]).concat([[t,db]]);
+  pts.sort((a,b)=>a[0]-b[0]);
+  curveApply(ch, pts, (cv&&cv.loop)||0);
+  riderSet(ch,{curve:{loop:(cv&&cv.loop)||0, points:pts}});
+});
+document.addEventListener('pointermove', e=>{
+  if(!RCURVE_DRAG.ch) return;
+  const svg=document.querySelector('.curvesvg[data-ch="'+RCURVE_DRAG.ch+'"]');
+  if(!svg) return;
+  const cv=curveOf(RCURVE_DRAG.ch); if(!cv||!cv.points) return;
+  const [t,db]=curveXY(svg,e);
+  const pts=cv.points.map(p=>[p[0],p[1]]);
+  const i=RCURVE_DRAG.i; if(i<0||i>=pts.length) return;
+  pts[i]=[t,db];
+  curveApply(RCURVE_DRAG.ch, pts, cv.loop||0);
+});
+document.addEventListener('pointerup', ()=>{
+  if(!RCURVE_DRAG.ch) return;
+  const ch=RCURVE_DRAG.ch; RCURVE_DRAG.ch=0; RCURVE_DRAG.i=-1;
+  const cv=curveOf(ch);
+  if(cv&&cv.points&&cv.points.length>=2){
+    // 拖动时本地已渲染，这里只把结果落库
+    riderPost({channel:ch, curve:{loop:cv.loop||0, points:cv.points}});
+  }
+});
+document.addEventListener('dblclick', e=>{
+  const dot=e.target.closest('.cdot'); if(!dot) return;
+  const ch=+dot.dataset.ch, cv=curveOf(ch); if(!cv||!cv.points) return;
+  const pts=cv.points.filter((_,idx)=>idx!==+dot.dataset.i);
+  if(pts.length>=2) riderSet(ch,{curve:{loop:cv.loop||0, points:pts}});
+  else riderSet(ch,{curve:null});
+});
+
+loadRider();
+setInterval(riderLive, 300);
+
+</script>
+</body>
+</html>
+"""
+
+
+# ==================================================================
+# ==== x32sim/wingfx.py
+# ==================================================================
+# -*- coding: utf-8 -*-
+"""x32sim/wingfx — WING 效果器的**命名参数**表（field → 线上叶子名）。
+
+WING 的 FX 参数不是 X32 的 `/fx/<槽>/par/<号>`，而是命名叶子：
+  `/fx/1/time`（延迟时间 ms）、`/fx/2/pdel`（预延迟）、`/fx/2/dcy`（衰减 s）。
+名字随算法变化，同一个概念在不同算法里也可能叫法不同。
+
+**内部键仍是 X32 的 par 号**（`fx_par_07`）——卡片、预设、导入存档、两侧 UI
+全都用它。这里只做 field → WING 名字的翻译：
+
+    (算法, par 号) --fxlib--> field --本表--> WING 叶子名
+
+这样换控台时存档不用迁移，也不会出现"同一个 fx_par_07 在两家指不同参数"的
+串味（顺序若不同，序号只用于本地，线上发的是名字）。
+
+数据来源与置信度（每条都可追）：
+  · "doc"      《WING Remote Protocols V3.1》原文逐条列出 —— 只有 ROOM 的 15 项
+  · "field"    社区实测：`/fx/1/time 500`、`/fx/2/pdel 26`、`/fx/2/dcy 1.7`
+  · "inferred" 由上面两类推得（所有混响都有预延迟与衰减）
+  · "probe"    真机 `/fx/N ,s ?` 枚举得到，写进 wing_params.json 后覆盖本表
+
+⚠️ 没有证据的参数一律不填，前端按 `w=false` 灰掉。
+WING 对不存在的节点回 `NODE NOT FOUND`（安全失败，不会误改别的参数），
+但用户看到的是"拖了没反应"——比下标串味好，仍不如直接不给滑杆。
+"""
+
+import json
+import os
+
+
+# ---------------------------------------------------------------- 内置表
+# key = 内部算法（与 fxlib 一致），value = {field: WING 叶子名}
+WING_FX_PARAMS = {
+    # ROOM —— 文档原文给出完整 15 项（X32 的 level 在 WING 混响里没有对应）
+    "ROOM": {
+        "pre_delay": "pdel",
+        "decay": "dcy",
+        "size": "size",
+        "damping": "damp",
+        "diffuse": "diff",
+        "lo_cut": "lc",
+        "hi_cut": "hc",
+        "bass_multi": "mult",
+        "spread": "sprd",
+        "shape": "shp",
+        "spin": "spin",
+        "echo_l": "ecl",
+        "echo_r": "ecr",
+        "echo_feed_l": "efl",
+        "echo_feed_r": "efr",
+    },
+    # 其余混响：预延迟/衰减是共同项（V-REV 有社区实测，其余同一命名体系）
+    "HALL": {"pre_delay": "pdel", "decay": "dcy"},
+    "CHAM": {"pre_delay": "pdel", "decay": "dcy"},
+    "PLAT": {"pre_delay": "pdel", "decay": "dcy"},
+    "AMBI": {"pre_delay": "pdel", "decay": "dcy"},
+    "VREV": {"pre_delay": "pdel", "decay": "dcy"},
+    "VRM": {"pre_delay": "pdel", "decay": "dcy"},
+    "GATE": {"pre_delay": "pdel", "decay": "dcy"},
+    "RVRS": {"pre_delay": "pdel", "decay": "dcy"},
+    # Stereo Delay —— `/fx/1/time 500`（社区实测，500 ms 浮点）
+    "DLY": {"time": "time"},
+}
+
+# 每个 name 的证据等级（供 /api/info 与排查用；probe 覆盖后变 "probe"）
+WING_PARAM_SOURCE = {}
+for _algo, _m in WING_FX_PARAMS.items():
+    for _f, _n in _m.items():
+        WING_PARAM_SOURCE["%s.%s" % (_algo, _n)] = "doc" if _algo == "ROOM" else (
+            "field" if _algo in ("VREV", "DLY") else "inferred")
+
+
+# ---------------------------------------------------------------- 真机覆盖
+def probe_path():
+    """wing_params.json 的位置（与 x32_simulator.py 同目录）。
+
+    两种形态都要对：包形态下 `__file__` 在 x32sim/ 里，单文件形态下就在根目录。
+    """
+    base = os.path.dirname(os.path.abspath(__file__))
+    if os.path.basename(base) == "x32sim":
+        base = os.path.dirname(base)
+    return os.path.join(base, "wing_params.json")
+
+
+_PROBE = {"mtime": None, "table": None}
+
+
+def _load_probe():
+    """读探测结果并按 field 合并。文件不存在/损坏 → 空表（不影响内置表）。"""
+    p = probe_path()
+    try:
+        mt = os.path.getmtime(p)
+    except OSError:
+        return {}
+    if _PROBE["mtime"] == mt and _PROBE["table"] is not None:
+        return _PROBE["table"]
+    table = {}
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        for algo, params in (raw.get("algos") or {}).items():
+            m = {}
+            for item in params:
+                field = item.get("field")
+                name = item.get("name")
+                if field and name:
+                    m[str(field)] = str(name)
+            if m:
+                table[str(algo)] = m
+    except (OSError, ValueError, TypeError, AttributeError):
+        table = {}
+    _PROBE["mtime"] = mt
+    _PROBE["table"] = table
+    return table
+
+
+def wing_params(algo):
+    """某算法当前生效的 field → 叶子名表（内置 + 真机探测覆盖）。"""
+    base = dict(WING_FX_PARAMS.get(algo) or {})
+    base.update(_load_probe().get(algo) or {})
+    return base
+
+
+def wing_par_name(algo, pnum):
+    """(算法, par 号) → WING 叶子名；无证据返回 None（调用方拒绝写入）。"""
+    d = X32_FX_ALGOS.get(algo or "")
+    if not d:
+        return None
+    try:
+        n = int(pnum)
+    except (TypeError, ValueError):
+        return None
+    if n < 1 or n > len(d["params"]):
+        return None
+    field = d["params"][n - 1]["field"]
+    return wing_params(algo).get(field) or None
+
+
+def wing_par_num(algo, name):
+    """WING 叶子名 → 该算法的 par 号（**反查**，用于真台回读 `/fx/1/pdel`）。"""
+    d = X32_FX_ALGOS.get(algo or "")
+    if not d:
+        return None
+    table = wing_params(algo)
+    for field, nm in table.items():
+        if nm != name:
+            continue
+        for i, p in enumerate(d["params"]):
+            if p["field"] == field:
+                return i + 1
+    return None
+
+
+def wing_par_sources():
+    """field 级证据清单（诊断用）：{算法: {叶子名: 来源}}。"""
+    out = {}
+    for algo in WING_FX_PARAMS:
+        m = {}
+        for field, name in wing_params(algo).items():
+            m[name] = WING_PARAM_SOURCE.get("%s.%s" % (algo, name), "probe")
+        out[algo] = m
+    return out
+
+
+# ==================================================================
 # ==== x32sim/profiles.py
 # ==================================================================
 # -*- coding: utf-8 -*-
@@ -3376,9 +6845,34 @@ class ConsoleProfile:
                            # 空表 = 该控台效果库未标定 → 混响页禁用、写入被拒绝
     param_limits = {}      # kind → (lo,hi): 控台实际接受的范围。空 = 用参数表量程。
                            # 目前只有 trim 会因固件版本不同而变 (见 app --trim-range)
+    # --- 平台值转换开关（bridge / params 直接读字段，不再各自写 if id=="wing"）---
+    fader_db = False       # True = 组级推子线上是 dB 浮点（WING 是 -144..+10）
+    mute_inverted = False  # True = 组级静音线上 1=muted（X32 是 /mix/on 1=开）
+    fx_mix_scale = 1       # 干湿比倍数（WING 是 0..100 整数）
+    index_fmt = "%02d"     # 地址编号格式（WING 不补零，用 "%d"）
+    fx_slots = FX_COUNT    # 协议侧效果槽数（本地仍受 FX_COUNT 限制）
+    osc_bundle = True      # False = 真台不接受 Bundle，转发/回读要逐条发（WING）
+    # 遥控会话保活：X32 是 /xremote 每 5 s；WING 是订阅命令（10 s 不续即死）。
+    # {port} 会替换成本地 socket 端口 —— WING 支持 /%<port> 指定回包端口。
+    keepalive_cmd = "/xremote"
+    keepalive_interval = 5.0
+    keepalive_note = ""
 
     def addr(self, kind, idx):
         """(kind, idx) → 真实地址；本控台不支持则返回 None。"""
+        return None
+
+    def fx_wire_name(self, algo):
+        """内部算法名 → 线上枚举名。X32 直接发算法 key，WING 要换成 mdl。"""
+        return str(algo)
+
+    def parse_addr(self, addr):
+        """真台回包地址 → (kind, idx)。返回 None = 不归本驱动管。
+
+        X32 走通用的 match_address（地址模板反查）；WING 的地址空间与 X32 不同
+        （`/ch/1/fdr` 而不是 `/ch/01/mix/fader`），必须自己解析，否则回读全部丢失
+        —— 症状是"台面上动了推子，软件纹丝不动"，而日志只有一行"未识别"。
+        """
         return None
 
     def supports(self, kind):
@@ -3459,26 +6953,159 @@ class _StubProfile(ConsoleProfile):
     ready = False
 
     def pending(self):
-        base = ["ch_fader", "ch_on", "bus_fader", "bus_on", "dca_fader",
-                "dca_on", "main_fader", "main_on"]
-        base += [g + "_fader" for g in ("auxin", "usb", "fxret", "mtx")]
-        base += [g + "_on" for g in ("auxin", "usb", "fxret", "mtx")]
-        base += ["ch_dca", "fx_type", "fx_on", "fx_mix", "fx_name", "fx_par_NN"]
-        # 通道参数 (增益/反相/延时/低切/插入/门/动态/EQ): 从登记表推导, 新增即跟上
-        base += [sp.kind for sp in CH_PARAM_SPECS]
-        # 发送 (通道→Bus): 二维地址, 同样从登记表推导
-        base += [sp.kind for sp in SEND_PARAM_SPECS]
-        return base
+        return list(_ALL_KINDS)
 
 
-class WingProfile(_StubProfile):
+def _all_kinds():
+    """语义管道里的全部 kind（卡片目标 / 预设范围 / 校验的并集）。"""
+    base = ["ch_fader", "ch_on", "bus_fader", "bus_on", "dca_fader",
+            "dca_on", "main_fader", "main_on"]
+    base += [g + "_fader" for g in ("auxin", "usb", "fxret", "mtx")]
+    base += [g + "_on" for g in ("auxin", "usb", "fxret", "mtx")]
+    base += ["ch_dca", "fx_type", "fx_on", "fx_mix", "fx_name", "fx_par_NN"]
+    # 通道参数 (增益/反相/延时/低切/插入/门/动态/EQ): 从登记表推导, 新增即跟上
+    base += [sp.kind for sp in CH_PARAM_SPECS]
+    # 发送 (通道→Bus): 二维地址, 同样从登记表推导
+    base += [sp.kind for sp in SEND_PARAM_SPECS]
+    return base
+
+
+_ALL_KINDS = _all_kinds()
+
+
+# ---------------------------------------------------------------- WING
+#
+# 地址与语义全部来自《WING Remote Protocols V3.1》(Behringer 授权,
+# Patrick-Gilles Maillot 维护)。与 X32 的三处硬差异必须在 addr() 与值转换层
+# 同时体现，任何一处漏掉都是"写成功但声音错"：
+#   1. 编号**不补零**: `/ch/1/fdr`（X32 是 `/ch/01/mix/fader`）
+#   2. 推子是 **dB 浮点**: -144 = -∞，上限 +10（X32 是 0..1 归一值）
+#   3. 静音 **1 = muted**（X32 是 `/mix/on` 1 = 开）
+# 另外 main 在 WING 是 4 路且带编号（本地只有 1 路、idx 恒 0 → 地址用 idx+1）。
+
+# 内部组名 → WING 地址里的组名（fxret/usb 在 WING 没有对应组，故意缺席）
+_WING_GROUP = {"ch": "ch", "auxin": "aux", "bus": "bus",
+               "main": "main", "mtx": "mtx", "dca": "dca"}
+# 内部 field → WING 叶子名
+_WING_TAIL = {"fader": "fdr", "on": "mute", "pan": "pan"}
+# 地址编号偏移（本地 main 的 idx 是 0，WING 的 main 从 1 起）
+_WING_IDX_BASE = {"main": 1}
+# 反查表（回读用）：地址里的组名/叶子名 → 内部组/field
+_WING_GROUP_REV = {v: k for k, v in _WING_GROUP.items()}
+_WING_TAIL_REV = {v: k for k, v in _WING_TAIL.items()}
+
+
+def _slot_algo(slot):
+    """槽位当前算法（延迟导入 STATE：profiles→state 会成环，只在调用时取）。
+    取不到（未初始化/越界）一律当空槽 —— 空槽没有参数可写。"""
+    try:
+        return (STATE.fx.get(int(slot), {}) or {}).get("type") or ""
+    except Exception:
+        return ""
+
+
+class WingProfile(ConsoleProfile):
+    """WING —— 按《WING Remote Protocols V3.1》实装，尚未上真台核对（verified=False）。
+
+    已标定（有文档/实测证据，可直接写）：推子(dB) / 静音(反向) / 声像 /
+    算法选择(`/fx/N/mdl`) / 干湿比(`/fx/N/fxmix`) /
+    **FX 命名参数**(`/fx/1/time`、`/fx/2/pdel|dcy`，见 wingfx.py 的证据分级) /
+    订阅回读(`/%<port>/*S`) / 节点批量写(`/ ,s "/ch.1.fdr=0,..."`，默认关)。
+
+    仍未标定的部分**显式缺席**而不是猜地址：
+      · 通道处理参数 (EQ/门/动态/发送) —— WING 的树结构与 X32 完全不同；
+      · 场景召回 —— `$stat`/`show` 子树尚未核实；
+      · FX 返回组 —— WING 没有 fxrtn 组（X32 的 8 条返回在 WING 里是普通通道）。
+    这些在 UI 上灰显（caps 不含对应能力 / `w=false` 灰掉单个滑杆），
+    写入时记一条明确日志后跳过。
+    """
+
     id = "wing"
-    label = "Wing"
+    label = "WING"
     vendor = "Behringer"
-    note = "Wing 是全新平台，OSC 地址空间与 X32 不通用，地址表待填"
-    counts = {"ch": 48, "bus": 16, "dca": 8, "auxin": 8, "usb": 4,
-              "fxret": 8, "mtx": 8, "main": 1, "fx": 16}
-    caps = ("fader", "mute", "dca", "scene", "fx", "raw_osc")
+    ready = True
+    verified = False
+    note = ("地址表来自《WING Remote Protocols V3.1》：编号不补零、推子为 dB、"
+            "静音 1=静音（与 X32 相反）、不支持 Bundle。FX 命名参数仅标定有证据的部分，"
+            "其余滑杆在前端灰显；通道处理参数待标定")
+    # counts = **本机能实际控制**的规模（受本地台面建模限制），不是协议规模。
+    # 协议规模见 proto_counts —— 写 counts 用 40 会造成"卡片能选 ch40、实际无声"。
+    counts = {"ch": 32, "bus": 16, "dca": 8, "auxin": 6, "usb": 0,
+              "fxret": 0, "mtx": 6, "main": 1, "fx": FX_COUNT}
+    proto_counts = {"ch": 40, "aux": 8, "bus": 16, "main": 4, "mtx": 8,
+                    "dca": 16, "fx": 16}
+    caps = ("fader", "mute", "dca", "fx", "fx_par", "meter", "raw_osc")
+    fx_algos = WING_FX_ALGOS
+    # 值转换层的开关（bridge/params 读这三个，不再各自写 if profile==...）
+    fader_db = True          # 推子线上是 dB，不是 0..1
+    mute_inverted = True     # 静音线上 1 = muted
+    fx_mix_scale = 100       # 干湿比 0..100，不是 0..1
+    index_fmt = "%d"         # 地址编号不补零
+    fx_slots = 16
+    # WING 的 OSC 包内容**永远是单条 Message**（官方文档明说 Bundles are not
+    # supported）——整包 Bundle 发过去会被丢弃，症状恰好是"界面全动、台子不动"。
+    osc_bundle = False
+    # 订阅: `/%<port>/*S`，10 秒不续即死（官方文档）。**全台只允许 1 个订阅**。
+    keepalive_cmd = "/%{port}/*S"
+    keepalive_interval = 9.0
+    keepalive_note = ("WING 全台只允许 1 个订阅；与 Co-Pilot / Mixing Station "
+                      "同时使用会互相抢（日志里会看到订阅无回包）")
+
+    def addr(self, kind, idx):
+        if kind == "fx_type":
+            return "/fx/%d/mdl" % idx
+        if kind == "fx_mix":
+            return "/fx/%d/fxmix" % idx
+        if fx_par_num(kind) is not None:
+            # WING 的参数是**名字**而不是 par 号：`/fx/1/time`、`/fx/2/pdel`。
+            # 名字由 (该槽当前算法, par 号→field) 查表得来；查不到 = 无证据支持，
+            # 返回 None 拒发 —— 绝不发 `/fx/1/par/02` 这种 X32 地址。
+            name = wing_par_name(_slot_algo(idx), fx_par_num(kind))
+            if not name:
+                return None
+            return "/fx/%d/%s" % (idx, name)
+        grp, _, field = kind.rpartition("_")
+        tail = _WING_TAIL.get(field)
+        g = _WING_GROUP.get(grp)
+        if tail is None or g is None:
+            return None
+        n = int(idx) + _WING_IDX_BASE.get(grp, 0)
+        if n < 1:
+            return None
+        return "/%s/%d/%s" % (g, n, tail)
+
+    def fx_wire_name(self, algo):
+        """内部算法 key → WING 的 mdl 枚举；该算法 WING 没有则 None（拒发）。"""
+        return wing_mdl(str(algo or "").upper())
+
+    def parse_addr(self, addr):
+        s = str(addr or "").strip("/")
+        parts = s.split("/")
+        if len(parts) != 3:
+            return None
+        head, num, tail = parts
+        try:
+            n = int(num)
+        except ValueError:
+            return None
+        if head == "fx":
+            if n < 1:
+                return None
+            if tail == "mdl":
+                return ("fx_type", n)
+            if tail == "fxmix":
+                return ("fx_mix", n)
+            pnum = wing_par_num(_slot_algo(n), tail)
+            return (fx_par_kind(pnum), n) if pnum else None
+        g = _WING_GROUP_REV.get(head)
+        f = _WING_TAIL_REV.get(tail)
+        if g and f:
+            return (g + "_" + f, n - _WING_IDX_BASE.get(g, 0))
+        return None
+
+    def pending(self):
+        """尚未标定的 kind（供界面提示与规范使用）。"""
+        return [k for k in _ALL_KINDS if self.addr(k, 0) is None]
 
 
 class YamahaProfile(_StubProfile):
@@ -4019,13 +7646,23 @@ def value_reply(kind, idx):
     # ⚠️ dyn/ratio 这类 **index 型枚举** 本地存 4.0(4:1)、线上要发 6,
     #    曾经这里直接 int(v) → 4, 真台解析成 5:1 (第 5 档), 静默改值。
     sp = PARAM_SPECS.get(kind)
+    p = profile()
     if sp is not None:
-        return OscMsg(a, [param_wire(sp, v)])
+        return OscMsg(a, [param_wire(sp, v, p)])
     if kind == "ch_dca":
         return OscMsg(a, [int(v)])
-    if kind in ("fx_type", "fx_name"):
+    if kind == "fx_type":
+        # WING 的算法枚举名与 X32 不同（`/fx/N/mdl`）。回包必须给**线格式**，
+        # 否则客户端按 X32 名去比对，会把"已经装上"看成"没换上"。
+        name = p.fx_wire_name(v)
+        return OscMsg(a, [str(name)]) if name is not None else None
+    if kind == "fx_name":
         return OscMsg(a, [str(v)])
-    if kind == "fx_mix" or fx_par_num(kind) is not None:   # FX 机架: 混合比/参数是浮点
+    if kind == "fx_mix":                        # FX 机架混合比: WING 是 0..100 整数
+        if (p.fx_mix_scale or 1) != 1:
+            return OscMsg(a, [int(round(float(v) * p.fx_mix_scale))])
+        return OscMsg(a, [float(v)])
+    if fx_par_num(kind) is not None:             # FX 参数: 浮点 (WING 是命名参数，P2)
         return OscMsg(a, [float(v)])
     return OscMsg(a, [int(v)])
 
@@ -4334,10 +7971,60 @@ SINKS = []        # 由 app.py 注册 (桥接 sink); 状态层不 import 任何�
 """x32sim/bridge — 桥接真台: 转发合并 / 回读 / 回声抑制"""
 
 import math
+import os
 import socket
 import threading
 import time
 
+
+
+def _wire_arg(kind, value, p=None):
+    """(kind, 本地值) → 线上值。返回 None = 当前控台不支持 / 值非法（调用方跳过）。
+
+    抽成纯函数是为了可单测：这里每一条换算错了都是"写成功但声音错"，
+    而它在真实链路里只在 20ms 合并器刷新时才跑到，靠抓包很难覆盖全。
+    """
+    if p is None:
+        p = profile()
+    sp = PARAM_SPECS.get(kind)
+    if kind == "ch_dca":
+        return int(value) & 0xFF
+    if kind == "fx_type":
+        # 内部算法 key → 线上枚举名。WING 是 `/fx/N/mdl` 且枚举名与 X32 不同；
+        # 映射不到 = 这台控台没有这个算法 → 拒发并把名字说出来，
+        # 否则槽位在界面上"装着"、真台其实没换。
+        name = p.fx_wire_name(value)
+        if name is None:
+            log("BRIDGE 跳过 fx_type: 算法「%s」不在「%s」效果库中" % (value, p.label))
+            return None
+        return str(name)[:12]
+    if kind == "fx_name":
+        return str(value)[:12]
+    if sp is not None:
+        # 表驱动定线上类型 (与 state.value_reply 同一套规则, 都走 param_wire):
+        #   float → 浮点 (推子/增益/延时/频率/门限); int → 整数 (低切斜率);
+        #   bool  → 0/1 (静音/延时/低切/插入/门开关)
+        #   index 型枚举 (dyn/ratio) → 0..11 的**索引**, 不是比值
+        #   WING: 组级推子发 dB、组级静音发 1=muted (见 param_wire 的平台分支)
+        # ⚠️ 曾经这里是 `endswith("_fader") → float, 其余 _truthy` —— 新增的
+        #    通道参数全是非 _fader 结尾, 会被 _truthy 压成 0/1 发给真台
+        #    (trim 3.5 dB 变成 1), 于是"桥接转发"这一层整个失真。
+        arg = param_wire(sp, value, p)
+        # 第二道闸: 万一将来哪条路径漏了 _finite, 宁可拒发也不把 NaN 发给真台
+        if isinstance(arg, float) and not math.isfinite(arg):
+            log("BRIDGE 拒发非有限值: %s = %r" % (kind, value))
+            return None
+        return arg
+    if kind == "fx_mix" or fx_par_num(kind) is not None:
+        arg = float(value)
+        if kind == "fx_mix" and (p.fx_mix_scale or 1) != 1:
+            # WING 的干湿比是 0..100 整数，不是 0..1
+            arg = int(round(arg * p.fx_mix_scale))
+        if not math.isfinite(arg):
+            log("BRIDGE 拒发非有限值: %s = %r" % (kind, value))
+            return None
+        return arg
+    return _truthy(value)
 
 
 def _bridge_forward(kind, idx, value, source="manual", force=False):
@@ -4352,36 +8039,13 @@ def _bridge_forward(kind, idx, value, source="manual", force=False):
     try:
         if value is None:
             return          # 本地没有这个目标（换控台后规模不匹配等）
-        sp = PARAM_SPECS.get(kind)
-        if kind == "ch_dca":
-            arg = int(value) & 0xFF
-        elif kind in ("fx_type", "fx_name"):
-            arg = str(value)[:12]
-        elif sp is not None:
-            # 表驱动定线上类型 (与 state.value_reply 同一套规则, 都走 param_wire):
-            #   float → 浮点 (推子/增益/延时/频率/门限); int → 整数 (低切斜率);
-            #   bool  → 0/1 (静音/延时/低切/插入/门开关)
-            #   index 型枚举 (dyn/ratio) → 0..11 的**索引**, 不是比值
-            # ⚠️ 曾经这里是 `endswith("_fader") → float, 其余 _truthy` —— 新增的
-            #    通道参数全是非 _fader 结尾, 会被 _truthy 压成 0/1 发给真台
-            #    (trim 3.5 dB 变成 1), 于是"桥接转发"这一层整个失真。
-            arg = param_wire(sp, value)
-            # 第二道闸: 万一将来哪条路径漏了 _finite, 宁可拒发也不把 NaN 发给真台
-            if isinstance(arg, float) and not math.isfinite(arg):
-                log("BRIDGE 拒发非有限值: %s %s = %r" % (kind, idx, value))
-                return
-        elif kind == "fx_mix" or fx_par_num(kind) is not None:
-            arg = float(value)
-            # 第二道闸: 万一将来哪条路径漏了 _finite, 宁可拒发也不把 NaN 发给真台
-            if not math.isfinite(arg):
-                log("BRIDGE 拒发非有限值: %s %s = %r" % (kind, idx, value))
-                return
-        else:
-            arg = _truthy(value)
+        p = profile()
+        arg = _wire_arg(kind, value, p)
+        if arg is None:
+            return
         addr = addr_for_write(kind, idx)      # ⚠️ Main 无 %02d, 必须走统一映射 (见该函数注释)
         if addr is None:
             # 当前控台不支持这个目标 → 明说, 不要静默吞掉 (静默是这类 bug 的老家)
-            p = profile()
             log("BRIDGE 跳过 %s %s: 当前控台「%s」未提供该地址%s"
                 % (kind, idx, p.label, "（驱动待标定）" if not p.ready else ""))
             return
@@ -4437,6 +8101,58 @@ def _bridge_fwd_flusher():
             time.sleep(0.5)
 
 
+def _node_path(addr):
+    """`/ch/1/fdr` → `/ch.1.fdr`（WING 节点批量写的路径写法：点分隔、无空段）。"""
+    return "/" + ".".join([p for p in str(addr).split("/") if p])
+
+
+def _node_value(v):
+    """线上值 → 节点批量写里的文本。整数不带小数点，字符串原样。"""
+    if isinstance(v, str):
+        return v
+    if isinstance(v, bool):
+        return "1" if v else "0"
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return str(v)
+    if f == int(f) and abs(f) < 1e15:
+        return "%d" % int(f)
+    return ("%.4f" % f).rstrip("0").rstrip(".")
+
+
+def _send_node_batch(sock, batch, addr):
+    """一条 OSC 写多路：`/ ,s "/ch.1.fdr=0,/ch.2.fdr=-10"`（WING 官方语法）。
+
+    为什么默认不用：整包里只要有一条路径不被接受，WING 会整包回 `NODE NOT FOUND`，
+    这一批写入就全丢了 —— 逐条发虽然包多，但一条失败不影响其余。所以这是
+    **可选项**（环境变量 X32_WING_NODE_WRITE=1 / 配置项），且被拒一次就自动关掉，
+    退回逐条发（见 recv 循环里的 /*,s 处理）。
+    """
+    parts = ["%s=%s" % (_node_path(_a), _node_value(v)) for _a, v, _g, _f in batch]
+    payload = ",".join(parts)
+    if len(payload) > 900:
+        # 保守留余量：UDP 单包 32KB，但节点串越长越容易踩到台子的解析上限
+        for _a, v, _g, _f in batch:
+            sock.sendto(encode_message(OscMsg(_a, [v])), addr)
+        return
+    sock.sendto(encode_message(OscMsg("/", [payload])), addr)
+
+
+def _send_msgs(sock, msgs, addr):
+    """按控台能力发包。
+
+    X32 吃 Bundle（一次发一批）；**WING 不吃**——官方文档写明其 OSC 包内容
+    永远是单条 Message，Bundle 会被整包丢弃。发错的表现是最难查的一种：
+    网页/卡片照常动、日志干净、真台纹丝不动。所以这里按 profile 分路。
+    """
+    if getattr(profile(), "osc_bundle", True):
+        sock.sendto(encode_bundle(msgs), addr)
+        return
+    for m in msgs:
+        sock.sendto(encode_message(m), addr)
+
+
 def _bridge_fwd_flush_once():
     """一轮合并发送: 把到期的转发条目打包成一个 Bundle 发给真台。"""
     time.sleep(BRIDGE_FWD_TICK)
@@ -4467,7 +8183,14 @@ def _bridge_fwd_flush_once():
         return
     msgs = [OscMsg(a, [v]) for _k, (a, v, _g, _f) in batch]
     try:
-        sock.sendto(encode_bundle(msgs), addr)
+        pairs = [av for _k, av in batch]
+        use_nodes = (WING_NODE_WRITE[0] and not getattr(profile(), "osc_bundle", True)
+                     and len(pairs) > 1
+                     and all(not isinstance(av[1], str) for av in pairs))
+        if use_nodes:
+            _send_node_batch(sock, pairs, addr)
+        else:
+            _send_msgs(sock, msgs, addr)
     except OSError as e:
         log("BRIDGE 合并转发失败 (%d 条): %r" % (len(msgs), e))
         return
@@ -4516,7 +8239,16 @@ def _bridge_apply_readback(kind, idx, value):
     """
     key = (kind, idx)
     sp = PARAM_SPECS.get(kind)
-    local = param_from_wire(sp, value) if sp is not None else value
+    if kind == "fx_type" and profile().id == "wing":
+        # WING 回读的是 mdl 枚举（大写，如 CHORUS），本库内部 key 是 CRS。
+        # 反查不到 = 真台装的是 WING 独有算法（VSS3 / CONCERT / 吉他箱体…），
+        # 本库没有对应项 —— 记一条日志保留不动，绝不猜成别的算法。
+        _k = algorithm_for_wing_mdl(value)
+        if _k is None:
+            log("BRIDGE 真台 FX%s 装的是 WING 专有算法「%s」，本效果库无对应项" % (idx, value))
+            return
+        value = _k
+    local = param_from_wire(sp, value, profile()) if sp is not None else value
     if _fwd_is_echo(key, value):
         set_value(kind, idx, local, source="sync")     # 自己写入的回声, 只对齐本地
         return
@@ -4570,7 +8302,7 @@ def _bridge_full_sync(sock):
             _get(fx_par_kind(pn), s)
     for chunk in (gets[x:x + 64] for x in range(0, len(gets), 64)):
         try:
-            sock.sendto(encode_bundle(chunk), BRIDGE["addr"])
+            _send_msgs(sock, chunk, BRIDGE["addr"])
         except OSError as e:
             log("BRIDGE 全量同步发送失败: %r" % e)
     log("BRIDGE 全量状态同步已请求 (%d 项, 控台 %s)" % (len(gets), p.label))
@@ -4630,7 +8362,7 @@ def bridge_client(ip, port):
 
 
 def _bridge_client_run(ip, port):
-    """桥接后台线程: 5 秒 /xremote 保活, 持续接收真台回读并同步本地。"""
+    """桥接后台线程: 按控台保活（X32 /xremote 5s；WING 订阅 9s），持续回读。"""
     _ensure_fwd_flusher()            # 转发合并器 (幂等; --bridge 启动参数也走这里)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.settimeout(0.5)
@@ -4639,14 +8371,33 @@ def _bridge_client_run(ip, port):
     BRIDGE["ip"], BRIDGE["port"], BRIDGE["synced"] = ip, port, False
     BRIDGE["started"] = time.time()
     BRIDGE["last_warn"] = 0.0
-    log("BRIDGE 桥接启动: 真台 %s:%d (写入转发 + /xremote 保活 + 状态回读)" % (ip, port))
+    p0 = profile()
+    # 保活命令：X32 是 /xremote；WING 是订阅（/%<本地端口>/*S，10 秒不续即死）
+    keep_cmd = str(getattr(p0, "keepalive_cmd", "/xremote") or "/xremote")
+    if "{port}" in keep_cmd:
+        # WING 要一个明确的回包端口。必须先 bind 再取端口 —— Windows 上对
+        # 未 bind 的 UDP socket 调 getsockname() 会抛 OSError 10022(WSAEINVAL)，
+        # 而这个异常发生在桥接线程最开头，表现就是"桥接启动成功、一个包都不发"。
+        try:
+            sock.bind(("0.0.0.0", 0))
+        except OSError as e:
+            log("BRIDGE 绑定本地回包端口失败: %r" % e)
+        try:
+            keep_cmd = keep_cmd.replace("{port}", str(sock.getsockname()[1]))
+        except OSError:
+            keep_cmd = keep_cmd.replace("{port}", "2223")
+    keep_iv = float(getattr(p0, "keepalive_interval", 5.0) or 5.0)
+    log("BRIDGE 桥接启动: 真台 %s:%d (写入转发 + %s 保活/订阅 + 状态回读)" % (
+        ip, port, keep_cmd))
+    if getattr(p0, "keepalive_note", ""):
+        log("BRIDGE 注意: %s" % p0.keepalive_note)
     _bridge_full_sync(sock)
-    BRIDGE["last_keep"] = 0.0        # 立即发首次 /xremote 完成订阅
+    BRIDGE["last_keep"] = 0.0        # 立即发首次保活完成订阅
     while BRIDGE["addr"] is not None:
-        # 保活: 每 5 秒发一次 /xremote (真台 10 秒无保活会取消遥控链接)
-        if time.time() - BRIDGE["last_keep"] >= 5.0:
+        # 保活: X32 每 5 秒 /xremote；WING 每 9 秒续订阅（真台 10 秒无保活就断）
+        if time.time() - BRIDGE["last_keep"] >= keep_iv:
             try:
-                sock.sendto(encode_message(OscMsg("/xremote", [])), (ip, port))
+                sock.sendto(encode_message(OscMsg(keep_cmd, [])), (ip, port))
                 BRIDGE["last_keep"] = time.time()
             except OSError:
                 pass
@@ -4675,20 +8426,35 @@ def _bridge_client_run(ip, port):
                 a = msg.address
                 if a.startswith("/meters") or a == "/xinfo" or a.startswith("/xremote"):
                     continue
-                matches = match_address(a)
+                if a == "/*":
+                    # 节点批量写的回执：WING 只回 OK 或错误串（NODE NOT FOUND /
+                    # VALUE ERROR / BUFFER OVERFLOW / NODE IS NOT PAR / INCOMPLETE DATA）
+                    txt = str(msg.args[0]) if msg.args else ""
+                    if txt and txt.upper() != "OK":
+                        log("BRIDGE 批量写被拒: %s" % txt)
+                        if WING_NODE_WRITE[0]:
+                            WING_NODE_WRITE[0] = False
+                            log("BRIDGE 已自动关闭 WING 节点批量写，退回逐条发送")
+                    continue
+                # WING 的地址空间与 X32 不通用，先让驱动自己认领；
+                # 认不出再回落到 X32 的模板反查（M32 等仍走那条）。
+                own = profile().parse_addr(a)
+                matches = [own] if own else match_address(a)
                 if not matches or not msg.args:
                     continue
+                k, i = matches[0]
                 raw = msg.args[0]
                 if isinstance(raw, str) and raw:
                     try:
                         raw = float(raw)
                     except ValueError:
-                        continue
-                for k, i in matches[:1]:
-                    try:
-                        _bridge_apply_readback(k, i, raw)
-                    except Exception as e:
-                        log("BRIDGE 回读处理出错 %s: %r" % (a, e))
+                        # 算法名（WING 的 mdl / X32 的 type）本来就是字符串，不能丢
+                        if k not in ("fx_type", "fx_name"):
+                            continue
+                try:
+                    _bridge_apply_readback(k, i, raw)
+                except Exception as e:
+                    log("BRIDGE 回读处理出错 %s: %r" % (a, e))
     BRIDGE_SOCK[0] = None
     BRIDGE["synced"] = False
     log("BRIDGE 桥接已断开 (%s:%d)" % (ip, port))
@@ -4748,6 +8514,12 @@ BRIDGE_FWD_TICK = 0.02       # 合并器轮询间隔
 BRIDGE_FWD_MAX_BATCH = 256   # 单拍最多发出条数 (防极端堆积把 UDP 包撑爆)
 BRIDGE_FWD = {"pending": {}, "last": {}, "lock": threading.Lock()}
 BRIDGE_FWD_THREAD = [None]
+# WING 节点批量写（`/ ,s "/ch.1.fdr=0,/ch.2.fdr=-10"`）—— **默认关**。
+# WING 对整包做原子校验：一条路径不被接受就整批回 `NODE NOT FOUND`，这一拍
+# 所有写入全丢；逐条发虽然包多，但一条失败不影响其余。需要时用环境变量
+# X32_WING_NODE_WRITE=1 打开，且被台子拒一次会自动关回去（见 recv 里的 /*,s）。
+WING_NODE_WRITE = [os.environ.get("X32_WING_NODE_WRITE", "").strip().lower()
+                   not in ("", "0", "false", "off", "no")]
 
 
 class _BridgeSink(WriteSink):
@@ -4802,7 +8574,9 @@ def fx_lib_meta():
             "cats": cats,
             "heavySlots": list(FX_SLOTS_HEAVY),
             # label = 中文（辅助），en = 真台显示名（主）。前端一律先显示 en。
+            # mdl = 该控台的线上枚举名（WING 用；X32 没有这个概念，为 None）。
             "algos": {k: {"label": v["label"], "en": v.get("en") or k,
+                          "mdl": v.get("wing_mdl"),
                           "cat": v.get("cat", "misc"),
                           "heavy": bool(v.get("heavy")), "n": v.get("n", 0)}
                       for k, v in lib.items()}}
@@ -5121,6 +8895,10 @@ def fx_state():
                         "p": p["p"], "field": p["field"], "label": p["label"],
                         "unit": p["unit"], "kind": p["kind"],
                         "lo": p["lo"], "hi": p["hi"], "opts": p["opts"],
+                        # w = 当前控台**能写**这个参数（WING 是命名参数，只有标定过的
+                        # 才有地址）。前端据 w 灰掉控件：宁可没有滑杆，也不要一个
+                        # 拖了没反应的假滑杆 —— 那会让人以为台子坏了。
+                        "w": addr_for_write(fx_par_kind(p["p"]), s) is not None,
                         "value": v, "unset": unset})
                 for a in ("time", "predelay", "damp"):
                     if a in algo:
@@ -5142,6 +8920,181 @@ def fx_state():
     # console/libId: 前端靠 libId 变化判断"效果库换了一套" => 重建算法下拉
     return {"slots": slots, "sync": sync, "tap": tap, "noteBeats": dict(NOTE_BEATS),
             "console": meta, "libId": meta["id"], "algos": meta["algos"]}
+
+
+# ==================================================================
+# ==== x32sim/oscsrv.py
+# ==================================================================
+# -*- coding: utf-8 -*-
+"""x32sim/oscsrv — OSC 消息分发 (UDP 主循环的每个包)"""
+
+import struct
+
+
+
+def handle(msg: OscMsg, addr, sock):
+    a = msg.address
+    log("%-28s <- %s  args=%s" % (addr[0], a, msg.args))
+
+    if a == "/xinfo":
+        ip = sock.getsockname()[0]
+        reply = OscMsg("/xinfo", [ip, SIM_NAME, SIM_MODEL, SIM_FIRMWARE])
+        sock.sendto(encode_message(reply), addr)
+        return
+
+    if a in ("/subscribe", "/unsubscribe"):
+        # 协议 /subscribe ,s<地址> [,i<倍数>]: "我关心这个地址, 每 N×50ms 回一次"
+        # 无地址参数时退化成"台面变更推送订阅"(旧行为, 保留兼容)。
+        pat = None
+        for arg in msg.args:
+            if isinstance(arg, str) and arg.startswith("/"):
+                pat = arg
+                break
+        rate = 1
+        for arg in msg.args[1:]:
+            if isinstance(arg, (int, float)) and not isinstance(arg, bool):
+                rate = int(arg)
+                break
+        if a == "/subscribe":
+            first = subscribe_client(addr)
+            if pat:
+                subscribe_pattern(addr, pat, rate)
+            log("    订阅: %s %s (rate=%d, %s, 共 %d 个来源)" % (
+                addr, pat or "(台面变更)", rate,
+                "首次" if first else "续期", len(METER_SUBSCRIBERS)))
+        else:
+            if pat:
+                unsubscribe_pattern(addr, pat)
+            else:
+                unsubscribe_client(addr)
+            log("    退订: %s %s (剩 %d 个来源)" % (
+                addr, pat or "(全部)", len(METER_SUBSCRIBERS)))
+        return
+
+    if a in ("/xremote", "/xcontrol"):
+        # 真台保活: 续期该来源的订阅 (30 秒无续期自动清理)
+        # ⚠️ 真台 /xremote **只推变化**, 不推初始全量; 需要初始值时客户端应逐条
+        #    GET 或 /subscribe。这里保留同语义, 首帧补全由 --xremote-snapshot 开启。
+        subscribe_client(addr)
+        return
+
+    if a.startswith("/meters"):
+        if msg.args and msg.args[0] == 0:
+            unsubscribe_client(addr)
+            log("    电平表退订: %s" % (addr,))
+        else:
+            subscribe_client(addr)
+            log("    电平表订阅: %s (共 %d 个订阅者)" % (addr, len(METER_SUBSCRIBERS)))
+            # 对齐真机: 每次请求立即回一帧
+            floats = compute_levels()
+            blob = struct.pack(">i", len(floats))
+            for v in floats:
+                blob += struct.pack(">f", v)
+            sock.sendto(encode_message(OscMsg("/meters/1", [blob])), addr)
+        return
+
+    if a.startswith("/scene/") and a.endswith("/load"):
+        try:
+            n = int(a.split("/")[2])
+        except (ValueError, IndexError):
+            return
+        with STATE.lock:
+            STATE.scene = n
+        log("    场景切换 -> %d" % n)
+        return
+
+    if a == "/reboot" or a == "/quit":
+        log("    收到重启指令,忽略")
+
+    # 通道/输出名称读写: /ch/01/config/name (字符串参数, 真台同款地址)
+    segs = a.strip("/").split("/")
+    # ⚠️ /fx/<槽>/config/name (FX 机架槽名) 故意排除在外: NAME_COUNTS 没有
+    #    "fx", 早年它在这里被静默 return, 导致 state 里的 fx_name kind 虽然
+    #    齐全却永远收不到查询 (iOS 从 v1.3 起就在问这个地址, 一直是哑的)。
+    #    放它走下面 match_address 的 fx_name 分支, 回包地址由 profiles 给。
+    # ⚠️ fxrtn 是真台拼写 (Maillot: /fxrtn/[01..08]/config/name), 与 fxret
+    #    同一个命名空间, 这里归一并收。
+    if len(segs) == 4 and segs[2] == "config" and segs[3] == "name" and segs[0] != "fx":
+        g = "fxret" if segs[0] == "fxrtn" else segs[0]
+        if g == "main" and segs[1] == "st":
+            idx = 0
+        else:
+            try:
+                idx = int(segs[1].rstrip("LR"))
+            except ValueError:
+                log("    (名称地址未识别: %s)" % a)
+                return
+        cnt = NAME_COUNTS.get(g)
+        if g == "main":
+            pass
+        elif not cnt or not 1 <= idx <= cnt:
+            log("    (名称地址未识别: %s)" % a)
+            return
+        if msg.args and isinstance(msg.args[0], str):
+            set_name(g, idx, msg.args[0])
+        else:
+            sock.sendto(encode_message(OscMsg(a, [get_name(g, idx)])), addr)
+        return
+
+    matches = match_address(a)
+    if not matches:
+        log("    (未识别,忽略)")
+        return
+
+    # set: 带参数; get: 无参数
+    if msg.args:
+        kind, idx = matches[0]
+        raw = msg.args[0]
+        if isinstance(raw, str):
+            try:
+                raw = float(raw)      # X32 有时用字符串传小数
+            except ValueError:
+                pass                  # FX 类型/名称本来就是字符串("/fx/1/type HALL"), 原样往下传
+        sp0 = PARAM_SPECS.get(kind)
+        if sp0 is not None:
+            # 入线换算 (与回包/转发用的 param_wire 成对): dyn/ratio 线上是
+            # 0..11 的索引, 直接落库会把"第 6 档(4:1)"存成"6:1"。只在入线处做一次。
+            # WING: 推子是 dB、静音 1=muted —— 同一份换算表按控台走 (param_from_wire)。
+            raw = param_from_wire(sp0, raw, profile())
+        set_value(kind, idx, raw)
+        label = KIND_LABEL.get(kind_group(kind), kind)
+        sp = PARAM_SPECS.get(kind)
+        if sp is not None and not sp.push:
+            # 新增通道参数 (增益/反相/延时/低切/插入/门/动态/EQ): 标签与单位取自登记表。
+            # 打的是**落库后**的值 (钳制/量化之后) 而不是原始入参 —— 曾经的
+            # 通用分支会把 trim 打成 "fader=3.5 (11.1 dB)", 把 hpf_on 打成
+            # "mute=开", 日志整个失去排查价值。
+            where = ("%02d→Bus%02d" % send_unpack(idx)) if sp.group == "send" \
+                else ("%02d" % idx)
+            log("    SET %s %s %s=%s" % (label, where, sp.label,
+                                         param_fmt(sp, get_value(kind, idx))))
+        elif kind == "ch_dca":
+            log("    SET %s %02d DCA掩码=%d" % (label, idx, int(raw) & 0xFF))
+        elif kind == "fx_on":
+            log("    SET FX%d 开关=%s" % (idx, "开" if raw else "旁通"))
+        elif kind == "fx_type":
+            log("    SET FX%d 算法=%s" % (idx, raw))
+        elif kind == "fx_name":
+            log("    SET FX%d 名称=%s" % (idx, raw))
+        elif kind == "fx_mix":
+            log("    SET FX%d 混合比=%.3f" % (idx, float(raw)))
+        elif fx_par_num(kind) is not None:
+            log("    SET FX%d 参数%02d = %.3f" % (idx, fx_par_num(kind), float(raw)))
+        elif kind.endswith("_on"):
+            log("    SET %s %02d mute=%s" % (label, idx if idx else 1, "开" if raw else "静音"))
+        else:
+            log("    SET %s %02d fader=%.3f (%.1f dB)" % (label, idx if idx else 1, float(raw), STATE.fader_to_db(float(raw))))
+        return
+
+    # get: 单条 -> 单消息回包; 多条 -> Bundle 回包
+    replies = [r for r in (value_reply(k, i) for k, i in matches) if r is not None]
+    if not replies:
+        log("    (当前控台不支持 %d 个匹配目标, 无回包)" % len(matches))
+        return
+    if len(replies) == 1:
+        sock.sendto(encode_message(replies[0]), addr)
+    else:
+        sock.sendto(encode_bundle(replies), addr)
 
 
 # ==================================================================
@@ -7623,3335 +11576,6 @@ def snapshot_state_safe(since_log=None, ver=None):
         return snap                  # 放弃条件模式, 恒返全量 (客户端会看到无 ver)
     snap["ver"] = cur
     return snap
-
-
-# ==================================================================
-# ==== x32sim/version.py
-# ==================================================================
-# -*- coding: utf-8 -*-
-"""x32sim/version — 版本与设备身份常量 (xinfo 回包用)"""
-
-# 模拟器自身版本。与共享协议规范的 spec-v1.13 对齐
-# (v1.13 = 效果器名一律用真台写法 + 效果器页覆盖全部 9 类算法)。
-APP_VERSION = "1.9.0"
-
-# /xinfo 回包的身份字段 (真台回 [ip, name, model, firmware]; 这里 name/model/firmware
-# 是模拟器自称, 原先是 handle() 里的字面量, 收敛到这里统一管理)。
-SIM_NAME = "X32Remote-Sim"
-SIM_MODEL = "X32"
-SIM_FIRMWARE = "3.06-sim"
-
-
-# ==================================================================
-# ==== x32sim/oscsrv.py
-# ==================================================================
-# -*- coding: utf-8 -*-
-"""x32sim/oscsrv — OSC 消息分发 (UDP 主循环的每个包)"""
-
-import struct
-
-
-
-def handle(msg: OscMsg, addr, sock):
-    a = msg.address
-    log("%-28s <- %s  args=%s" % (addr[0], a, msg.args))
-
-    if a == "/xinfo":
-        ip = sock.getsockname()[0]
-        reply = OscMsg("/xinfo", [ip, SIM_NAME, SIM_MODEL, SIM_FIRMWARE])
-        sock.sendto(encode_message(reply), addr)
-        return
-
-    if a in ("/subscribe", "/unsubscribe"):
-        # 协议 /subscribe ,s<地址> [,i<倍数>]: "我关心这个地址, 每 N×50ms 回一次"
-        # 无地址参数时退化成"台面变更推送订阅"(旧行为, 保留兼容)。
-        pat = None
-        for arg in msg.args:
-            if isinstance(arg, str) and arg.startswith("/"):
-                pat = arg
-                break
-        rate = 1
-        for arg in msg.args[1:]:
-            if isinstance(arg, (int, float)) and not isinstance(arg, bool):
-                rate = int(arg)
-                break
-        if a == "/subscribe":
-            first = subscribe_client(addr)
-            if pat:
-                subscribe_pattern(addr, pat, rate)
-            log("    订阅: %s %s (rate=%d, %s, 共 %d 个来源)" % (
-                addr, pat or "(台面变更)", rate,
-                "首次" if first else "续期", len(METER_SUBSCRIBERS)))
-        else:
-            if pat:
-                unsubscribe_pattern(addr, pat)
-            else:
-                unsubscribe_client(addr)
-            log("    退订: %s %s (剩 %d 个来源)" % (
-                addr, pat or "(全部)", len(METER_SUBSCRIBERS)))
-        return
-
-    if a in ("/xremote", "/xcontrol"):
-        # 真台保活: 续期该来源的订阅 (30 秒无续期自动清理)
-        # ⚠️ 真台 /xremote **只推变化**, 不推初始全量; 需要初始值时客户端应逐条
-        #    GET 或 /subscribe。这里保留同语义, 首帧补全由 --xremote-snapshot 开启。
-        subscribe_client(addr)
-        return
-
-    if a.startswith("/meters"):
-        if msg.args and msg.args[0] == 0:
-            unsubscribe_client(addr)
-            log("    电平表退订: %s" % (addr,))
-        else:
-            subscribe_client(addr)
-            log("    电平表订阅: %s (共 %d 个订阅者)" % (addr, len(METER_SUBSCRIBERS)))
-            # 对齐真机: 每次请求立即回一帧
-            floats = compute_levels()
-            blob = struct.pack(">i", len(floats))
-            for v in floats:
-                blob += struct.pack(">f", v)
-            sock.sendto(encode_message(OscMsg("/meters/1", [blob])), addr)
-        return
-
-    if a.startswith("/scene/") and a.endswith("/load"):
-        try:
-            n = int(a.split("/")[2])
-        except (ValueError, IndexError):
-            return
-        with STATE.lock:
-            STATE.scene = n
-        log("    场景切换 -> %d" % n)
-        return
-
-    if a == "/reboot" or a == "/quit":
-        log("    收到重启指令,忽略")
-
-    # 通道/输出名称读写: /ch/01/config/name (字符串参数, 真台同款地址)
-    segs = a.strip("/").split("/")
-    # ⚠️ /fx/<槽>/config/name (FX 机架槽名) 故意排除在外: NAME_COUNTS 没有
-    #    "fx", 早年它在这里被静默 return, 导致 state 里的 fx_name kind 虽然
-    #    齐全却永远收不到查询 (iOS 从 v1.3 起就在问这个地址, 一直是哑的)。
-    #    放它走下面 match_address 的 fx_name 分支, 回包地址由 profiles 给。
-    # ⚠️ fxrtn 是真台拼写 (Maillot: /fxrtn/[01..08]/config/name), 与 fxret
-    #    同一个命名空间, 这里归一并收。
-    if len(segs) == 4 and segs[2] == "config" and segs[3] == "name" and segs[0] != "fx":
-        g = "fxret" if segs[0] == "fxrtn" else segs[0]
-        if g == "main" and segs[1] == "st":
-            idx = 0
-        else:
-            try:
-                idx = int(segs[1].rstrip("LR"))
-            except ValueError:
-                log("    (名称地址未识别: %s)" % a)
-                return
-        cnt = NAME_COUNTS.get(g)
-        if g == "main":
-            pass
-        elif not cnt or not 1 <= idx <= cnt:
-            log("    (名称地址未识别: %s)" % a)
-            return
-        if msg.args and isinstance(msg.args[0], str):
-            set_name(g, idx, msg.args[0])
-        else:
-            sock.sendto(encode_message(OscMsg(a, [get_name(g, idx)])), addr)
-        return
-
-    matches = match_address(a)
-    if not matches:
-        log("    (未识别,忽略)")
-        return
-
-    # set: 带参数; get: 无参数
-    if msg.args:
-        kind, idx = matches[0]
-        raw = msg.args[0]
-        if isinstance(raw, str):
-            try:
-                raw = float(raw)      # X32 有时用字符串传小数
-            except ValueError:
-                pass                  # FX 类型/名称本来就是字符串("/fx/1/type HALL"), 原样往下传
-        sp0 = PARAM_SPECS.get(kind)
-        if sp0 is not None:
-            # 入线换算 (与回包/转发用的 param_wire 成对): dyn/ratio 线上是
-            # 0..11 的索引, 直接落库会把"第 6 档(4:1)"存成"6:1"。只在入线处做一次。
-            raw = param_from_wire(sp0, raw)
-        set_value(kind, idx, raw)
-        label = KIND_LABEL.get(kind_group(kind), kind)
-        sp = PARAM_SPECS.get(kind)
-        if sp is not None and not sp.push:
-            # 新增通道参数 (增益/反相/延时/低切/插入/门/动态/EQ): 标签与单位取自登记表。
-            # 打的是**落库后**的值 (钳制/量化之后) 而不是原始入参 —— 曾经的
-            # 通用分支会把 trim 打成 "fader=3.5 (11.1 dB)", 把 hpf_on 打成
-            # "mute=开", 日志整个失去排查价值。
-            where = ("%02d→Bus%02d" % send_unpack(idx)) if sp.group == "send" \
-                else ("%02d" % idx)
-            log("    SET %s %s %s=%s" % (label, where, sp.label,
-                                         param_fmt(sp, get_value(kind, idx))))
-        elif kind == "ch_dca":
-            log("    SET %s %02d DCA掩码=%d" % (label, idx, int(raw) & 0xFF))
-        elif kind == "fx_on":
-            log("    SET FX%d 开关=%s" % (idx, "开" if raw else "旁通"))
-        elif kind == "fx_type":
-            log("    SET FX%d 算法=%s" % (idx, raw))
-        elif kind == "fx_name":
-            log("    SET FX%d 名称=%s" % (idx, raw))
-        elif kind == "fx_mix":
-            log("    SET FX%d 混合比=%.3f" % (idx, float(raw)))
-        elif fx_par_num(kind) is not None:
-            log("    SET FX%d 参数%02d = %.3f" % (idx, fx_par_num(kind), float(raw)))
-        elif kind.endswith("_on"):
-            log("    SET %s %02d mute=%s" % (label, idx if idx else 1, "开" if raw else "静音"))
-        else:
-            log("    SET %s %02d fader=%.3f (%.1f dB)" % (label, idx if idx else 1, float(raw), STATE.fader_to_db(float(raw))))
-        return
-
-    # get: 单条 -> 单消息回包; 多条 -> Bundle 回包
-    replies = [r for r in (value_reply(k, i) for k, i in matches) if r is not None]
-    if not replies:
-        log("    (当前控台不支持 %d 个匹配目标, 无回包)" % len(matches))
-        return
-    if len(replies) == 1:
-        sock.sendto(encode_message(replies[0]), addr)
-    else:
-        sock.sendto(encode_bundle(replies), addr)
-
-
-# ==================================================================
-# ==== x32sim/webassets.py
-# ==================================================================
-# -*- coding: utf-8 -*-
-"""x32sim/webassets — 内嵌网页与 PWA 资源
-
-AUTO-GENERATED by tools/build_web.py — DO NOT EDIT (禁止手改)
-开发源在 web/ 下 (index.html + app.css + app.js + icon.svg + manifest + sw.js),
-改页面请改那边, 然后跑: python tools/build_web.py
-"""
-
-
-PWA_ICON = r"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-<rect width="512" height="512" rx="96" fill="#14171c"/>
-<g stroke-linecap="round" stroke-width="22">
-<line x1="136" y1="120" x2="136" y2="392" stroke="#3a4150"/>
-<line x1="256" y1="120" x2="256" y2="392" stroke="#3a4150"/>
-<line x1="376" y1="120" x2="376" y2="392" stroke="#3a4150"/>
-</g>
-<g fill="#ffb454" stroke="none">
-<rect x="106" y="150" width="60" height="56" rx="12"/>
-<rect x="226" y="300" width="60" height="56" rx="12"/>
-<rect x="346" y="200" width="60" height="56" rx="12"/>
-</g></svg>"""
-
-PWA_MANIFEST = r"""{"name": "X32 虚拟调音台", "short_name": "X32 调音台", "description": "Behringer X32/M32 虚拟调音台控制台", "start_url": "/", "scope": "/", "display": "standalone", "orientation": "portrait", "background_color": "#121419", "theme_color": "#121419", "icons": [{"src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}]}"""
-
-PWA_SERVICE_WORKER = r"""self.addEventListener('install', e => self.skipWaiting());
-self.addEventListener('activate', e => e.waitUntil(clients.claim()));
-self.addEventListener('fetch', e => { /* 全部直连网络,控制台数据不允许离线缓存 */ });
-"""
-
-WEB_PAGE = r"""<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<meta name="theme-color" content="#121419">
-<meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="X32 调音台">
-<link rel="manifest" href="/manifest.webmanifest">
-<link rel="icon" type="image/svg+xml" href="/icon.svg">
-<link rel="apple-touch-icon" href="/icon.svg">
-<title>X32 模拟器 · 控制台</title>
-<style>
-  :root{--bg:#121419;--card:#1c2029;--card2:#232833;--txt:#e9ebf0;--sub:#8d93a0;
-        --line:#2b303b;--accent:#ffb454;--accent2:#4da3ff;
-        --green:#3ecf8e;--red:#ff6b6b;--track:#0d0f13}
-  *{box-sizing:border-box;margin:0;padding:0}
-  html,body{overscroll-behavior-y:contain}
-  body{font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
-       background:var(--bg);color:var(--txt);padding-bottom:70px;
-       -webkit-tap-highlight-color:transparent;touch-action:manipulation}
-  button,.mute,input[type=range],.tile{touch-action:manipulation}
-  ::selection{background:var(--accent);color:#141414}
-  @media (max-width:768px){
-    .mute{width:44px;height:44px}
-    .row input[type=range]{height:38px}
-    nav button{padding:11px 0 9px;font-size:12px}
-    nav .ic{font-size:21px}
-  }
-  header{position:sticky;top:0;z-index:9;
-         background:linear-gradient(180deg,#191d24,#14171d);color:#fff;
-         padding:13px 18px;font-size:15px;font-weight:700;letter-spacing:.04em;
-         display:flex;align-items:center;gap:10px;
-         border-bottom:1px solid var(--line)}
-  header .dot{width:9px;height:9px;border-radius:50%;background:var(--green);
-              box-shadow:0 0 8px var(--green);animation:pulse 1.6s infinite}
-  @keyframes pulse{50%{opacity:.4}}
-  header small{font-weight:400;opacity:.65;margin-left:auto;font-size:12px;
-               font-variant-numeric:tabular-nums}
-  nav{position:fixed;bottom:0;left:0;right:0;display:flex;z-index:10;
-      background:rgba(18,20,25,.92);backdrop-filter:blur(12px);
-      border-top:1px solid var(--line)}
-  nav button{flex:1;border:0;background:none;padding:9px 0 8px;font-size:11px;
-             color:var(--sub);position:relative}
-  nav button.on{color:var(--accent);font-weight:700}
-  nav button.on::before{content:"";position:absolute;top:0;left:50%;transform:translateX(-50%);
-                        width:26px;height:3px;border-radius:0 0 3px 3px;background:var(--accent)}
-  nav .ic{display:block;font-size:19px;margin-bottom:2px}
-  .page{display:none;padding:14px 14px 20px;max-width:760px;margin:0 auto}
-  .page.on{display:block;animation:pagein .18s ease-out}
-  @keyframes pagein{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
-  h3{display:flex;align-items:center;gap:10px;
-     font-size:12px;color:var(--sub);margin:20px 2px 10px;font-weight:700;
-     letter-spacing:.12em;text-transform:uppercase}
-  h3::after{content:"";flex:1;height:1px;background:var(--line)}
-  .ds{font-size:12px;color:var(--sub);line-height:1.6}
-  .nkin{padding:9px 11px;border-radius:9px;border:1px solid var(--line);font-size:13px;
-        background:var(--card2);color:var(--txt)}
-  .nkin::placeholder{color:#5b6170}
-  select{background:var(--card2);color:var(--txt)}
-  /* ---- 卡片瓷砖 ---- */
-  .tilegrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:9px;margin-bottom:6px}
-  .tile{background:linear-gradient(180deg,var(--card2),var(--card));
-        border:1px solid var(--line);border-radius:13px;padding:13px 6px 11px;
-        text-align:center;font-size:14px;font-weight:700;cursor:pointer;user-select:none;
-        min-height:62px;display:flex;flex-direction:column;align-items:center;
-        justify-content:center;gap:4px;
-        box-shadow:0 2px 8px rgba(0,0,0,.35),inset 0 1px 0 rgba(255,255,255,.05);
-        transition:transform .12s cubic-bezier(.22,1,.36,1),border-color .15s}
-  .tile small{font-weight:500;color:var(--sub);font-size:11px}
-  .tile:active{transform:scale(.94)}
-  .tile.off{background:linear-gradient(180deg,#3a2426,#2c1c1e);border-color:#5c3236;color:var(--red)}
-  .tile.off small{color:#c98084}
-  .tile.run{background:linear-gradient(180deg,#33291a,#282017);border-color:#6b5426;color:var(--accent)}
-  .tile.run small{color:#c7a25e}
-  .tile.add{border-style:dashed;border-width:1.5px;color:var(--sub);opacity:.8;font-size:24px}
-  .tile.add small{font-weight:400;font-size:11px}
-  .tile.add:active{transform:scale(.94)}
-  /* ---- 名称 / 多选芯片 / 实时值 / 撤销 ---- */
-  .chipgrid{display:flex;flex-wrap:wrap;gap:6px;width:100%;margin:2px 0;
-            border-radius:10px;padding:2px}
-  .chipgrid.inv{outline:1.5px solid var(--red);outline-offset:2px}
-  .chip{padding:6px 9px;border-radius:8px;border:1px solid var(--line);background:var(--card2);
-        font-size:12px;font-weight:700;cursor:pointer;user-select:none;color:var(--txt);
-        display:inline-flex;gap:5px;align-items:baseline;transition:background .12s,border-color .12s}
-  .chip em{font-style:normal;font-weight:400;font-size:10px;color:var(--sub)}
-  .chip.on{background:rgba(255,180,84,.16);border-color:var(--accent);color:var(--accent)}
-  .chip.on em{color:#c7a25e}
-  .tile .live{font-size:11px;line-height:1.35;font-weight:500;color:var(--sub);
-              display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-  .tile.undo{border-color:rgba(77,163,255,.5);color:var(--accent2)}
-  .learnbtn{border:1px solid var(--line);border-radius:9px;padding:9px 12px;font-size:12px;
-            background:var(--card2);color:var(--accent);cursor:pointer;font-weight:700}
-  .modal{display:none;position:fixed;inset:0;z-index:60;background:rgba(8,10,14,.72);
-         backdrop-filter:blur(3px);align-items:flex-end;justify-content:center}
-  .modal.on{display:flex}
-  .mdlg{background:var(--card);border:1px solid var(--line);border-radius:18px 18px 0 0;
-        width:100%;max-width:560px;max-height:88vh;overflow-y:auto;
-        padding:18px 18px calc(18px + env(safe-area-inset-bottom));animation:mup .22s ease}
-  @keyframes mup{from{transform:translateY(30px);opacity:0}}
-  @media(min-width:700px){.modal{align-items:center}.mdlg{border-radius:16px}}
-  .mhd{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
-  .mhd b{font-size:16px}
-  .mclose{border:0;background:var(--card2);color:var(--sub);width:32px;height:32px;
-          border-radius:50%;font-size:15px;cursor:pointer;flex:none}
-  .merr{display:none;background:rgba(255,107,107,.12);border:1px solid var(--red);
-        color:var(--red);border-radius:10px;padding:8px 12px;font-size:13px;margin-top:10px}
-  .merr.on{display:block}
-  .btnspin{opacity:.55;pointer-events:none}
-  .inv{border-color:var(--red)!important}
-  .tile .bar{width:82%;margin-top:4px}
-  /* ---- 推子行 ---- */
-  .row{display:flex;align-items:center;gap:10px;background:var(--card);
-       border:1px solid var(--line);border-radius:12px;padding:9px 12px;margin-bottom:8px;
-       box-shadow:0 1px 4px rgba(0,0,0,.3)}
-  .meter{width:9px;height:36px;border-radius:4px;background:var(--track);overflow:hidden;
-         display:flex;align-items:flex-end;flex:none;border:1px solid #23272f}
-  .meter i{display:block;width:100%;height:0%;
-           background:linear-gradient(to top,#3ecf8e 0 62%,#ffb454 62% 85%,#ff6b6b 85%);
-           transition:height .15s linear}
-  .num{font-size:11px;font-weight:600;color:var(--sub);width:62px;flex:none;letter-spacing:.03em}
-  .num b{display:block;font-size:15px;color:var(--txt);font-variant-numeric:tabular-nums}
-  .num small{display:block;font-size:10px;font-weight:500;color:#c7a25e;
-             white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .row input[type=range]{flex:1;-webkit-appearance:none;appearance:none;
-                         background:transparent;height:30px;min-width:0}
-  .row input[type=range]::-webkit-slider-runnable-track{height:7px;border-radius:4px;
-    background:linear-gradient(90deg,#0d0f13,#31374a);
-    box-shadow:inset 0 1px 3px rgba(0,0,0,.6)}
-  .row input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:24px;height:32px;
-    margin-top:-13px;border-radius:6px;
-    background:linear-gradient(180deg,#3d4454,#22262f);
-    border:1px solid #4d566b;
-    box-shadow:0 3px 8px rgba(0,0,0,.55),inset 0 1px 0 rgba(255,255,255,.12)}
-  .row input[type=range]::-moz-range-track{height:7px;border-radius:4px;
-    background:linear-gradient(90deg,#0d0f13,#31374a)}
-  .row input[type=range]::-moz-range-thumb{width:22px;height:30px;border-radius:6px;
-    background:linear-gradient(180deg,#3d4454,#22262f);border:1px solid #4d566b;
-    box-shadow:0 3px 8px rgba(0,0,0,.55)}
-  .db{font-size:11px;color:var(--sub);width:56px;text-align:right;flex:none;
-      font-variant-numeric:tabular-nums}
-  .mute{width:32px;height:32px;border-radius:50%;border:1.5px solid var(--line);
-        background:var(--card2);color:var(--sub);font-weight:800;font-size:13px;
-        flex:none;cursor:pointer;transition:background .15s,border-color .15s}
-  .mute.on{background:var(--red);border-color:var(--red);color:#fff;
-           box-shadow:0 0 10px rgba(255,107,107,.4)}
-  /* ---- 卡片 / 表单 ---- */
-  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;
-        padding:14px 16px;margin-bottom:10px;
-        box-shadow:0 1px 4px rgba(0,0,0,.3)}
-  .card .nm{font-size:15px;font-weight:700}
-  .card .ds{font-size:12px;color:var(--sub);margin:5px 0 10px}
-  .card button{border:0;border-radius:10px;padding:9px 18px;font-size:13px;
-               font-weight:700;cursor:pointer;background:var(--accent);color:#17130c;
-               transition:transform .12s cubic-bezier(.22,1,.36,1),filter .15s}
-  .card button:active{transform:scale(.95)}
-  .card button:hover{filter:brightness(1.08)}
-  .card button.stop{background:var(--red);color:#fff}
-  .keybtn{min-width:96px;min-height:48px;font-size:15px;border-radius:12px;
-          border:0;background:var(--accent);color:#17130c;font-weight:800;cursor:pointer}
-  .bar{height:5px;border-radius:3px;background:var(--track);margin-top:11px;overflow:hidden}
-  .bar i{display:block;height:100%;width:0;
-         background:linear-gradient(90deg,#c98a3a,var(--accent));
-         transition:width .2s}
-  .prog{font-size:11px;color:var(--sub);margin-top:5px}
-  .infobox{background:var(--card);border:1px solid var(--line);border-radius:14px;
-           padding:14px 16px;font-size:13px;line-height:2}
-  .infobox b{color:var(--accent)}
-  #logbox{background:#0b0d10;color:#8fd6a2;font:11px/1.7 Menlo,Consolas,monospace;
-          border:1px solid var(--line);border-radius:14px;padding:12px 14px;
-          height:300px;overflow-y:auto;white-space:pre-wrap}
-  .scenechip{display:inline-block;background:rgba(255,180,84,.12);color:var(--accent);
-             border:1px solid rgba(255,180,84,.3);
-             border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700;
-             font-variant-numeric:tabular-nums}
-  .toast{position:fixed;left:50%;bottom:84px;transform:translateX(-50%) translateY(14px);
-         background:#241505;color:var(--accent);border:1px solid rgba(255,180,84,.55);
-         border-radius:12px;padding:11px 18px;font-size:13px;font-weight:600;
-         box-shadow:0 6px 22px rgba(0,0,0,.55);z-index:9999;opacity:0;
-         transition:opacity .3s,transform .3s;max-width:86vw;pointer-events:none}
-  .toast.in{opacity:1;transform:translateX(-50%) translateY(0)}
-  .fadj{background:var(--card2);color:var(--sub);border:1px solid var(--line);
-        border-radius:8px;min-width:26px;padding:6px 4px;font-size:13px;line-height:1;
-        font-weight:700;flex:none}
-  .fadj:active{background:var(--accent);color:#141414}
-  @media (max-width:768px){ .fadj{min-width:30px;padding:9px 4px} }
-  /* ---- 混响控制 (FX 槽) ---- */
-  .fxpars{display:flex;flex-direction:column;gap:7px;margin-top:9px}
-  .fxrow{display:flex;align-items:center;gap:10px}
-  .fxlab{font-size:12px;color:var(--sub);width:66px;flex:none}
-  .fxrow input[type=range]{flex:1;min-width:0;height:28px;-webkit-appearance:none;appearance:none;
-                           background:transparent}
-  /* 与推子行同一套滑杆外观，免得混响页看起来像另一个产品 */
-  .fxrow input[type=range]::-webkit-slider-runnable-track{height:7px;border-radius:4px;
-    background:linear-gradient(90deg,#0d0f13,#31374a);box-shadow:inset 0 1px 3px rgba(0,0,0,.6)}
-  .fxrow input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;height:28px;
-    margin-top:-11px;border-radius:6px;background:linear-gradient(180deg,#3d4454,#22262f);
-    border:1px solid #4d566b;box-shadow:0 3px 8px rgba(0,0,0,.55)}
-  .fxrow input[type=range]::-moz-range-track{height:7px;border-radius:4px;
-    background:linear-gradient(90deg,#0d0f13,#31374a)}
-  .fxrow input[type=range]::-moz-range-thumb{width:20px;height:26px;border-radius:6px;
-    background:linear-gradient(180deg,#3d4454,#22262f);border:1px solid #4d566b}
-  .fxval{font-size:12px;width:70px;text-align:right;flex:none;color:var(--txt);
-         font-variant-numeric:tabular-nums}
-  /* 枚举参数用下拉 (选项是真台 enum 索引的中文名, 比滑杆直观) */
-  .fxrow select.fxsel{flex:1;min-width:0;height:28px;border-radius:6px;
-    background:var(--card2);color:var(--txt);border:1px solid var(--line);
-    font-size:12px;padding:0 6px}
-  /* 参数多的算法 (GEQ 32 项等) 宽屏双列; 手机窄屏仍单列, 不硬挤 */
-  .fxgrid{display:grid;grid-template-columns:1fr;gap:0 14px}
-  @media (min-width:760px){ .fxgrid{grid-template-columns:1fr 1fr} }
-  .fx-tag{margin-left:auto;white-space:nowrap}
-  #fxGroup .chip{display:inline-flex;align-items:center;gap:5px;padding:6px 10px;
-                 border:1px solid var(--line);border-radius:9px;background:var(--card2);font-size:12px}
-  #fxGroup .chip.on{border-color:var(--accent);background:rgba(255,180,84,.14);color:var(--accent)}
-  /* ---- 危险卡长按确认 ---- */
-  .tile{position:relative}
-  .card{position:relative}
-  .holdbar{position:absolute;left:0;bottom:0;height:4px;width:0;
-           background:var(--red);border-radius:3px;z-index:5;
-           box-shadow:0 0 8px rgba(255,107,107,.6)}
-  .readyok{color:#22c55e;font-weight:700}
-  .readyn{color:var(--sub)}
-  .schedrow{display:flex;gap:8px;align-items:center;background:rgba(255,180,84,.08);
-            border:1px dashed rgba(255,180,84,.4);border-radius:12px;
-            padding:8px 12px;margin-bottom:8px;font-size:13px;flex-wrap:wrap}
-  .schedrow b{color:var(--accent)}
-  .schedrow .cd{font-variant-numeric:tabular-nums;color:var(--sub)}
-
-/* ---- 通道参数面板 (增益/反相/延时/低切/插入/噪声门) ---- */
-/* 编号本身是入口: 做成可点的圆角小牌, 有处理启用时右上角亮一个橙点。
-   不加额外按钮 —— 通道条在 390px 屏上已经挤满, 再塞一个图标会挤掉推子。 */
-.chnum{display:inline-block;padding:1px 5px;border-radius:6px;cursor:pointer;
-       border:1px solid transparent;transition:background .12s,border-color .12s}
-.chnum:active{background:var(--card2);border-color:var(--line)}
-.chnum.on{position:relative;background:var(--card2);border-color:#3a4050}
-.chnum.on::after{content:'';position:absolute;top:-2px;right:-3px;width:6px;height:6px;
-                 border-radius:50%;background:var(--accent);box-shadow:0 0 5px var(--accent)}
-.chp-row{display:flex;align-items:center;gap:10px;padding:6px 2px;
-         border-bottom:1px solid var(--line)}
-.chp-row:last-child{border-bottom:0}
-.chp-l{width:66px;flex:none;font-size:13px;color:var(--txt)}
-.chp-v{width:74px;flex:none;text-align:right;font-size:12px;color:var(--sub);
-       font-variant-numeric:tabular-nums;white-space:nowrap}
-.chp-row input[type=range]{flex:1;-webkit-appearance:none;appearance:none;
-                           background:transparent;height:30px;min-width:0}
-.chp-row input[type=range]::-webkit-slider-runnable-track{height:6px;border-radius:4px;
-  background:linear-gradient(90deg,#0d0f13,#31374a);box-shadow:inset 0 1px 3px rgba(0,0,0,.6)}
-.chp-row input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;height:28px;
-  margin-top:-11px;border-radius:6px;background:linear-gradient(180deg,#3d4454,#22262f);
-  border:1px solid #4d566b;box-shadow:0 3px 8px rgba(0,0,0,.55)}
-.chp-row input[type=range]::-moz-range-track{height:6px;border-radius:4px;
-  background:linear-gradient(90deg,#0d0f13,#31374a)}
-.chp-row input[type=range]::-moz-range-thumb{width:20px;height:26px;border-radius:6px;
-  background:linear-gradient(180deg,#3d4454,#22262f);border:1px solid #4d566b}
-.chp-tog{flex:1;max-width:120px;padding:8px 10px;border-radius:9px;font-size:13px;font-weight:700;
-         border:1px solid var(--line);background:var(--card2);color:var(--sub)}
-.chp-tog.on{background:rgba(255,180,84,.16);border-color:var(--accent);color:var(--accent)}
-.chp-row select{flex:1;max-width:130px}
-.chp-row.off{opacity:.5}
-.chp-row.off .chp-l{color:var(--sub)}
-
-/* ---- 通道参数面板: 分页与键盘精调 ---- */
-.chp-tabs{display:flex;gap:6px;margin:8px 0 2px}
-.chp-tabs button{flex:1;padding:8px 4px;border-radius:9px;font-size:13px;font-weight:700;
-  border:1px solid var(--line);background:var(--card2);color:var(--sub)}
-.chp-tabs button.on{background:rgba(255,180,84,.16);border-color:var(--accent);color:var(--accent)}
-.chp-tab{display:none}
-.chp-tab.on{display:block}
-/* 数值标签当输入入口: 白天也要看得出"这里能点"—— 加虚线下划线 */
-.chp-v{cursor:text;text-decoration:underline dotted rgba(160,170,190,.45);
-  text-underline-offset:3px}
-.chp-v input.chp-in{width:74px;padding:2px 4px;font-size:12px;text-align:right;
-  border-radius:6px;border:1px solid var(--accent);background:var(--card2);
-  color:var(--txt);font-variant-numeric:tabular-nums}
-
-/* ---- 扫码连接（设置页）: 白底二维码 + 右侧说明 ---- */
-.qrrow{display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start}
-.qrbox{background:#fff;border-radius:14px;padding:10px;line-height:0;box-shadow:0 3px 12px rgba(0,0,0,.28)}
-.qrbox img{display:block;width:164px;height:164px}
-.qrhint{flex:1;min-width:210px}
-.qrurl{font-size:16px;font-weight:700;user-select:all;word-break:break-all;margin:6px 0 2px}
-.qracts{margin:8px 0 4px}
-/* 两张码并排：左浏览器、右 App。窄屏换行也不会挤成一条 */
-.qrdual{display:flex;gap:12px;flex:0 0 auto}
-.qrcell{text-align:center;min-width:0}
-.qrcap{font-size:11px;color:var(--sub);margin-top:6px;line-height:1.4}
-.qrcap b{color:var(--txt)}
-.qrbox.sm{padding:8px;border-radius:11px;box-shadow:0 2px 8px rgba(0,0,0,.26)}
-.qrbox.sm img{width:118px;height:118px}
-.pairsmall{font-size:11px;color:var(--sub);word-break:break-all;margin:2px 0 6px;user-select:all;opacity:.9}
-
-/* ---- 自动增益 / 自动推子 ---- */
-.rrow{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-.rrow select,.rrow input[type=number]{padding:7px 8px;border-radius:8px;border:1px solid var(--line);
-  background:var(--card2);color:var(--txt);font-size:13px}
-.rrow input[type=number]{width:76px}
-.rsw{display:flex;gap:6px;align-items:center;font-size:13px}
-.rtarget{font-size:13px;display:flex;gap:6px;align-items:center}
-.rdel{margin-left:auto;background:#565d6d;color:#fff;font-size:12px;padding:6px 10px}
-.ridercard{margin-top:10px}
-.rmeter{height:10px;background:var(--track);border-radius:6px;overflow:hidden;margin:8px 0 4px}
-.rmeter span{display:block;height:100%;width:0;border-radius:6px;
-  background:linear-gradient(90deg,var(--green),#eab308,var(--red));transition:width .12s linear}
-
-/* ---- 目标曲线编辑器 ---- */
-.rrow2{margin-top:6px}
-.curvebox{margin:8px 0 2px}
-.curvesvg{width:100%;height:84px;display:block;background:var(--track);border-radius:10px;touch-action:none}
-.cgrid{fill:transparent}
-.cline{fill:none;stroke:var(--accent);stroke-width:2}
-.cdot{fill:var(--accent);stroke:#0b0d11;stroke-width:1.5;cursor:grab}
-.cfn{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:12px;color:var(--sub);margin:4px 0}
-.cbtn{background:#565d6d;color:#fff;font-size:12px;padding:5px 9px}
-
-/* ---- 效果器面板图 (v1.8) ---- */
-.fxshot{margin:6px 0 8px;border-radius:10px;overflow:hidden;
-  border:1px solid var(--line);background:#0d0f13;line-height:0}
-.fxshot img{width:100%;height:auto;display:block}
-.fxshot.empty{display:none}
-.fxgal{display:grid;grid-template-columns:1fr;gap:10px;margin-top:8px}
-.fxgal figure{margin:0;border:1px solid var(--line);border-radius:12px;overflow:hidden;
-  background:var(--card2)}
-.fxgal img{width:100%;height:auto;display:block;background:#0d0f13}
-.fxgal figcaption{padding:7px 10px;font-size:12.5px;display:flex;gap:8px;
-  align-items:center;justify-content:space-between}
-.fxgal .cn{color:var(--sub);font-size:11.5px}
-.fxgal .tag{font-size:11px;padding:1px 6px;border-radius:999px;
-  border:1px solid var(--line);color:var(--sub);flex:none}
-@media(min-width:700px){.fxgal{grid-template-columns:1fr 1fr}}
-</style>
-</head>
-<body>
-<header><span class="dot" id="conn"></span>X32 虚拟调音台
-  <small id="hdinfo">连接中…</small></header>
-
-<div class="page" id="pg-mix"><h3>🎚 输入通道 1-32 <span class="scenechip" id="scene">场景 1</span></h3>
-  <div id="chlist"></div>
-  <h3>Aux In 辅助输入 1-6</h3><div id="auxlist"></div>
-  <h3>USB 播放返回 1-2</h3><div id="usblist"></div>
-  <h3>FX Return 效果返回 1-8</h3><div id="fxretlist"></div>
-  <h3>📤 输出 Bus 1-16 <span class="scenechip" id="scene2">场景 1</span></h3>
-  <div id="buslist"></div>
-  <h3>Matrix 矩阵输出 1-6</h3><div id="mtxlist"></div>
-  <h3>主输出 Main LR</h3><div id="mainrow"></div>
-  <h3>DCA 编组 1-8</h3><div id="dcalist"></div></div>
-
-<div class="page on" id="pg-cards"><h3>🎬 演出卡片 (点按运行 · 实时显示台面值)</h3>
-  <div class="ds">点卡片=执行,自动按顺序跑动作;执行前自动存撤销点,执行中再点一次停止。含「全体」类动作的危险卡需<b>长按 0.8 秒</b>执行。新卡片点最后的「➕ 添加」。</div>
-  <div id="schedRow"></div>
-  <div class="tilegrid" id="undoRow" style="grid-template-columns:repeat(auto-fill,minmax(220px,1fr))"></div>
-  <div class="tilegrid" id="tileCards"></div>
-  <h3>📌 台面预设 (可选范围 · 点按回归)</h3>
-  <div class="card"><div class="nm">保存当前台面为预设</div>
-    <div class="ds">可以只记推子/静音/名称/DCA 归属/FX 整槽，也能只挑几路。回归时<b>只写范围内的参数</b>——没勾的通道一个字节都不动，静音立即恢复、推子平滑滑回。</div>
-    <button onclick="openSnapModal()">💾 保存预设（可选范围）</button></div>
-  <div id="snaplist"></div>
-</div>
-
-<div class="page" id="pg-keys"><h3>⚡ 控制键 (点按微调)</h3>
-  <div class="ds">点按键=按步长(设置页可调)渐变增减目标推子,适合歌手耳返、主输出这类现场微调。新按键点最后的「➕ 添加」。</div>
-  <div class="tilegrid" id="tileKeys"></div>
-</div>
-
-<div class="page" id="pg-fx"><h3>🎛 效果器 FX 1-8 (61 种算法 · Tap 定拍 · 混响同步)</h3>
-  <div class="card">
-    <div class="nm">🎛 效果库来源：<span id="fxConsoleName">—</span>
-      <span class="ds" id="fxConsoleTag" style="margin:0"></span></div>
-    <div class="ds" id="fxConsoleNote">效果槽、算法清单与参数索引都来自<b>当前控台驱动</b> —— 在「设置」里换控台，这里会自动换库。</div>
-    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:6px">
-      <button id="fxGalBtn" onclick="fxGallery()">🖼 效果器图鉴</button>
-      <button id="fxPullBtn" onclick="fxPull()">⟳ 从真台同步效果</button>
-      <span class="ds" id="fxPullNote" style="margin:0">读回真台各效果槽的算法/开关/参数（需桥接真台）</span>
-    </div>
-  </div>
-  <div class="ds">这里是 <b id="fxConsoleName2">当前控台</b> 的 <b>FX 效果槽 1-8</b>。给槽选一个算法后, 就能调它的<b>全部参数</b> —— 效果库 <b>61 种</b>算法 (混响/延迟/组合/调制/变调/均衡/动态/增强/吉他) 按分类分组, 数值是滑杆、枚举是下拉。<br>
-    算法名照<b>真台写法</b>（X32-Edit / 固件 FX 页上的英文名，如 Stereo Chorus），括号里是中文辅助 —— 照着台子上的字找就对得上。<br>
-    <b>Tap 定拍</b>只对带时间参数的算法有效（混响的衰减、延迟的拍值），再按「同步设置」铺给联动的其他槽。<br>
-    ⚠️ 标了「仅FX1-4」的算法占 DSP 算力, 装不进 FX 5-8 (真台同样限制)。</div>
-
-  <div class="card">
-    <div class="nm">🥁 Tap 定拍</div>
-    <div class="ds">连点 2 下以上。取最近 8 个间隔的均值算 BPM(比只看最后一拍稳得多); 间隔超过 2 秒自动重新开始, 靠得太近的抖动会被忽略。</div>
-    <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:10px 0">
-      <button id="tapBtn" onpointerdown="tapHit()"
-        style="font-size:22px;font-weight:800;letter-spacing:.08em;padding:18px 40px;border:0;
-               border-radius:16px;background:var(--accent);color:#141414;cursor:pointer">TAP</button>
-      <div style="font-size:13px;line-height:1.7">
-        <b id="tapBpm" style="font-size:17px;font-variant-numeric:tabular-nums">— BPM</b><br>
-        <span class="ds" id="tapInfo" style="margin:0">连点 2 下以上定拍</span>
-      </div>
-      <button style="background:#565d6d;color:#fff;padding:9px 14px" onclick="tapReset()">清零</button>
-      <button style="background:var(--green);color:#141414;padding:9px 16px;font-weight:700" onclick="tapApply()">↧ 换算并写入</button>
-    </div>
-    <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
-      <label style="font-size:13px">时值
-        <select id="fxNote" onchange="fxSyncSet()" class="nkin"></select></label>
-      <label style="font-size:13px;display:flex;gap:5px;align-items:center">
-        <input type="checkbox" id="fxDotted" onchange="fxSyncSet()"> 附点 ×1.5</label>
-      <span class="ds" id="fxTapSecs" style="margin:0"></span>
-    </div>
-  </div>
-
-  <div class="card">
-    <div class="nm">🔗 同步设置</div>
-    <div class="ds">决定「谁说了算」, 避免软件与真台互写产生回声回环。改动会自动下发真台(桥接模式)。</div>
-    <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:8px 0">
-      <label style="font-size:13px">模式
-        <select id="fxMode" onchange="fxSyncSet()" class="nkin">
-          <option value="software">软件主导 (软件改→铺全组; 真台改只镜像)</option>
-          <option value="console">台面主导 (真台改→铺全组; 软件改不外扩)</option>
-          <option value="both">双向互同步 (谁改都铺全组)</option>
-        </select></label>
-      <label style="font-size:13px;display:flex;gap:5px;align-items:center">
-        <input type="checkbox" id="fxFollow" onchange="fxSyncSet()"> 跟随 Tap (Tap 结果自动写入联动组)</label>
-    </div>
-    <div class="ds" style="margin:0 0 6px">联动组 — 勾选的槽互相同步混响时间(全不勾 = 所有混响槽):</div>
-    <div id="fxGroup" style="display:flex;gap:6px;flex-wrap:wrap"></div>
-  </div>
-
-  <h3>🎚 效果槽 1-8</h3>
-  <div id="fxlist"></div>
-</div>
-
-<div class="page" id="pg-set">
-  <div class="infobox">
-    UDP 端口 <b id="pinfoUdp">10023</b> · 网页端口 <b id="pinfoWeb">8080</b> · 电平表订阅者 <b id="subs">0</b><br>
-    手机 App:设置 → 调音台 IP 填本机局域网 IP,或用自动发现<br>
-    本网页与 UDP 共享同一台"虚拟调音台",改动实时互通
-  </div>
-  <h3>🔌 网络端口 (可自由设置 · 重启生效)</h3>
-  <div class="card">
-    <div class="ds">端口是模拟器<b>启动时绑定</b>的,运行中改不了 —— 保存后<b>重启模拟器</b>(Ctrl+C 后重新启动)
-      才生效。默认 OSC/UDP <b>10023</b>、网页 <b>8080</b>;两个端口不能相同。</div>
-    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:8px">
-      <label style="font-size:13px;display:flex;gap:6px;align-items:center">OSC / UDP
-        <input id="pUdp" class="nkin" style="width:92px" inputmode="numeric" placeholder="10023"
-               oninput="window.portDirty=true"></label>
-      <label style="font-size:13px;display:flex;gap:6px;align-items:center">网页
-        <input id="pWeb" class="nkin" style="width:92px" inputmode="numeric" placeholder="8080"
-               oninput="window.portDirty=true"></label>
-      <button onclick="savePorts()">💾 保存</button>
-      <button style="background:#565d6d;color:#fff" onclick="resetPorts()">↺ 恢复默认</button>
-      <span class="scenechip" id="portStat">…</span>
-    </div>
-    <div id="portNote" class="ds" style="margin-top:8px"></div>
-  </div>
-  <h3>🎛 控台型号 (驱动层)</h3>
-  <div class="card">
-    <div class="ds">卡片动作、控制键、桥接转发都走同一套「语义目标」管道,由控台驱动翻译成真实地址。
-      换控台只需在这里切换 —— X32 与 M32 同协议(M32 是 Midas 贴牌),驱动完全复用。</div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-      <select id="ctrlSel" class="nkin" onchange="setConsole(this.value)" style="min-width:230px"></select>
-      <span class="scenechip" id="ctrlStat">…</span>
-    </div>
-    <div id="ctrlNote" class="ds" style="margin-top:8px"></div>
-    <div id="ctrlCaps" class="ds" style="margin-top:6px"></div>
-  </div>
-  <h3>📱 手机 / 安卓平板连接</h3>
-  <div class="card">
-    <div class="qrrow">
-      <div class="qrdual">
-        <div class="qrcell">
-          <div class="qrbox sm"><img id="lanqr" alt="浏览器扫码进入控制台" width="118" height="118"></div>
-          <div class="qrcap"><b>浏览器</b> · 扫码即开</div>
-        </div>
-        <div class="qrcell" id="paircell">
-          <div class="qrbox sm"><img id="pairqr" alt="手机 App 扫码配对" width="118" height="118"></div>
-          <div class="qrcap"><b>App</b> · 扫码配对</div>
-        </div>
-      </div>
-      <div class="qrhint">
-        <div class="nm">手机连<b>同一个 WiFi</b>，扫任意一张</div>
-        <div class="ds">左：相机 / 微信扫 → 直接打开网页控制台，不装 App 也能全功能操作。<br>
-          右：iOS / Android App 里点「扫码连接」→ 自动填好 IP 与端口；<br>
-          也可以让<b>系统相机 / 微信直接扫右边这张</b> → 自动打开 App 并连上。</div>
-        <div class="qrurl" id="lanurl">…</div>
-        <div class="qracts"><button onclick="copyLan()" id="lanCopy">📋 复制地址</button><button onclick="copyPair()" id="pairCopy" style="margin-left:8px">📋 复制配对码</button></div>
-        <div class="pairsmall" id="paircode">…</div>
-        <div class="ds" id="pairhint">配对码里带着 OSC 端口，改过端口也能一次连对。</div>
-        <div class="ds">安卓 Chrome 菜单 → <b>添加到主屏幕</b>，即可像 App 一样全屏使用（图标自动生成）<br>
-          其他设备（OSC 客户端）把调音台 IP 填为 <b id="lanip2">…</b>，端口 <b id="pinfoUdp2">10023</b></div>
-      </div>
-    </div>
-  </div>
-  <h3>OSC 收发日志 (最近 40 条)</h3><div id="logbox"></div>
-  <h3 id="sec-keycfg">🔧 控制键步长与渐变速度</h3>
-  <div class="card">
-    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-      <label style="font-size:13px">步长
-        <select id="stepSel" onchange="setKeyCfg()" style="padding:8px;border-radius:8px;border:1px solid var(--line);font-size:13px">
-          <option value="1.5">1.5 dB</option><option value="3" selected>3 dB</option><option value="6">6 dB</option>
-        </select></label>
-      <label style="font-size:13px">渐变
-        <select id="rampSel" onchange="setKeyCfg()" style="padding:8px;border-radius:8px;border:1px solid var(--line);font-size:13px">
-          <option value="0">瞬间</option><option value="0.4" selected>0.4 秒</option><option value="1">1 秒</option><option value="2">2 秒</option>
-        </select></label>
-    </div>
-  </div>
-  <h3>🏷 通道命名 (调音台 / 卡片 / 控制键显示同一名称)</h3>
-  <div class="card">
-    <div class="ds">给通道起名字,卡片和推子行就会显示「音乐」「人声」而不是「通道15」。连真台后这些名字也可以从台子直接读取。</div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-      <select id="nmGroup" onchange="updNmIdx()" class="nkin">
-        <option value="ch">输入通道</option><option value="auxin">Aux In</option>
-        <option value="usb">USB 返回</option><option value="fxret">FX 返回</option>
-        <option value="bus">Bus 输出</option><option value="mtx">Matrix</option>
-        <option value="dca">DCA 编组</option><option value="main">主输出</option>
-      </select>
-      <select id="nmIdx" class="nkin"></select>
-      <input id="nmVal" class="nkin" style="flex:1;min-width:120px" placeholder="名称(最长12字),留空=清除" maxlength="12">
-      <button onclick="saveName()">💾 保存</button>
-    </div>
-  </div>
-  <h3>📦 配置导入 / 导出 (卡片 · 控制键 · 通道命名 · 设置)</h3>
-  <div class="card">
-    <div class="ds">导出一个 JSON 备份文件;导入会覆盖现有的卡片、控制键、命名与步长设置(台面推子状态不受影响)。换手机、备份演出配置都用它。</div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-      <button onclick="doExport()">📤 导出配置文件</button>
-      <button style="background:#565d6d;color:#fff" onclick="$('#impFile').click()">📥 选择文件导入</button>
-      <input type="file" id="impFile" accept=".json,application/json" style="display:none" onchange="impFileChg(this)">
-    </div>
-    <textarea id="impText" class="nkin" style="width:100%;min-height:64px;margin-top:8px;display:none"
-      placeholder="或把配置 JSON 粘贴到这里"></textarea>
-    <div id="impRow" style="display:none;margin-top:8px;gap:8px;align-items:center;flex-wrap:wrap">
-      <button style="background:var(--green)" onclick="doImport()">✔ 确认导入</button>
-      <span class="ds" style="margin:0">导入前请确认文件来源可信</span>
-    </div>
-  </div>
-  <h3>🌉 桥接真台 (写入转发 · /xremote 保活 · 状态回读)</h3>
-  <div class="card">
-    <div class="ds">同一局域网内点「🔍 扫描」即可自动找到调音台,点一下就连上——手机端不用装任何东西。连接后:网页/卡片/控制键的写入自动转发到真台;真台面板上的手动改动回读同步到本页;卡片渐变中真台被人手动干预 → 只停该通道并通知。连过一台会被记住,下次开服务自动重连。</div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-      <input id="brAddr" class="nkin" style="flex:1;min-width:170px" placeholder="真台地址,如 192.168.1.100:10023">
-      <button onclick="brGo()">🔌 连接</button>
-      <button style="background:#565d6d;color:#fff" onclick="api('/api/bridge',{addr:''});showToast('桥接已断开,已清除自动重连')">断开</button>
-      <span class="scenechip" id="brStat">未桥接</span>
-    </div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px">
-      <button id="scanBtn" style="background:var(--accent);color:#141414" onclick="scanConsoles()">🔍 扫描局域网调音台</button>
-      <span class="ds" style="margin:0" id="scanHint">同一网段直连即可,无需配置</span>
-    </div>
-    <div id="scanRes" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"></div>
-  </div>
-  <h3>🗑 管理 (编辑 / 删除卡片·控制键)</h3>
-  <div id="cardlist"></div>
-  <div id="keylist"></div>
-  <h3>📭 数据读取与调用</h3>
-  <div class="card"><div class="nm">调用预设 → 空台子 → 回传数据</div>
-    <div class="ds">①「保存预设」记录台面 ②「空台子」全部推子拉底得到干净空台 ③「回传数据」把最近保存的预设平滑写回。<br>这套流程走标准 X32 OSC 指令,连真调音台同样适用。</div>
-    <div style="display:flex;gap:10px;flex-wrap:wrap">
-      <button style="background:#565d6d;color:#fff" onclick="api('/api/console',{action:'clear'})">🧹 空台子</button>
-      <button onclick="api('/api/console',{action:'recall_last'})">↩️ 回传数据</button>
-    </div>
-  </div>
-</div>
-
-
-<div class="page" id="pg-rider">
-  <div class="infobox">
-    <b>自动增益 / 自动推子</b>：把通道电平稳在目标值（默认 -18 dBFS），可以边演边调。
-    <b>推子</b>模式动的是推子（接真台时电动推子看得见它在走）；<b>增益</b>模式动数字增益，推子不动。<br>
-    三档速度改的是「平均窗口 / 死区 / 每秒最大修正」——所以它不是每个字都拉一下，而是平滑地跟着走。
-  </div>
-  <div class="card">
-    <div class="rrow">
-      <label class="rsw"><input type="checkbox" id="riderOn" onchange="riderGlobal(this.checked)"> 总开关</label>
-      <input id="riderCh" class="nkin" style="width:76px" inputmode="numeric" placeholder="1-32">
-      <button onclick="riderAdd()">➕ 添加通道</button>
-      <button style="background:#565d6d;color:#fff" onclick="riderReset()">↺ 清空修正</button>
-    </div>
-    <div class="ds" id="riderHint">还没配置通道。填通道号（1-32）→ 添加 → 打开「启用」。</div>
-  </div>
-  <div id="riderlist"></div>
-</div>
-
-<nav>
-  <button class="on" data-p="cards"><span class="ic">🎬</span>卡片</button>
-  <button data-p="fx"><span class="ic">🎛</span>效果</button>
-  <button data-p="keys"><span class="ic">⚡</span>控制键</button>
-  <button data-p="rider"><span class="ic">🎚</span>自动</button>
-  <button data-p="mix"><span class="ic">🎚</span>调音台</button>
-  <button data-p="set"><span class="ic">⚙️</span>设置</button>
-</nav>
-
-<div class="modal" id="cardModal" onclick="if(event.target===this)closeCardModal()">
-  <div class="mdlg" role="dialog" aria-label="新建演出卡片">
-    <div class="mhd"><b id="cardModalTitle">➕ 新建演出卡片</b>
-      <button class="mclose" onclick="closeCardModal()" aria-label="关闭">✕</button></div>
-    <div class="ds">把一组动作按顺序拼成一张卡片:先瞬时动作(静音/切场景),再渐变动作。保存后出现在「卡片」页卡片墙,重启也不丢。</div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0">
-      <input id="ncName" placeholder="卡片名称 *必填,如:🎤 开场模式" style="flex:1;min-width:150px" class="nkin"
-             oninput="this.classList.remove('inv');hideCardErr()">
-      <input id="ncDesc" placeholder="一句话描述(可选)" style="flex:2;min-width:180px" class="nkin">
-    </div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-      <select id="caKind" onchange="updCaParams()" class="nkin">
-        <option value="mute">静音通道 (可多选)</option><option value="mute_bus">静音 Bus (可多选)</option>
-        <option value="scene">切换场景（全局 / 局部）</option>
-        <option value="preset">📌 调用预设（带范围与渐变）</option>
-        <option value="unmute_all">全部取消静音</option>
-        <option value="wait">等待 / 停顿</option>
-        <option value="fade_all">全体推子渐变</option><option value="fade_odd_even">奇偶过渡</option>
-        <option value="fade_ch">通道渐变 (可多选)</option><option value="fade_bus">Bus 渐变 (可多选)</option>
-        <option value="fade_from">通道从指定值渐变</option><option value="fade_from_bus">Bus 从指定值渐变</option>
-        <option value="rel_db">相对增减 dB (可多选)</option>
-        <option value="set">⚡ 通用设置 (任意目标 + 值)</option>
-        <option value="osc">⚠️ 原始 OSC (高级 · 仅当前控台)</option>
-      </select>
-      <span id="caParams" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;width:100%"></span>
-      <button onclick="addAct()">＋加入动作</button>
-    </div>
-    <div id="actChips" style="margin-top:8px"></div>
-    <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
-      <span style="font-size:12px;color:var(--sub)">执行完自动接续:</span>
-      <select id="ncNext" class="nkin" style="flex:1"></select>
-    </div>
-    <div class="merr" id="cardErr"></div>
-    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px">
-      <button style="background:var(--card2);color:var(--txt)" onclick="closeCardModal()">取消</button>
-      <button id="cardSaveBtn" style="background:var(--green)" onclick="saveCard()">💾 保存卡片</button>
-    </div>
-  </div>
-</div>
-
-<div class="modal" id="snapModal" onclick="if(event.target===this)closeSnapModal()">
-  <div class="mdlg" role="dialog" aria-label="保存台面预设">
-    <div class="mhd"><b>📌 保存台面预设</b>
-      <button class="mclose" onclick="closeSnapModal()" aria-label="关闭">✕</button></div>
-    <div class="ds">先选「存哪些组」，再选「存哪些参数」；编号留空=该组全部，也可以只挑几路（如 1-8,13-16）。保存按当前台面取值。</div>
-    <input id="snapName" class="nkin" style="width:100%;margin:8px 0" maxlength="20"
-           placeholder="预设名称（可选），如：开场-人声突出">
-    <div style="display:flex;gap:10px;align-items:flex-start;margin:8px 0">
-      <b style="font-size:12px;color:var(--sub);min-width:34px;padding-top:6px">组</b>
-      <div id="snapGroups" class="chipgrid" style="flex:1"></div></div>
-    <div style="display:flex;gap:10px;align-items:flex-start;margin:8px 0">
-      <b style="font-size:12px;color:var(--sub);min-width:34px;padding-top:6px">参数</b>
-      <div id="snapParams" class="chipgrid" style="flex:1"></div></div>
-    <div style="display:flex;gap:10px;align-items:center;margin:8px 0">
-      <b style="font-size:12px;color:var(--sub);min-width:34px">编号</b>
-      <input id="snapIdx" class="nkin" style="flex:1;min-width:150px"
-             placeholder="留空=全部，如 1-8,13-16">
-    </div>
-    <div class="ds" id="snapCount" style="margin:4px 0;color:var(--accent)"></div>
-    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:12px">
-      <button style="background:var(--card2);color:var(--txt)" onclick="closeSnapModal()">取消</button>
-      <button style="background:var(--green)" onclick="doSaveSnap()">💾 保存</button>
-    </div>
-  </div>
-</div>
-
-<div class="modal" id="chParamModal" onclick="if(event.target===this)closeChParams()">
-  <div class="mdlg" role="dialog" aria-label="通道参数">
-    <div class="mhd"><b id="chpTitle">通道参数</b>
-      <button class="mclose" onclick="closeChParams()" aria-label="关闭">✕</button></div>
-    <div class="ds">面板按台面实际能力显示（Bus 是 6 段 EQ，FX 返回只有声像和发送）· 拖动即写入台面 · 点数值可键盘精调</div>
-    <div class="chp-tabs" id="chpTabBar">
-      <button type="button" data-tab="pre" onclick="chpTab('pre')">前置</button>
-      <button type="button" data-tab="gate" onclick="chpTab('gate')">门</button>
-      <button type="button" data-tab="dyn" onclick="chpTab('dyn')">动态</button>
-      <button type="button" data-tab="eq" onclick="chpTab('eq')">均衡</button>
-      <button type="button" data-tab="send" onclick="chpTab('send')">发送</button>
-    </div>
-    <div id="chParamBody"></div>
-  </div>
-</div>
-
-<div class="modal" id="fxGalModal" onclick="if(event.target===this)closeFxGallery()">
-  <div class="mdlg" role="dialog" aria-label="效果器图鉴">
-    <div class="mhd"><b>效果器图鉴</b>
-      <button class="mclose" onclick="closeFxGallery()" aria-label="关闭">✕</button></div>
-    <div class="ds">真实界面截图 —— X32 由官方编辑器逐算法渲染，WING 取自官方手册的 FX 选择页。
-      用来「对上号」：台面上显示的就是这个样子，不是我们画的示意图。</div>
-    <div class="chp-tabs" id="fxGalTabs">
-      <button type="button" data-g="x32" onclick="fxGalTab('x32')">X32 / M32</button>
-      <button type="button" data-g="premium" onclick="fxGalTab('premium')">WING 高级</button>
-      <button type="button" data-g="standard" onclick="fxGalTab('standard')">WING 标准</button>
-    </div>
-    <div id="fxGalBody" class="fxgal"></div>
-  </div>
-</div>
-
-<div class="modal" id="keyModal" onclick="if(event.target===this)closeKeyModal()">
-  <div class="mdlg" role="dialog" aria-label="新增控制键">
-    <div class="mhd"><b id="keyModalTitle">➕ 新增控制键</b>
-      <button class="mclose" onclick="closeKeyModal()" aria-label="关闭">✕</button></div>
-    <div class="ds">选一个目标推子和方向,按键就按当前步长(设置页可调)渐变增减它。图标随便填个 emoji,留空则用 ⚡。</div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0">
-      <input id="nkIcon" placeholder="🎧 (可留空)" style="width:90px;text-align:center" class="nkin" maxlength="4">
-      <input id="nkName" placeholder="名称 *必填,如:人声 增大" style="flex:1;min-width:150px" class="nkin"
-             oninput="this.classList.remove('inv');hideKeyErr()">
-    </div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-      <select id="nkKind" onchange="updNkIdx()" class="nkin">
-        <option value="ch">输入通道</option><option value="auxin">Aux In</option>
-        <option value="usb">USB 返回</option><option value="fxret">FX 返回</option>
-        <option value="bus">Bus 输出</option><option value="mtx">Matrix</option>
-        <option value="dca">DCA 编组</option><option value="main">主输出</option>
-      </select>
-      <select id="nkIdx" class="nkin"></select>
-      <select id="nkSign" class="nkin">
-        <option value="1">＋ 增大</option><option value="-1">－ 减小</option>
-      </select>
-    </div>
-    <div class="merr" id="keyErr"></div>
-    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px">
-      <button style="background:var(--card2);color:var(--txt)" onclick="closeKeyModal()">取消</button>
-      <button id="keySaveBtn" style="background:var(--green)" onclick="saveKey()">💾 添加控制键</button>
-    </div>
-  </div>
-</div>
-
-<script>
-const $ = s => document.querySelector(s);
-// 推子/发送电平的 dB 曲线: 协议 `level` 类型的 **4 段伪对数**
-//   f>=0.5 → 40f-30 | f>=0.25 → 80f-50 | f>=0.0625 → 160f-70 | 否则 480f-90
-// 锚点 0.75→0 dB, 0.5→-10, 0.25→-30, 0.0625→-60。与后端 params.level_db 同源;
-// 以前用的是 20*log10(f/0.75), 只有 0.75 一个点对得上 (0.25 处偏 +20 dB)。
-const dbOf = f => (f<=0 ? -90
-  : f>=0.5 ? f*40-30
-  : f>=0.25 ? f*80-50
-  : f>=0.0625 ? f*160-70
-  : f*480-90);
-const dbTxt = db => db<=-89 ? "-∞" : db.toFixed(1);
-let S = null;
-
-// ---- HTML 转义: 所有拼进 innerHTML 的用户可控串都必须过它 ----
-// ⚠️ 通道名/卡片名/描述/控制键名/图标/FX 名/快照名/扫描到的真台名 全部可以由
-//    外部（含局域网里任何一台机器）控制。本项目没有鉴权、监听 0.0.0.0，
-//    所以差一个转义就是"外部可控 → 任意 JS 执行 → 调全部 API 接管台面"。
-//    新增任何 innerHTML 拼接地，先问自己：这里面哪个字段是用户填的？
-function esc(s){
-  return String(s==null?'':s)
-    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
-}
-
-// ---- 通道名称: 调音台 / 卡片 / 控制键统一显示 ----
-const P2G={c:'ch',b:'bus',d:'dca',m:'main',a:'auxin',u:'usb',x:'fxret',t:'mtx'};
-function nameOf(g,i){
-  if(!S||!S.names) return '';
-  return g==='main' ? (S.names.main||'') : ((S.names[g]||{})[String(i)]||'');
-}
-function dispName(g,i){
-  const n=nameOf(g,i);
-  if(n) return n;
-  if(g==='main') return '主输出';
-  if(g==='bus') return 'B'+i;
-  if(g==='dca') return 'D'+i;
-  return String(i).padStart(2,'0');
-}
-
-function rowHTML(prefix, i){
-  const L={m:'<b>MAIN</b><small class="nm2"></small>', d:i=>`<b>D${i}</b><small class="nm2"></small>`, b:i=>`<b>B${i}</b><small class="nm2"></small>`,
-           a:i=>`<b>A${i}</b><small class="nm2"></small>`, u:i=>`<b>U${i}</b><small class="nm2"></small>`, x:i=>`<b>FX${i}</b><small class="nm2"></small>`, t:i=>`<b>M${i}</b><small class="nm2"></small>`};
-  // 每一种通道都能点进详情: 输入/ Bus / Aux In / FX 返回 / Matrix / 主输出
-  // 各有各的处理能力 (Bus 6 段 EQ、FX 返回只有声像和发送), 面板按服务端参数表生成。
-  const GRP={c:'ch',b:'bus',a:'auxin',x:'fxret',t:'mtx',m:'main',u:'usb',d:'dca'};
-  const g=GRP[prefix];
-  const openable = g && g!=='usb' && g!=='dca';
-  const num = prefix==='m'
-    ? `<b class="${openable?'chnum':''}"${openable?` onclick="openChParams('main',0)"`:''} title="主输出: 均衡/动态/插入/声像/发送">MAIN</b><small class="nm2"></small>`
-    : (L[prefix] && !openable ? L[prefix](i)
-      : `<b class="chnum" onclick="openChParams('${g}',${i})" title="通道处理: 均衡/门/压缩/插入/增益/发送/声像">${L[prefix]?L[prefix](i).replace(/<[^>]+>/g,''):String(i).padStart(2,'0')}</b><small class="nm2"></small>`);
-  return `<div class="row" id="r-${prefix}-${i}">
-    <div class="meter"><i></i></div>
-    <div class="num">${num}</div>
-    <input type="range" min="0" max="1" step="0.01" value="0.75"
-      oninput="drag('${prefix}',${i},this)" onchange="dragEnd('${prefix}',${i},this)"
-      ondblclick="zeroFader('${prefix}',${i})" title="双击回 0 dB">
-    <span class="db">0.0 dB</span>
-    <button class="fadj" onclick="nudge('${prefix}',${i},-0.5)" title="-0.5 dB">−</button>
-    <button class="fadj" onclick="nudge('${prefix}',${i},0.5)" title="+0.5 dB">＋</button>
-    <button class="mute" onclick="toggle('${prefix}',${i},this)">M</button>
-  </div>`;
-}
-// ±0.5 dB 精调 (与后端 level_db 4 段曲线一致) / 双击回 0 dB
-function dbToFader(db){
-  db=Math.min(Math.max(db,-90),10);
-  if(db>=-10) return (db+30)/40;
-  if(db>=-30) return (db+50)/80;
-  if(db>=-60) return (db+70)/160;   // -60..-30 段 (分界 -60, 不是 -50)
-  return (db+90)/480;
-}
-function nudge(p,i,d){
-  const r=document.getElementById('r-'+p+'-'+i); if(!r) return;
-  const sl=r.querySelector('input');
-  const db=Math.min(Math.max(dbOf(+sl.value)+d,-90),10);
-  const v=dbToFader(db);
-  sl.value=v; sl.dataset.target=v; delete anim[r.id];
-  r.querySelector('.db').textContent=(db<=-89.5?'-∞':db.toFixed(1))+' dB';
-  send(p,i,'fader',+v.toFixed(4));
-}
-function zeroFader(p,i){
-  const r=document.getElementById('r-'+p+'-'+i); if(!r) return;
-  const sl=r.querySelector('input');
-  sl.value=0.75; sl.dataset.target=0.75; delete anim[r.id];
-  r.querySelector('.db').textContent='0.0 dB';
-  send(p,i,'fader',0.75);
-}
-
-function init(){
-  let h=''; for(let i=1;i<=32;i++) h+=rowHTML('c',i); $('#chlist').innerHTML=h;
-  h='';  for(let i=1;i<=6;i++)  h+=rowHTML('a',i); $('#auxlist').innerHTML=h;
-  h='';  for(let i=1;i<=2;i++)  h+=rowHTML('u',i); $('#usblist').innerHTML=h;
-  h='';  for(let i=1;i<=8;i++)  h+=rowHTML('x',i); $('#fxretlist').innerHTML=h;
-  h='';  for(let i=1;i<=16;i++)  h+=rowHTML('b',i); $('#buslist').innerHTML=h;
-  h='';  for(let i=1;i<=6;i++)  h+=rowHTML('t',i); $('#mtxlist').innerHTML=h;
-  h='';  for(let i=1;i<=8;i++)  h+=rowHTML('d',i); $('#dcalist').innerHTML=h;
-  $('#mainrow').innerHTML=rowHTML('m',0);
-  buildFx();
-  document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{
-    document.querySelectorAll('nav button').forEach(x=>x.classList.remove('on'));
-    document.querySelectorAll('.page').forEach(x=>x.classList.remove('on'));
-    b.classList.add('on'); $('#pg-'+b.dataset.p).classList.add('on');
-  });
-  chpLoadSpecs().then(fillParamTables);
-  poll();
-  pollMeters();
-}
-
-function drag(p,i,el){
-  const r=el.closest('.row');
-  const db=dbOf(+el.value);
-  r.querySelector('.db').textContent=(+el.value<=0.001?'-∞':db.toFixed(1))+' dB';
-  send(p,i,'fader',+el.value);
-}
-function dragEnd(){}
-function toggle(p,i,el){
-  const on = el.classList.contains('on') ? 1 : 0;
-  send(p,i,'on',on);
-}
-// 写入节流: 拖动中 50ms 窗口合并, 多条走 /api/setbatch, 少请求量
-const pend={}; let pendT=null;
-function send(p,i,param,value,bus,sgroup){
-  const KMAP={c:'ch',b:'bus',d:'dca',m:'main',a:'auxin',u:'usb',x:'fxret',t:'mtx',S:'send'};
-  const kind=KMAP[p]||'ch';
-  const it={kind:kind,idx:i,param:param,value:value};
-  // 发送是二维目标: 目标号与源组一起进合并键, 否则 CH01→Bus1 和 CH01→Bus2 会互相覆盖
-  if(kind==='send'){ it.bus=bus|0; if(sgroup&&sgroup!=='ch') it.sgroup=sgroup; }
-  pend[kind+'|'+i+'|'+(kind==='send'?((sgroup||'ch')+':'+(bus|0)):'')+'|'+param]=it;
-  if(!pendT) pendT=setTimeout(flushSend,50);
-}
-function flushSend(){
-  pendT=null;
-  const arr=Object.keys(pend).map(k=>pend[k]);
-  for(const k in pend) delete pend[k];
-  if(!arr.length) return;
-  fetch(arr.length===1?'/api/set':'/api/setbatch',
-    {method:'POST',headers:{'Content-Type':'application/json'},
-     body:JSON.stringify(arr.length===1?arr[0]:{sets:arr})});
-}
-// ---- 通道参数面板: 由服务端参数表**生成**, 不再手抄控件表 ----
-// 为什么改: 以前这里有一份 56 行的 CH_PARAM_UI, 必须与后端 params.py 逐项一致,
-// 靠一条回归盯着。现在放进 6 种通道 (Bus 6 段 EQ / Matrix / Main / Aux In /
-// FX 返回各有不同能力) 后, 手抄会变成 200+ 行、且必然漂移。
-// 现在只描述"哪一组有哪些页", 控件本身从 /api/paramspecs 来。
-const CHP_GROUPS={
-  ch:   {l:'输入通道', pre:'CH',  rowp:'c', send:'ch',    tap:true,  gain:true},
-  bus:  {l:'Mix Bus',  pre:'BUS', rowp:'b', send:'bus',   tap:false},
-  auxin:{l:'Aux In',   pre:'AUX', rowp:'a', send:'auxin', tap:true},
-  fxret:{l:'FX 返回',  pre:'FX',  rowp:'x', send:'fxret', tap:true},
-  mtx:  {l:'Matrix',   pre:'MTX', rowp:'t', send:null},
-  main: {l:'主输出',   pre:'MAIN',rowp:'m', send:'main',  tap:false},
-};
-const CHP_SEND_BUSES={ch:16,auxin:16,fxret:16,bus:6,main:6};
-const CHP_MODE={ch:1,bus:1,auxin:1,fxret:1,main:1};   // 可以进详情页的组 (mtx 见下)
-let CHP_SPECS=null, CHP_SPECS_P=null;
-let chp={g:'ch', i:1, tab:'pre', vals:{}, gain:null, send:null, bus:1, buses:16};
-function chpLoadSpecs(){
-  if(CHP_SPECS_P) return CHP_SPECS_P;
-  CHP_SPECS_P=fetch('/api/paramspecs').then(r=>r.json()).then(d=>{
-    CHP_SPECS=(d&&d.specs)||{}; return CHP_SPECS;
-  }).catch(()=>{CHP_SPECS_P=null; return {};});
-  return CHP_SPECS_P;
-}
-// 字段 → 页。**规则在服务端** (params.spec_section, 随 ui_specs 下发 sec),
-// 网页/iOS/Android 共用同一份 —— 这里只做兜底 (老服务端没有 sec 字段时)。
-// 声像放在"前置"第一行: 它是推子前的混音控制, 用户找它就在这附近。
-function chpTabOf(r){
-  if(r && r.sec) return r.sec;
-  const f=(r&&r.f)||r||'';
-  if(f==='pan') return 'pre';
-  if(f.indexOf('gate_')===0) return 'gate';
-  if(f.indexOf('dyn_')===0) return 'dyn';
-  if(f.indexOf('eq')===0) return 'eq';
-  return 'pre';
-}
-const CHP_TAB_ORDER=[['pre','前置'],['gate','门'],['dyn','动态'],['eq','均衡'],['send','发送']];
-const CHP_POS_MAX=1000;
-function chpPos(r,v){
-  const lo=Math.max(r.lo,1e-6), hi=r.hi;
-  const x=Math.min(Math.max(+v||lo,lo),hi);
-  return Math.round(Math.log(x/lo)/Math.log(hi/lo)*CHP_POS_MAX);
-}
-function chpVal(r,pos){
-  const lo=Math.max(r.lo,1e-6), hi=r.hi;
-  return lo*Math.pow(hi/lo,Math.min(Math.max(+pos||0,0),CHP_POS_MAX)/CHP_POS_MAX);
-}
-function chpFmt(r,v){
-  if(r.t==='bool') return (r.lb? r.lb[(+v)?1:0] : ((+v)?'开':'关'));
-  // 声像按台面习惯显示 L50 / C / R50, 而不是 -50 / 0 / 50 —— 现场没人用负数读声像
-  if(r.f==='pan'){ const x=Math.round(+v||0);
-    return Math.abs(x)<1?'C':(x<0?'L'+(-x):'R'+x); }
-  if(r.t==='int'&&r.lb){ const k=Math.round(+v||0); return r.lb[k]||String(k); }
-  const x=+v||0;
-  const txt=(r.dec?x.toFixed(r.dec):String(Math.round(x)));
-  return txt+(r.u?(' '+r.u):'');
-}
-function chpRows(g){
-  if(!CHP_SPECS||!CHP_SPECS[g]) return [];
-  return CHP_SPECS[g];
-}
-function chpRowHTML(r){
-  const id='chp-'+r.f;
-  if(r.t==='bool')
-    return `<div class="chp-row" id="${id}-row"><span class="chp-l">${r.l}</span>`
-      +`<button type="button" class="chp-tog" id="${id}" onclick="chpTog('${r.f}')">—</button>`
-      +`<span class="chp-v"></span></div>`;
-  if(r.t==='int'&&(r.lb||r.en)){
-    const opts = r.lb ? r.lb.map((x,k)=>[k,x]) : r.en.map(x=>[x,x]);
-    return `<div class="chp-row" id="${id}-row"><span class="chp-l">${r.l}</span>`
-      +`<select class="nkin" id="${id}" onchange="chpSet('${r.f}',this.value)">`
-      +opts.map(x=>`<option value="${x[0]}">${x[1]}</option>`).join('')+`</select>`
-      +`<span class="chp-v">${r.u||''}</span></div>`;
-  }
-  const lg=+r.lg>0;
-  const st=lg?1:(r.st||0.01);
-  return `<div class="chp-row" id="${id}-row"><span class="chp-l">${r.l}</span>`
-    +`<input type="range" id="${id}" min="${lg?0:r.lo}" max="${lg?CHP_POS_MAX:r.hi}"`
-    +` step="${st}" oninput="chpSlide('${r.f}',this)">`
-    +`<span class="chp-v" id="${id}-v" onclick="chpEdit('${r.f}')" title="点一下输入精确值"></span></div>`;
-}
-function chpBodyHTML(){
-  let h='';
-  const g=chp.g, rows=chpRows(g);
-  CHP_TAB_ORDER.forEach(([k])=>{
-    let inner='';
-    if(k==='send'){
-      if(!CHP_GROUPS[g].send) return;
-      inner = `<div class="chp-row"><span class="chp-l">目标</span>`
-        +`<select class="nkin" id="chpBus" onchange="chpBusChg(this.value)">`
-        +Array.from({length:CHP_SEND_BUSES[g]},(_,i)=>`<option value="${i+1}">`
-          +`${g==='bus'||g==='main'?'Matrix ':'Bus '}${String(i+1).padStart(2,'0')}</option>`).join('')
-        +`</select><span class="chp-v">${CHP_SEND_BUSES[g]} 路</span></div>`
-        +`<div id="chpSendRows"></div>`;
-    } else if(k==='pre'){
-      // 话放增益 (模拟增益) 只对输入通道: /headamp 是独立一组, 索引 = 通道号-1
-      if(CHP_GROUPS[g].gain && chp.gain)
-        inner += chpRowHTML(chp.gain);
-      inner += rows.filter(r=>chpTabOf(r)===k).map(chpRowHTML).join('');
-    } else {
-      inner = rows.filter(r=>chpTabOf(r)===k).map(chpRowHTML).join('');
-    }
-    if(!inner) return;
-    h+=`<div class="chp-tab" data-tab="${k}">${inner}</div>`;
-  });
-  return h;
-}
-function chpBuildTabs(){
-  const bar=$('#chpTabBar'); if(!bar) return;
-  const has={pre:true};
-  chpRows(chp.g).forEach(r=>{has[chpTabOf(r)]=true;});
-  if(CHP_GROUPS[chp.g].send) has.send=true;
-  bar.innerHTML=CHP_TAB_ORDER.filter(([k])=>has[k])
-    .map(([k,l])=>`<button type="button" data-tab="${k}" onclick="chpTab('${k}')">${l}</button>`).join('');
-}
-let CHP_TRIM=18;
-function chpLoadLimits(){
-  fetch('/api/info').then(r=>r.json()).then(d=>{
-    if(!d||!d.trimRange||d.trimRange===CHP_TRIM) return;
-    CHP_TRIM=+d.trimRange;
-    if(CHP_SPECS&&CHP_SPECS.ch) CHP_SPECS.ch.forEach(r=>{
-      if(r.f==='trim'){ r.lo=-CHP_TRIM; r.hi=CHP_TRIM; }
-    });
-  }).catch(()=>{});
-}
-function openChParams(g,i){
-  if(typeof g==='number'){ i=g; g='ch'; }        // 旧调用: openChParams(3)
-  if(!CHP_GROUPS[g]) return;
-  chp.g=g; chp.i=(g==='main')?0:(+i||1); chp.tab='pre';
-  chp.vals={}; chp.gain=null; chp.send=null;
-  chp.buses=CHP_SEND_BUSES[g]||0; chp.bus=1;
-  chpLoadLimits();
-  const nm=nameOf(g,chp.i)||'';
-  $('#chpTitle').textContent=(CHP_GROUPS[g].pre+' '+String(chp.i).padStart(2,'0'))+(nm?' · '+nm:'');
-  $('#chParamBody').innerHTML='<div class="ds" style="padding:12px">正在读取参数…</div>';
-  $('#chParamModal').classList.add('on');
-  document.body.style.overflow='hidden';
-  chpLoadSpecs().then(()=>{
-    const ps=[fetch('/api/params?group='+g+'&idx='+chp.i).then(r=>r.json()).catch(()=>null)];
-    if(CHP_GROUPS[g].gain) ps.push(fetch('/api/params?group=headamp&idx='+(chp.i-1))
-      .then(r=>r.json()).catch(()=>null));
-    return Promise.all(ps);
-  }).then(([d,gain])=>{
-    chp.vals=(d&&d.params)||{};
-    if(gain&&gain.params) chp.gain={f:'__gain', l:'话放增益', t:'float',
-      lo:-12, hi:60, st:0.5, dec:1, u:'dB', lg:0, dv:0, _v:gain.params.gain};
-    $('#chParamBody').innerHTML=chpBodyHTML();
-    chpBuildTabs();
-    chpTab('pre');
-  });
-}
-function closeChParams(){
-  $('#chParamModal').classList.remove('on'); document.body.style.overflow='';
-}
-function chpTab(k){
-  if(!CHP_GROUPS[chp.g]) return;
-  chp.tab=k;
-  const body=$('#chParamBody'); if(!body) return;
-  body.querySelectorAll('.chp-tab').forEach(el=>el.classList.toggle('on', el.dataset.tab===k));
-  const bar=$('#chpTabBar');
-  if(bar) bar.querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.tab===k));
-  if(k==='send') chpLoadSends(); else chpSync();
-  if(k==='send') chpSyncSend();
-}
-function chpSpec(f){
-  if(f.indexOf('send_')===0){ for(const r of SEND_UI) if(r.f===f) return r; return null; }
-  if(f==='__gain'&&chp.gain) return chp.gain;
-  for(const r of chpRows(chp.g)) if(r.f===f) return r;
-  return null;
-}
-function chpValOf(f){
-  if(f.indexOf('send_')===0){
-    const row=chpSendRow(), k=f.slice(5);
-    let v=row[k];
-    if(k==='level') v=(+v||0)*100;
-    return v;
-  }
-  if(f==='__gain') return chp.gain?chp.gain._v:0;
-  const v=chp.vals?chp.vals[f]:undefined;
-  if(v===undefined||v===null){ const r=chpSpec(f); return r?r.dv:0; }
-  return v;
-}
-function chpSync(){
-  const m=$('#chParamModal');
-  if(!m||!m.classList.contains('on')||chp.tab==='send') return;
-  chpRows(chp.g).concat(chp.gain?[chp.gain]:[]).forEach(r=>{
-    const el=document.getElementById('chp-'+r.f); if(!el) return;
-    const v=chpValOf(r.f);
-    if(r.t==='bool'){
-      const on=!!v; el.textContent=on?(r.lb?r.lb[1]:'开'):(r.lb?r.lb[0]:'关');
-      el.classList.toggle('on',on);
-    } else if(r.t==='int'&&(r.lb||r.en)){
-      if(document.activeElement!==el) el.value=String(+v);
-    } else {
-      const lg=+r.lg>0;
-      if(document.activeElement!==el) el.value=lg?chpPos(r,v):v;
-      const lab=document.getElementById('chp-'+r.f+'-v');
-      if(lab&&!lab.querySelector('input')) lab.textContent=chpFmt(r,v);
-    }
-  });
-}
-function chpBusChg(v){ chp.bus=+v||1; chpLoadSends(); }
-function chpWrite(f,v){
-  if(f.indexOf('send_')===0){
-    const key=f.slice(5);                       // on / level / tap
-    send('S', chp.i, chpSendKind(key), v, chp.bus, chp.g);
-    const k=String(chp.bus);
-    const row=chp.send[k]||(chp.send[k]={level:0,on:0,tap:4});
-    row[key]=v;
-    return;
-  }
-  if(f==='__gain'){
-    const it={kind:'headamp', idx:chp.i-1, param:'gain', value:v};
-    if(chp.gain) chp.gain._v=v;
-    return fetch('/api/set',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify(it)});
-  }
-  send(CHP_GROUPS[chp.g].rowp, chp.i, f, v);
-  chp.vals[f]=v;
-}
-function chpSlide(f,el){
-  const r=chpSpec(f); if(!r) return;
-  const lg=+r.lg>0;
-  const v=lg?chpVal(r,el.value):(+el.value);
-  const lab=document.getElementById('chp-'+f+'-v');
-  if(lab&&!lab.querySelector('input')) lab.textContent=chpFmt(r,v);
-  chpWrite(f,v);
-}
-function chpSet(f,v){ chpWrite(f,+v); }
-function chpTog(f){
-  const cur=chpValOf(f)?1:0, nv=cur?0:1;
-  chpWrite(f,nv);
-  // 乐观切换: 写盘+轮询有 ~250ms 延迟, 不先动一下会觉得"点了没反应"
-  const r=chpSpec(f), el=document.getElementById('chp-'+f);
-  if(r&&el){ el.textContent=nv?(r.lb?r.lb[1]:'开'):(r.lb?r.lb[0]:'关'); el.classList.toggle('on',!!nv); }
-}
-// 键盘精调: 点数值 → 原地变输入框
-function chpEdit(f){
-  const r=chpSpec(f); if(!r||r.t==='bool'||r.lb||r.en) return;
-  const lab=document.getElementById('chp-'+f+'-v'); if(!lab) return;
-  if(lab.querySelector('input')) return;
-  const cur=chpValOf(f);
-  const step=r.dec?Math.max(r.st||0,Math.pow(10,-r.dec)):(r.st||1);
-  lab.innerHTML=`<input class="chp-in" type="number" inputmode="decimal"`
-    +` min="${r.lo}" max="${r.hi}" step="${step}" value="${(+cur).toFixed(r.dec)}">`;
-  const inp=lab.querySelector('input');
-  let done=false;
-  const commit=(ok)=>{
-    if(done) return; done=true;
-    const v=parseFloat(inp.value);
-    if(ok&&!isNaN(v)){
-      const w=Math.min(Math.max(v,r.lo),r.hi);
-      lab.textContent=chpFmt(r,w);
-      chpWrite(f,w);
-      const sl=document.getElementById('chp-'+f);
-      if(sl&&document.activeElement!==sl) sl.value=(+r.lg>0)?chpPos(r,w):w;
-    } else {
-      lab.textContent=chpFmt(r,cur);
-    }
-  };
-  inp.addEventListener('keydown',e=>{
-    if(e.key==='Enter'){ e.preventDefault(); commit(true); inp.blur(); }
-    else if(e.key==='Escape'){ e.preventDefault(); commit(false); inp.blur(); }
-  });
-  inp.addEventListener('blur',()=>commit(true));
-  inp.focus(); inp.select();
-}
-// ---- 发送 (二维: 源 × 目标) ----
-function chpSendKind(f){
-  const g=chp.g;
-  return (g==='ch'?'send':g+'_send')+'_'+f;
-}
-function chpSendRow(){ return (chp.send||{})[String(chp.bus)]||{level:0,on:0,tap:4}; }
-function chpLoadSends(){
-  if(!$('#chParamModal')||!$('#chParamModal').classList.contains('on')) return;
-  const g=chp.g;
-  fetch('/api/sends?group='+g+'&src='+chp.i).then(r=>r.json()).then(d=>{
-    chp.send=d.sends||{}; chpRenderSend(); 
-  }).catch(()=>{});
-}
-const SEND_UI=[
-  {f:'send_on',    l:'发送开关', t:'bool', lb:['关','开']},
-  {f:'send_level', l:'发送电平', t:'num',  u:'%', lo:0, hi:100, step:0.625, dec:1, dv:75, pct:1, db:1},
-  {f:'send_tap',   l:'发送取点', t:'enum', opts:[[0,'<-EQ'],[1,'EQ->'],[2,'PRE'],[3,'POST'],[4,'GRP']]},
-];
-function chpRenderSend(){
-  const box=$('#chpSendRows'); if(!box) return;
-  const tap=CHP_GROUPS[chp.g].tap;
-  box.innerHTML=SEND_UI.filter(r=>tap||r.f!=='send_tap').map(chpRowHTML).join('');
-  chpSyncSend();
-}
-function chpSyncSend(){
-  const row=chpSendRow();
-  SEND_UI.forEach(r=>{
-    const el=document.getElementById('chp-'+r.f); if(!el) return;
-    let v=row[r.f==='send_level'?'level':(r.f==='send_on'?'on':'tap')];
-    if(r.pct) v=(+v||0)*100;
-    if(r.t==='bool'){
-      el.textContent=v?r.lb[1]:r.lb[0]; el.classList.toggle('on',!!v);
-    } else if(r.t==='enum'){
-      if(document.activeElement!==el) el.value=String(Math.round(+v||0));
-    } else {
-      if(document.activeElement!==el) el.value=v;
-      const lab=document.getElementById('chp-'+r.f+'-v');
-      if(lab&&!lab.querySelector('input')) lab.textContent=chpFmt(r,v);
-    }
-  });
-}
-function runShow(id){ fetch('/api/show',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({id:id})}); }
-function stopShow(){ fetch('/api/show',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({id:null})}); }
-// ⚠️ 保存类接口失败时必须让用户看见: 后端对"落盘失败/非法输入"返回
-//    {"ok":false,"error":"..."} (HTTP 4xx/5xx), 曾经的 fire-and-forget 会把
-//    "没存上"表现成"存好了" —— 持久化假成功的最外一环。
-function api(path,obj){ fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify(obj)}).then(r=>r.json().catch(()=>({}))).then(d=>{
-      if(d&&(d.error||d.ok===false)) showToast(d.error||'操作失败');
-    }).catch(()=>{}); }
-// ---- 台面预设：可选范围的保存 ----
-const PS_GROUPS=[['ch','输入通道'],['bus','Mix Bus'],['dca','DCA'],['auxin','Aux In'],
-  ['usb','USB'],['fxret','FX 返回'],['mtx','Matrix'],['main','主输出'],
-  ['fx','FX 机架'],['scene','场景号']];
-// 处理参数由服务端参数表补齐 (见 fillParamTables): 各组能力不同, 这里不写死。
-let PS_PARAMS=[['fader','推子'],['on','静音'],['name','名称'],['dca','DCA 归属'],
-  ['send_level','发送电平'],['send_on','发送开关'],['send_tap','发送取点']];
-const PS_CAP={ch:32,bus:16,dca:8,auxin:6,usb:2,fxret:8,mtx:6,main:1,fx:8,scene:1};
-const PS_PATH_GROUPS=['ch','bus','dca','auxin','usb','fxret','mtx','main'];
-let psGroups=['ch','bus','dca','auxin','usb','fxret','mtx','main'], psParams=['fader','on'];
-function openSnapModal(){
-  psGroups=['ch','bus','dca','auxin','usb','fxret','mtx','main']; psParams=['fader','on'];
-  $('#snapName').value=''; $('#snapIdx').value='';
-  renderPsChips(); $('#snapModal').classList.add('on'); document.body.style.overflow='hidden';
-}
-function closeSnapModal(){ $('#snapModal').classList.remove('on'); document.body.style.overflow=''; }
-function psUsable(g,p){
-  if(p==='dca') return g==='ch';
-  if(p==='fader'||p==='on'||p==='name') return g!=='fx'&&g!=='scene';
-  if(chpSpec(p)) return g==='ch';      // 增益/延时/低切… 只有输入通道有
-  return false;
-}
-function renderPsChips(){
-  const gEl=$('#snapGroups'), pEl=$('#snapParams');
-  if(!gEl||!pEl) return;
-  gEl.innerHTML=PS_GROUPS.map(([g,l])=>{
-    const on=psGroups.indexOf(g)>=0;
-    return `<span class="chip${on?' on':''}" onclick="psTog('g','${g}',this)">${l}</span>`;
-  }).join('');
-  pEl.innerHTML=PS_PARAMS.map(([p,l])=>{
-    const usable=psGroups.some(g=>psUsable(g,p));
-    const on=psParams.indexOf(p)>=0;
-    return `<span class="chip${on?' on':''}${usable?'':' dis'}" ${usable?'':'title="当前所选组不支持该参数"'}
-      onclick="psTog('p','${p}',this)">${l}</span>`;
-  }).join('');
-  psCount();
-}
-function psTog(what,v,el){
-  if(el.classList.contains('dis')) return;
-  const arr=what==='g'?psGroups:psParams;
-  const i=arr.indexOf(v);
-  if(i>=0){ if(arr.length<=1) return; arr.splice(i,1); } else arr.push(v);
-  renderPsChips();
-}
-function psIdxList(g){
-  const raw=($('#snapIdx')?$('#snapIdx').value:'').trim();
-  if(!raw) return null;
-  const cap=PS_CAP[g]||0, out=[];
-  raw.split(',').forEach(part=>{
-    part=part.trim();
-    const m=part.match(/^(\d+)\s*-\s*(\d+)$/);
-    if(m){
-      let a=+m[1], b=+m[2]; if(a>b){const t=a;a=b;b=t;}
-      for(let i=a;i<=b;i++){ if(i>=1&&i<=cap&&out.indexOf(i)<0) out.push(i); }
-    } else {
-      const n=+part;
-      if(n>=1&&n<=cap&&out.indexOf(n)<0) out.push(n);
-    }
-  });
-  return out.length?out.sort((x,y)=>x-y):null;
-}
-function psScope(){
-  const idx={};
-  PS_PATH_GROUPS.forEach(g=>{
-    if(psGroups.indexOf(g)<0) return;
-    const list=psIdxList(g);
-    if(list&&g!=='main') idx[g]=list;
-  });
-  // FX 机架/场景号没有"推子/静音"这类参数：只勾它们时自动带上整槽/场景，
-  // 否则会存出一条"范围里什么都没有"的空预设
-  const params=psParams.slice();
-  if(psGroups.indexOf('fx')>=0 && params.indexOf('slot')<0) params.push('slot');
-  if(psGroups.indexOf('scene')>=0 && params.indexOf('scene')<0) params.push('scene');
-  return {groups:psGroups.slice(),params:params,indices:idx};
-}
-function psCount(){
-  const sc=psScope(); let n=0;
-  PS_PATH_GROUPS.forEach(g=>{
-    if(psGroups.indexOf(g)<0) return;
-    const rows=(g==='main')?1:(sc.indices[g]?sc.indices[g].length:(PS_CAP[g]||0));
-    psParams.forEach(p=>{ if(psUsable(g,p)) n+=rows; });
-  });
-  if(psGroups.indexOf('fx')>=0) n+=8*4+8*3;
-  if(psGroups.indexOf('scene')>=0) n+=1;
-  const el=$('#snapCount');
-  if(el) el.textContent='将保存约 '+n+' 个值（FX 整槽按 8 槽 × 4 属性 + 算法参数计）';
-}
-function doSaveSnap(){
-  const sc=psScope();
-  if(!sc.groups.length) return;
-  api('/api/snapshot',{action:'save',name:($('#snapName').value||'').trim(),scope:sc});
-  closeSnapModal();
-}
-function recallSnap(id,sel){ api('/api/snapshot',{action:'recall',id:id,seconds:+sel.value}); }
-function delSnap(id){ api('/api/snapshot',{action:'delete',id:id}); }
-function stopRecall(){ api('/api/snapshot',{action:'stop'}); }
-function setKeyCfg(){ api('/api/keycfg',{step_db:+$('#stepSel').value,ramp:+$('#rampSel').value}); }
-
-// ---- 控台驱动切换 ----
-function setConsole(id){
-  fetch('/api/ctrlprofile',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({id:id})}).then(r=>r.json()).then(d=>{
-      if(!d.ok){ showToast(d.error||'切换失败'); return; }
-      showToast('控台 → '+d.label+(d.warning?'（未标定）':'')
-        +(d.fxNote?(' · '+d.fxNote):''));
-    }).catch(()=>showToast('切换失败'));
-}
-// ---- 网络端口 (设置页) ----
-// 250ms 的状态轮询会重渲染设置页 —— 用户已经改了但还没保存的输入不能被冲掉,
-// 所以用 window.portDirty 标记「手上有未保存的改动」, 有标记时就不回填输入框。
-window.portDirty=false;
-function portNum(v,allowZero){
-  v=String(v==null?'':v).trim();
-  if(v==='') return null;                       // 空 = 恢复该类端口的内置默认
-  if(!/^[0-9]+$/.test(v)) return NaN;           // 非纯数字 → 明确报错, 不静默
-  const n=parseInt(v,10);
-  if(allowZero && n===0) return 0;              // 网页端口 0 = 关闭
-  return (n>=1 && n<=65535) ? n : NaN;
-}
-function savePorts(){
-  const u=portNum($('#pUdp').value,false), w=portNum($('#pWeb').value,true);
-  if(isNaN(u)){ showToast('OSC/UDP 端口需为 1–65535 的整数'); return; }
-  if(isNaN(w)){ showToast('网页端口需为 0–65535 的整数（0 = 关闭网页）'); return; }
-  if(w!==null && w>0 && w===(u===null?(S&&S.ports?S.ports.defUdp:10023):u)){
-    showToast('两个端口不能相同'); return;
-  }
-  fetch('/api/ports',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({udp:u,web:w})})
-   .then(r=>r.json()).then(d=>{
-     if(!d.ok){ showToast(d.error||'保存失败'); return; }
-     window.portDirty=false;
-     showToast(d.restart?'已保存 —— 重启模拟器后生效':'已保存，与当前生效端口一致');
-   }).catch(()=>showToast('保存失败'));
-}
-function resetPorts(){
-  fetch('/api/ports',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({udp:null,web:null})})
-   .then(r=>r.json()).then(d=>{
-     if(!d.ok){ showToast(d.error||'恢复失败'); return; }
-     window.portDirty=false;
-     showToast('已恢复默认端口'+(d.restart?'，重启后生效':''));
-   }).catch(()=>showToast('恢复失败'));
-}
-function renderPorts(){
-  const p=S&&S.ports; if(!p) return;
-  const u=$('#pUdp'), w=$('#pWeb');
-  if(!window.portDirty){                        // 有未保存改动时不动输入框
-    if(u && document.activeElement!==u) u.value=(p.savedUdp==null?'':p.savedUdp);
-    if(w && document.activeElement!==w) w.value=(p.savedWeb==null?'':p.savedWeb);
-  }
-  const st=$('#portStat');
-  if(st){
-    st.textContent=p.pending?'⚠ 待重启生效':'✓ 当前生效中';
-    st.style.color=p.pending?'#d9a13c':'#22c55e';
-  }
-  const iu=$('#pinfoUdp'), iw=$('#pinfoWeb'), iu2=$('#pinfoUdp2');
-  if(iu) iu.textContent=p.udp;
-  if(iw) iw.textContent=(p.web>0?p.web:'已关闭');
-  if(iu2) iu2.textContent=p.udp;
-  const nt=$('#portNote');
-  if(nt){
-    let h='当前生效: OSC/UDP <b>'+p.udp+'</b> · 网页 <b>'+(p.web>0?p.web:'已关闭')+'</b>'
-      +`（内置默认 ${p.defUdp} / ${p.defWeb}）`;
-    if(p.envLocked){
-      h+='<br>⚠️ 本实例是<b>线上部署</b>，网页端口由平台环境变量指定，在此修改不会生效。';
-    } else if(p.savedWeb===0){
-      h+='<br>提示: 网页端口填 <b>0</b> 表示关闭网页控制台，只保留 OSC/UDP 服务。';
-    }
-    if(p.pending){
-      h+='<br><b style="color:#d9a13c">已保存但尚未生效</b> —— 当前仍在用旧端口，'
-        +'请 Ctrl+C 停掉模拟器后重新启动。';
-    }
-    if(window.portDirty){
-      h+='<br>✏️ 输入框里有<b>未保存</b>的改动 —— 点「💾 保存」提交。';
-    }
-    nt.innerHTML=h;
-  }
-}
-function renderConsole(){
-  const sel=$('#ctrlSel');
-  if(!sel||!S||!S.console) return;
-  const c=S.console;
-  if(sel.options.length!==c.all.length){
-    sel.innerHTML=c.all.map(p=>
-      `<option value="${esc(p.id)}">${esc(p.label)}${p.ready?'':'（待标定）'}</option>`).join('');
-  }
-  if(document.activeElement!==sel) sel.value=c.id;
-  const st=$('#ctrlStat');
-  if(st){
-    st.textContent=c.ready?(c.verified?'✓ 已标定':'⚠ 未核对'):'⚠ 待标定';
-    st.style.color=c.ready?(c.verified?'#22c55e':'#d9a13c'):'#ef4444';
-  }
-  const nt=$('#ctrlNote');
-  if(nt){
-    if(c.ready&&c.verified){
-      nt.innerHTML=`地址表已与真机核对 · 通道 <b>${c.counts.ch}</b> · Bus <b>${c.counts.bus}</b>`
-        +` · DCA <b>${c.counts.dca}</b> · FX <b>${c.counts.fx}</b> 槽`
-        +(c.fxLib?` · 效果库 <b>${c.fxLib}</b> 种（效果器页已同步）`:'');
-    } else if(c.ready){
-      nt.innerHTML='⚠️ '+esc(c.note||'地址表未经真机核对');
-    } else {
-      nt.innerHTML=`⚠️ <b>${esc(c.label)}</b> 的驱动尚未标定：${esc(c.note||'')}<br>`
-        +`此状态下所有写入会被<b>拒绝并记日志</b>,卡片不会真正控制到台子 —— 这是刻意的,`
-        +`免得蒙错地址写到别的参数上。`;
-    }
-  }
-  const cp=$('#ctrlCaps');
-  if(cp){
-    cp.textContent=(!c.ready&&c.pending.length)
-      ? ('需要提供的地址映射: '+c.pending.slice(0,8).join(' / ')+(c.pending.length>8?' …':''))
-      : '';
-  }
-}
-
-// 控制键长按连发: 按下立即触发一次, 按住 500ms 后每 150ms 重复
-let kpT=null,kpI=null;
-function kpStart(id){
-  api('/api/key',{id:id});
-  kpStop();
-  kpT=setTimeout(()=>{ kpI=setInterval(()=>api('/api/key',{id:id}),150); },500);
-}
-function kpStop(){
-  if(kpT){ clearTimeout(kpT); kpT=null; }
-  if(kpI){ clearInterval(kpI); kpI=null; }
-}
-document.addEventListener('pointerup',kpStop);
-document.addEventListener('pointercancel',kpStop);
-
-// ---- 新增控制键 ----
-function updNkIdx(){
-  const k=$('#nkKind').value;
-  const N={ch:32,bus:16,dca:8,auxin:6,usb:2,fxret:8,mtx:6,main:1}[k]||1;
-  let h=''; for(let i=1;i<=N;i++) h+=`<option value="${i}">${esc(dispName(k,i))}</option>`;
-  $('#nkIdx').innerHTML=h;
-}
-
-// ---- 通道命名编辑器 (设置页) ----
-const NM_COUNT={ch:32,bus:16,dca:8,auxin:6,usb:2,fxret:8,mtx:6};
-function updNmIdx(){
-  const g=$('#nmGroup').value,n=NM_COUNT[g];
-  let h='';
-  for(let i=1;i<=n;i++){
-    const nm=nameOf(g,i);
-    h+=`<option value="${i}">${String(i).padStart(2,'0')}${nm?' · '+esc(nm):''}</option>`;
-  }
-  $('#nmIdx').innerHTML=h;
-}
-function saveName(){
-  api('/api/name',{group:$('#nmGroup').value,idx:+$('#nmIdx').value,name:$('#nmVal').value.trim()});
-  $('#nmVal').value='';
-}
-let editKeyId = null;
-function saveKey(){
-  const name=$('#nkName').value.trim();
-  $('#nkName').classList.toggle('inv', !name);
-  if(!name){ keyErr('请填写按键名称(必填)'); return; }
-  const btn=$('#keySaveBtn');
-  btn.classList.add('btnspin'); btn.textContent='保存中…';
-  hideKeyErr();
-  const url=editKeyId?'/api/keyedit':'/api/keyadd';
-  const payload=editKeyId
-    ?{id:editKeyId, icon:$('#nkIcon').value.trim()||'⚡', name:name,
-      kind:$('#nkKind').value, idx:+$('#nkIdx').value, sign:+$('#nkSign').value}
-    :{icon:$('#nkIcon').value.trim()||'⚡', name:name,
-      kind:$('#nkKind').value, idx:+$('#nkIdx').value, sign:+$('#nkSign').value};
-  fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify(payload)})
-  .then(r=>{
-    if(!r.ok) throw new Error('服务器错误 '+r.status);
-    return r.json();
-  })
-  .then(d=>{
-    if(!d || !d.ok) throw new Error('保存被拒绝');
-    $('#nkName').value=''; $('#nkIcon').value='';
-    closeKeyModal();
-  })
-  .catch(err=>keyErr('保存失败: '+(err&&err.message?err.message:'网络异常,请重试')))
-  .finally(()=>{
-    btn.classList.remove('btnspin'); btn.textContent='💾 添加控制键';
-  });
-}
-function openKeyModal(key){
-  editKeyId = key ? key.id : null;
-  $('#keyModalTitle').textContent = key ? '✏️ 编辑控制键' : '➕ 新增控制键';
-  $('#keySaveBtn').textContent = key ? '💾 保存修改' : '💾 添加控制键';
-  $('#keyModal').classList.add('on');
-  document.body.style.overflow='hidden';
-  if(key){
-    $('#nkIcon').value = key.icon || '';
-    $('#nkName').value = key.name || '';
-    $('#nkKind').value = String(key.kind || '').replace('_fader','');
-    updNkIdx();
-    $('#nkIdx').value = String(key.idx || 1);
-    $('#nkSign').value = key.sign < 0 ? '-1' : '1';
-  } else {
-    $('#nkIcon').value=''; $('#nkName').value='';
-    updNkIdx();
-  }
-  hideKeyErr();
-  setTimeout(()=>$('#nkName').focus(),120);
-}
-function closeKeyModal(){
-  $('#keyModal').classList.remove('on');
-  document.body.style.overflow='';
-  hideKeyErr();
-  editKeyId = null;
-  $('#nkName').classList.remove('inv');
-}
-function editCard(id){
-  const c=(S.cards||[]).find(x=>x.id===id);
-  if(c) openCardModal(c);
-}
-function editKey(id){
-  const k=(S.quickKeys||[]).find(x=>x.id===id);
-  if(k) openKeyModal(k);
-}
-function keyErr(msg){ const e=$('#keyErr'); e.textContent=msg; e.classList.add('on'); }
-function hideKeyErr(){ $('#keyErr').classList.remove('on'); }
-document.addEventListener('keydown',e=>{ if(e.key==='Escape'){ closeCardModal(); closeKeyModal(); } });
-function delKey(id){ api('/api/keydel',{id:id}); }
-
-// ---- 新建演出卡片 ----
-let caActs=[];
-let caMulti=[];                       // 当前动作类型下勾选的目标编号
-const CA_MULTI={mute:'ch',mute_bus:'bus',fade_ch:'ch',fade_bus:'bus'};
-const CA_LABEL={mute:'静音通道',mute_bus:'静音 Bus',scene:'切场景',unmute_all:'全部取消静音',wait:'等待',
-  fade_all:'全体推子渐变',fade_odd_even:'奇偶过渡',fade_ch:'通道渐变',fade_bus:'Bus 渐变',
-  fade_from:'通道从指定值渐变',fade_from_bus:'Bus 从指定值渐变',rel_db:'相对增减 dB',
-  set:'通用设置',osc:'原始 OSC'};
-
-// ---- 通用动作 set 的分组 / 参数表（必须与服务端 SET_GROUPS/SET_PARAMS 对齐）----
-// 分组是**语义**的,落到哪个地址由控台驱动决定 —— 所以同一张卡片能换控台使用。
-const ST_GROUPS=[['ch','输入通道',32],['bus','Bus 输出',16],['dca','DCA 编组',8],
-  ['main','主输出',1],['auxin','Aux In',6],['usb','USB 返回',2],['fxret','FX 返回',8],
-  ['mtx','Matrix',6],['fx','FX 效果槽',8],['scene','场景',99],
-  ['send','发送 (通道→Bus)',32]];
-const ST_PARAMS={ch:['fader','on'],bus:['fader','on'],dca:['fader','on'],
-  main:['fader','on'],auxin:['fader','on'],usb:['fader','on'],
-  fxret:['fader','on'],mtx:['fader','on'],
-  fx:['time','predelay','damp','mix','on','type','name'],scene:['load'],
-  send:['send_level','send_on','send_tap']};
-const ST_PLABEL={fader:'推子 %',on:'开关 (1开启/0静音)',mix:'混合比 (0-1)',
-  time:'混响时间 (秒)',predelay:'预延迟 (毫秒)',damp:'阻尼 (0-1)',
-  type:'算法 (效果库 61 种, 见效果器页)',name:'名称 (文本)',load:'切场景'};
-// 处理参数的中文名/单位/枚举文案全部来自服务端参数表 —— 前端不再抄一份。
-// (抄一份的下场: 后端改了量程或文案, 界面照旧, 只能等用户发现"拖到 X 就没反应")
-function fillParamTables(specs){
-  if(!specs) return;
-  const seen={};
-  Object.keys(specs).forEach(g=>{
-    const rows=specs[g]||[];
-    if(ST_PARAMS[g]) rows.forEach(r=>{
-      if(ST_PARAMS[g].indexOf(r.f)<0) ST_PARAMS[g].push(r.f);
-    });
-    rows.forEach(r=>{
-      if(!seen[r.f]){
-        seen[r.f]=1;
-        PS_PARAMS.push([r.f, r.l]);
-      }
-      ST_PLABEL[r.f]=r.l+(r.u?(' ('+r.u+')'):'')
-        +(r.t==='bool'?' (1开启/0关闭)':'');
-    });
-  });
-}
-function numIn(id,label,def){
-  return `<input id="${id}" type="number" value="${def}" placeholder="${label}"
-    title="${label}" aria-label="${label}" class="nkin" style="width:84px">`;
-}
-function curveSel(){
-  return `<select id="caCurve" class="nkin"><option value="linear">直线</option><option value="ease_out">先快后慢</option><option value="ease_in">先慢后快</option><option value="smooth">S 形</option></select>`;
-}
-function chipGrid(g,n){
-  let h='<div class="chipgrid" id="caChips">';
-  for(let i=1;i<=n;i++){
-    const nm=nameOf(g,i);
-    h+=`<span class="chip" data-i="${i}" onclick="togChip(this)">${g==='ch'?String(i).padStart(2,'0'):'B'+i}${nm?'<em>'+nm+'</em>':''}</span>`;
-  }
-  return h+'</div>';
-}
-function togChip(el){
-  el.classList.toggle('on');
-  const i=+el.dataset.i;
-  const p=caMulti.indexOf(i);
-  if(p>=0) caMulti.splice(p,1); else caMulti.push(i);
-  hideCardErr();
-}
-function updCaParams(){
-  const k=$('#caKind').value;
-  caMulti=[]; hideCardErr();
-  let h='';
-  if(CA_MULTI[k]) h+=chipGrid(CA_MULTI[k],CA_MULTI[k]==='ch'?32:16);
-  if(k==='mute'||k==='mute_bus'){ $('#caParams').innerHTML=h; return; }
-  if(k==='scene'){
-    h+=`<span class="ds" style="margin:0">场景</span>`+numIn('caScene','场景号',1);
-    h+=`<select id="caSceneMode" class="nkin" onchange="caSceneModeChg()">`
-      +`<option value="global">全局调用（整场还原）</option>`
-      +`<option value="partial">局部调用（只动预设范围）</option></select>`;
-    h+=`<span id="caSceneExtra" style="display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap"></span>`;
-    h+=`<div class="ds" id="caSceneNote" style="width:100%;margin:2px 0 0;color:#d9a13c"></div>`;
-  }
-  else if(k==='preset') h+=`<select id="caPreset" class="nkin">${presetOpts()}</select>`
-    +numIn('caSec','渐变秒数',2)+`<span class="ds" style="margin:0">秒</span>`+curveSel();
-  else if(k==='wait') h+=numIn('caSec','等待秒数',3);
-  else if(k==='unmute_all'){ /* 无参数 */ }
-  else if(k==='fade_all') h+=numIn('caP1','目标 %',0)+numIn('caSec','秒数',3)+curveSel();
-  else if(k==='fade_odd_even') h+=numIn('caP1','奇数 %',80)+numIn('caP2','偶数 %',0)+numIn('caSec','秒数',4)+curveSel();
-  else if(k==='fade_ch'||k==='fade_bus') h+=numIn('caP1','到 %',80)+numIn('caSec','秒数',3)+curveSel()
-    +`<button type="button" class="learnbtn" onclick="learnTo()">⭐ 取当前值</button>`;
-  else if(k==='fade_from') h+=numIn('caCh','通道号',15)+numIn('caP0','从 %',0)+numIn('caP1','到 %',90)+numIn('caSec','秒数',5)+curveSel();
-  else if(k==='fade_from_bus') h+=numIn('caBus','Bus 号',1)+numIn('caP0','从 %',0)+numIn('caP1','到 %',90)+numIn('caSec','秒数',5)+curveSel();
-  else if(k==='rel_db') h+=`<select id="caGrp" class="nkin" onchange="caMulti=[];updRelChips()">
-      <option value="ch">输入通道</option><option value="bus">Bus 输出</option><option value="dca">DCA 编组</option></select>`
-    +`<span id="caRelChips" style="display:inline-flex"></span>`
-    +numIn('caDb','±dB',3)+numIn('caSec','秒数',2)+curveSel();
-  else if(k==='set') h+=setFormHTML();
-  else if(k==='osc') h+=oscFormHTML();
-  $('#caParams').innerHTML=h;
-  if(k==='rel_db') updRelChips();
-  if(k==='set') stGroupChg();
-  if(k==='scene') caSceneModeChg();
-}
-// ---- 通用设置表单 ----
-function setFormHTML(){
-  return `<select id="stGroup" class="nkin" onchange="stGroupChg()">`
-    + ST_GROUPS.map(x=>`<option value="${x[0]}">${x[1]}</option>`).join('') + `</select>`
-    + `<input id="stId" type="number" value="1" min="1" class="nkin" style="width:78px" title="目标编号">`
-    + `<span id="stBusWrap"></span>`
-    + `<select id="stParam" class="nkin" onchange="stParamChg()"></select>`
-    + `<span id="stValWrap"></span>`
-    + `<input id="stDur" type="number" value="0" min="0" step="0.5" class="nkin" style="width:104px"
-             title="仅推子类支持渐变;0 = 瞬间到位">`
-    + `<button type="button" class="learnbtn" onclick="learnSet()">⤓ 抓取台面值</button>`;
-}
-function stGroupChg(){
-  const g=$('#stGroup').value;
-  const ps=ST_PARAMS[g]||['fader'];
-  $('#stParam').innerHTML=ps.map(p=>`<option value="${p}">${ST_PLABEL[p]||p}</option>`).join('');
-  const idEl=$('#stId');
-  const row=ST_GROUPS.find(x=>x[0]===g)||['','',32];
-  const cap=row[2]||32;
-  if(g==='main'){ idEl.value=0; idEl.disabled=true; }
-  else { idEl.disabled=false; idEl.max=cap; if(!+idEl.value||+idEl.value>cap) idEl.value=1; }
-  // 发送是二维目标: 编号是通道, 还要一个 Bus。不给这一栏, 用户只能写"第 5 个打包值",
-  // 那种数字对内没有任何意义。
-  const bw=$('#stBusWrap');
-  if(bw) bw.innerHTML=(g==='send')
-    ? `<select id="stBus" class="nkin" title="发往哪个 Bus">`
-      +Array.from({length:16},(_,i)=>`<option value="${i+1}">Bus ${String(i+1).padStart(2,'0')}</option>`).join('')
-      +`</select>`
-    : '';
-  stParamChg();
-}
-function stParamChg(){
-  const p=$('#stParam').value, w=$('#stValWrap');
-  if(!w) return;
-  const sp=chpSpec(p);
-  if(p==='on') w.innerHTML=`<select id="stValSel" class="nkin"><option value="1">开启</option><option value="0">静音 / 旁通</option></select>`;
-  else if(p==='type') w.innerHTML=`<select id="stValSel" class="nkin">`
-    + fxAlgoOpts('(清空)') + `</select>`;
-  else if(p==='name') w.innerHTML=`<input id="stValTxt" class="nkin" style="width:120px" maxlength="12" placeholder="名称">`;
-  else if(p==='load') w.innerHTML=`<span class="ds" style="margin:0">按上面的编号切换场景</span>`;
-  else if(sp&&sp.t==='bool')
-    w.innerHTML=`<select id="stValSel" class="nkin">`
-      +`<option value="1">${sp.lb?sp.lb[1]:'开'}</option>`
-      +`<option value="0">${sp.lb?sp.lb[0]:'关'}</option></select>`;
-  else if(sp&&sp.t==='enum')
-    w.innerHTML=`<select id="stValSel" class="nkin">`
-      +sp.opts.map(o=>`<option value="${o[0]}">${o[1]}</option>`).join('')+`</select>`
-      +`<span class="ds" style="margin:0 0 0 6px;min-width:34px">${sp.u||''}</span>`;
-  else if(sp)
-    w.innerHTML=`<input id="stValNum" type="number" class="nkin" style="width:100px"`
-      +` min="${sp.lo}" max="${sp.hi}" step="${sp.step}" value="${sp.dv!==undefined?sp.dv:sp.lo}">`
-      +`<span class="ds" style="margin:0 0 0 6px;min-width:34px">${sp.u||''}</span>`;
-  // ⚠️ 单位必须**贴着输入框**显示：混响参数吃的是原生单位（秒 / 毫秒），
-  //    而 fader/mix 又是 0–1。少了单位标签，用户极易把"混响时间 80"填成 0.8 秒，
-  //    跑起来"没什么效果"还以为是台子坏了。
-  else {
-    const u={fader:'%',time:'秒',predelay:'毫秒',damp:''}[p]||'';
-    const dv=p==='fader'?80:(p==='time'?2.4:(p==='predelay'?20:0.45));
-    w.innerHTML=`<input id="stValNum" type="number" class="nkin" style="width:100px" step="0.01" value="${dv}">`
-      +`<span class="ds" style="margin:0 0 0 6px;min-width:34px">${u}</span>`;
-  }
-}
-// ---- 原始 OSC 表单 ----
-function oscFormHTML(){
-  return `<input id="oscAddr" class="nkin" style="flex:1;min-width:190px" placeholder="/ch/05/mix/fader" maxlength="128">`
-    + `<input id="oscArgs" class="nkin" style="flex:1;min-width:140px" placeholder="参数,逗号分隔(可留空) 如 0.8">`
-    + `<div class="ds" style="width:100%;color:#d9a13c">⚠️ 原始 OSC 是<b>控台专有</b>的:地址写死,换到别的控台可能指向别的参数、甚至完全无效。通用需求请优先用上面的「通用设置」。</div>`;
-}
-function updRelChips(){
-  const g=$('#caGrp')?$('#caGrp').value:'ch';
-  $('#caRelChips').innerHTML=chipGrid(g,g==='ch'?32:g==='bus'?16:8);
-}
-function learnTo(){
-  const k=$('#caKind').value;
-  const g=CA_MULTI[k]; if(!g) return;
-  if(caMulti.length!==1){ cardErr('「取当前值」需要先在列表里只勾选 1 个目标'); return; }
-  const i=caMulti[0];
-  const src=g==='ch'?(S.ch[i]||{}):(S.bus[i]||{});
-  if(src.fader===undefined){ cardErr('暂时读不到当前值,请稍候'); return; }
-  const el=document.getElementById('caP1');
-  if(el) el.value=Math.round(src.fader*100);
-  hideCardErr();
-}
-function presetOpts(){
-  const list=(S.snapshots||[]);
-  if(!list.length) return '<option value="0">（还没有预设：先到卡片页「保存预设」）</option>';
-  return list.map(sp=>`<option value="${sp.id}">${esc(sp.name)} · ${sp.count||0} 值</option>`).join('');
-}
-function caSceneModeChg(){
-  const modeEl=$('#caSceneMode'), box=$('#caSceneExtra'), note=$('#caSceneNote');
-  if(!modeEl||!box) return;
-  if(modeEl.value==='partial'){
-    box.innerHTML=`<select id="caScenePreset" class="nkin">${presetOpts()}</select>`
-      +numIn('caSec','推子秒数',1)+`<span class="ds" style="margin:0">秒</span>`+curveSel();
-    if(note) note.textContent='局部调用不发场景号：只把预设范围内的参数应用过来，其余通道一个字节都不动。';
-  } else {
-    box.innerHTML='';
-    if(note) note.textContent='全局调用会按场景整场还原（包括卡片里没写过的通道）；真台上还受 Scene Safes 影响。';
-  }
-}
-// 通用设置：从当前台面抓一个值填进来（省得手抄 dB / 混响秒数）
-function curValue(g,p,i){
-  try{
-    if(g==='fx'){
-      const fx=(S.fx||[]).find(x=>x.slot===i);
-      if(!fx) return null;
-      if(p==='type') return fx.type||'';
-      if(p==='name') return fx.name||'';
-      if(p==='on') return fx.on?1:0;
-      if(p==='mix') return fx.mix;
-      if(p==='time'||p==='predelay'||p==='damp'){
-        const v=fx[p];
-        return (v===undefined||v===null)?null:v;
-      }
-      return null;
-    }
-    if(g==='scene') return +S.scene||1;
-    const row=(g==='main')?S.main:(S[g]||{})[String(i)];
-    if(!row) return null;
-    if(p==='on') return row.on?1:0;
-    if(p==='name'){ const nm=(S.names||{})[g]||{}; return nm[String(i)]||''; }
-    if(p==='fader') return row.fader;
-    // 新增通道参数: 行字典里同名字段直接返回 (缺省 = 该组没这个参数 → null)
-    if(row[p]!==undefined) return row[p];
-  }catch(e){}
-  return null;
-}
-function learnSet(){
-  const g=$('#stGroup').value, p=$('#stParam').value;
-  const i=(g==='main')?0:(+($('#stId').value)||1);
-  const sp=chpSpec(p);
-  if(g==='send'){
-    // 发送值不在 /api/state 里 (512 项会把状态包撑爆), 抓取时单独拉一次
-    const bus=+((($('#stBus')||{}).value)||1);
-    fetch('/api/sends?ch='+i).then(r=>r.json()).then(d=>{
-      const row=(d.sends||{})[String(bus)];
-      if(!row){ cardErr('读不到 CH'+i+' → Bus'+bus); return; }
-      const v=(p==='send_level')?row.level:(p==='send_on'?row.on:row.tap);
-      fillStVal(sp,p,v);
-    }).catch(()=>cardErr('读取发送值失败'));
-    return;
-  }
-  const v=curValue(g,p,i);
-  if(v===null){ cardErr('读不到「'+g+' '+i+'」的当前值（编号越界，或该参数尚未建模）'); return; }
-  fillStVal(sp,p,v);
-}
-function fillStVal(sp,p,v){
-  if(p==='on'||p==='load'){
-    const sel=$('#stValSel'); if(sel) sel.value=String(v?1:0);
-    cardInfo('已抓取：'+(v?'开启':'静音'));
-  } else if(sp&&sp.t==='bool'){
-    const sel=$('#stValSel'); if(sel) sel.value=String(v?1:0);
-    cardInfo('已抓取：'+(v?sp.lb[1]:sp.lb[0]));
-  } else if(sp&&sp.t==='enum'){
-    const sel=$('#stValSel'); if(sel) sel.value=String(v);
-    cardInfo('已抓取：'+v+' '+(sp.u||''));
-  } else if(p==='type'){
-    const sel=$('#stValSel'); if(sel) sel.value=v||'';
-    cardInfo('已抓取算法：'+(v||'(空)'));
-  } else if(p==='name'){
-    const el=$('#stValTxt'); if(el) el.value=v||'';
-    cardInfo('已抓取名称：'+(v||'(空)'));
-  } else {
-    const el=$('#stValNum');
-    const isPct=(p==='fader'||p==='send_level');
-    if(el) el.value=isPct?Math.round(v*100):v;
-    cardInfo('已抓取：'+(isPct?Math.round(v*100)+'%':(sp?chpFmt(sp,v):v)));
-  }
-}
-function cardInfo(msg){
-  const e=$('#cardErr'); if(!e) return;
-  e.textContent=msg; e.classList.add('on'); e.style.color='var(--green)';
-  setTimeout(()=>{ e.style.color=''; },2200);
-}
-function pct(v){ return Math.min(Math.max(+(v||0),0),100)/100; }
-function addAct(){
-  const k=$('#caKind').value, a={kind:k};
-  const g=id=>{const e=document.getElementById(id);return e?e.value:null;};
-  if(k==='rel_db'){
-    const grp=$('#caGrp')?$('#caGrp').value:'ch';
-    if(!caMulti.length){
-      const cg=$('#caChips');
-      if(cg){ cg.classList.add('inv'); setTimeout(()=>cg.classList.remove('inv'),1200); }
-      cardErr('请先勾选要增减的目标,再点「＋加入动作」');
-      return;
-    }
-    a.group=grp;
-    a[{ch:'chs',bus:'buses',dca:'dcas'}[grp]]=caMulti.slice().sort((x,y)=>x-y);
-    a.delta_db=Math.min(Math.max(+g('caDb')||3,-30),30);
-    a.duration=Math.max(+g('caSec')||2,0.5);
-    a.curve=g('caCurve');
-    caActs.push(a); renderActs(); return;
-  }
-  if(k==='set'){
-    const grp=$('#stGroup').value, p=$('#stParam').value;
-    let i=+($('#stId').value)||0;
-    if(grp==='main') i=0;
-    if(grp!=='main'&&grp!=='scene'&&i<1){ cardErr('请填写目标编号'); return; }
-    if(grp==='scene'&&i<1){ cardErr('请填写场景号'); return; }
-    a.target={group:grp,param:p,id:i};
-    // 发送: id 是通道, 再带上 Bus。后端按 send_pack(通道, Bus) 落地
-    if(grp==='send') a.target.bus=+((($('#stBus')||{}).value)||1);
-    const sp=chpSpec(p);
-    if(p==='on') a.value=(+($('#stValSel')?$('#stValSel').value:0))?1:0;
-    else if(sp&&sp.t==='bool') a.value=(+($('#stValSel')?$('#stValSel').value:0))?1:0;
-    else if(sp&&sp.t==='enum') a.value=+($('#stValSel')?$('#stValSel').value:0);
-    else if(p==='type') a.value=($('#stValSel')?$('#stValSel').value:'');   // 库来自当前控台
-    else if(p==='name') a.value=($('#stValTxt')?$('#stValTxt').value.trim():'');
-    else if(p==='load') a.value=1;
-    else {
-      let v=+($('#stValNum')?$('#stValNum').value:0)||0;
-      if(p==='fader'||p==='send_level') v=pct(v);   // 表单里填百分比, 传 0..1
-      a.value=v;                          // 新通道参数吃原生单位 (dB/ms/Hz), 不做百分比换算
-    }
-    const d=+($('#stDur')?$('#stDur').value:0)||0;
-    if(d>0&&p==='fader') a.duration=Math.max(d,0.5);   // 只有推子类能渐变
-    else if(d>0) cardErr('提示:非推子参数不支持渐变,已按瞬间执行');
-    caActs.push(a); renderActs(); return;
-  }
-  if(k==='osc'){
-    const addr=($('#oscAddr')?$('#oscAddr').value.trim():'');
-    if(!addr){ cardErr('请填写 OSC 地址'); return; }
-    if(addr[0]!=='/'){ cardErr('OSC 地址必须以 / 开头,例如 /ch/05/mix/fader'); return; }
-    if(addr.indexOf(' ')>=0){ cardErr('OSC 地址不能含空格'); return; }
-    a.address=addr;
-    const raw=($('#oscArgs')?$('#oscArgs').value.trim():'');
-    if(raw){
-      a.args=raw.split(',').map(s=>s.trim()).filter(s=>s!=='').map(s=>
-        (/^-?\d+(\.\d+)?$/.test(s))?+s:s);      // 纯数字转数值, 其余当字符串
-    }
-    caActs.push(a); renderActs(); return;
-  }
-  if(CA_MULTI[k]){
-    if(!caMulti.length){
-      const cg=$('#caChips');
-      if(cg){ cg.classList.add('inv'); setTimeout(()=>cg.classList.remove('inv'),1200); }
-      cardErr('请先在列表里勾选目标'+(k==='mute'||k==='fade_ch'?'通道':'Bus')+',再点「＋加入动作」');
-      return;
-    }
-    const sel=caMulti.slice().sort((x,y)=>x-y);
-    if(k==='mute') a.chs=sel;
-    else if(k==='mute_bus') a.buses=sel;
-    else if(k==='fade_ch'){ a.chs=sel; a.to=pct(g('caP1')); a.duration=Math.max(+g('caSec')||3,0.5); a.curve=g('caCurve'); }
-    else { a.buses=sel; a.to=pct(g('caP1')); a.duration=Math.max(+g('caSec')||3,0.5); a.curve=g('caCurve'); }
-  }
-  else if(k==='scene'){
-    a.scene=+(g('caScene')||1);
-    const mode=g('caSceneMode')||'global';
-    a.mode=mode;
-    if(mode==='partial'){
-      const pid=+(g('caScenePreset')||0);
-      if(!pid){ cardErr('局部调用需要先选一条预设（没有就先到卡片页保存一条）'); return; }
-      a.presetId=pid;
-      a.duration=Math.max(+g('caSec')||1,0.05);
-      a.curve=g('caCurve');
-    }
-  }
-  else if(k==='preset'){
-    const pid=+(g('caPreset')||0);
-    if(!pid){ cardErr('请先选要调用的预设'); return; }
-    a.presetId=pid;
-    a.duration=Math.max(+g('caSec')||2,0.5);
-    a.curve=g('caCurve');
-  }
-  else if(k==='wait') a.duration=Math.max(+g('caSec')||3,0.5);
-  else if(k==='unmute_all'){ /* 无参数 */ }
-  else if(k==='fade_all'){ a.to=pct(g('caP1')); a.duration=Math.max(+g('caSec')||3,0.5); a.curve=g('caCurve'); }
-  else if(k==='fade_odd_even'){ a.odd_to=pct(g('caP1')); a.even_to=pct(g('caP2')); a.duration=Math.max(+g('caSec')||4,0.5); a.curve=g('caCurve'); }
-  else if(k==='fade_from'){ a.ch=+(g('caCh')||15); a.frm=pct(g('caP0')); a.to=pct(g('caP1')); a.duration=Math.max(+g('caSec')||5,0.5); a.curve=g('caCurve'); }
-  else if(k==='fade_from_bus'){ a.bus=+(g('caBus')||1); a.frm=pct(g('caP0')); a.to=pct(g('caP1')); a.duration=Math.max(+g('caSec')||5,0.5); a.curve=g('caCurve'); }
-  caActs.push(a); renderActs();
-}
-function actTxt(a){
-  const cv={linear:'直线',ease_out:'先快后慢',ease_in:'先慢后快',smooth:'S 形'};
-  const t=x=>Math.round(x*100)+'%';
-  const lst=(g,arr)=>(arr||[]).map(i=>dispName(g,i)).join('、');
-  if(a.kind==='mute') return '静音 '+lst('ch',a.chs||(a.ch?[a.ch]:[]));
-  if(a.kind==='mute_bus') return '静音 '+lst('bus',a.buses||(a.bus?[a.bus]:[]));
-  if(a.kind==='scene'){
-    if((a.mode||'global')==='partial'){
-      const sp=(S.snapshots||[]).find(x=>x.id===a.presetId);
-      return `场景 ${a.scene} 局部（${sp?'预设「'+sp.name+'」':'预设已删除'}）`;
-    }
-    return '切到场景 '+a.scene;
-  }
-  if(a.kind==='preset'){
-    const sp=(S.snapshots||[]).find(x=>x.id===a.presetId);
-    return `调用预设「${sp?sp.name:'已删除'}」`;
-  }
-  if(a.kind==='unmute_all') return '全部取消静音';
-  if(a.kind==='wait') return '等待 '+(+a.duration||1)+' 秒';
-  if(a.kind==='fade_all') return `全体推子→${t(a.to)} ${a.duration}秒 ${cv[a.curve]}`;
-  if(a.kind==='fade_odd_even') return `奇数→${t(a.odd_to)} 偶数→${t(a.even_to)} ${a.duration}秒 ${cv[a.curve]}`;
-  if(a.kind==='fade_ch') return `${lst('ch',a.chs||(a.ch?[a.ch]:[]))} →${t(a.to)} ${a.duration}秒 ${cv[a.curve]}`;
-  if(a.kind==='fade_bus') return `${lst('bus',a.buses||(a.bus?[a.bus]:[]))} →${t(a.to)} ${a.duration}秒 ${cv[a.curve]}`;
-  if(a.kind==='fade_from') return `${dispName('ch',a.ch)} 从${t(a.frm)} 经${a.duration}秒→${t(a.to)} ${cv[a.curve]}`;
-  if(a.kind==='fade_from_bus') return `${dispName('bus',a.bus)} 从${t(a.frm)} 经${a.duration}秒→${t(a.to)} ${cv[a.curve]}`;
-  if(a.kind==='rel_db'){
-    const g2=a.group||'ch';
-    const ids=a[{ch:'chs',bus:'buses',dca:'dcas'}[g2]]||[];
-    return `${lst(g2,ids)} ${a.delta_db>=0?'+':'−'}${Math.abs(+a.delta_db||0)}dB ${a.duration}秒 ${cv[a.curve]}`;
-  }
-  if(a.kind==='set'){
-    const tg=a.target||{}, g2=tg.group, p=tg.param||'fader', i=(g2==='main')?0:(+tg.id||0);
-    const gname=((ST_GROUPS.find(x=>x[0]===g2)||['',g2])[1]);
-    if(g2==='scene') return '切到场景 '+i;
-    if(g2==='fx'){
-      if(p==='on') return `FX${i} ${a.value?'开启':'旁通'}`;
-      if(p==='type') return `FX${i} 算法=${a.value||'(清空)'}`;
-      if(p==='name') return `FX${i} 名称=${a.value}`;
-      if(p==='mix') return `FX${i} 混合比=${(+a.value||0).toFixed(2)}`;
-      return `FX${i} ${(ST_PLABEL[p]||p)} = ${a.value}`;
-    }
-    // 标签必须能区分"CH05 推子"和"CH05→Bus03 发送电平": 发送是二维目标,
-    // 只写通道号会出现两条一模一样的摘要, 用户没法核对卡片。
-    const lbl=(g2==='main')?'主输出':(g2==='send')
-      ? `CH${String(i).padStart(2,'0')}→Bus${String((a.target&&a.target.bus)||1).padStart(2,'0')}`
-      : `${gname} ${String(i).padStart(2,'0')}`;
-    if(p==='on') return `${lbl} ${a.value?'开启':'静音'}`;
-    if(p==='send_on') return `${lbl} 发送${a.value?'开':'关'}`;
-    if(p==='send_level') return `${lbl} 电平=${Math.round((+a.value||0)*100)}%`;
-    if(p==='send_tap')
-      return `${lbl} 取点=${(['<-EQ','EQ->','PRE','POST','GRP'][+a.value||0])||''}`;
-    const dd=(+a.duration>0)?` 经${a.duration}秒`:'';
-    const sp0=(p==='fader')?null:chpSpec(p);
-    if(sp0&&sp0.t!=='bool')
-      return `${lbl} ${sp0.l}=${(+a.value||0)}${sp0.u?(' '+sp0.u):''}`;
-    return `${lbl} →${Math.round((+a.value||0)*100)}%${dd}`;
-  }
-  if(a.kind==='osc') return `⚠️ 原始 OSC ${a.address}${(a.args&&a.args.length)?' '+a.args.join(' '):''}`;
-  return '?';
-}
-function renderActs(){
-  $('#actChips').innerHTML=caActs.map((a,i)=>
-    `<span style="display:inline-flex;align-items:center;gap:6px;background:var(--card2);color:var(--txt);border:1px solid var(--line);border-radius:14px;padding:4px 10px;font-size:12px;margin:2px">
-      ${i+1}. ${esc(actTxt(a))} <b style="cursor:pointer;color:var(--red)" onclick="caActs.splice(${i},1);renderActs()">×</b></span>`).join('')
-    || '<div class="ds" style="font-size:12px">还没有动作,选类型后点「＋加入动作」。</div>';
-}
-let editCardId = null;
-function saveCard(){
-  const name=$('#ncName').value.trim();
-  $('#ncName').classList.toggle('inv', !name);
-  if(!name){ cardErr('请填写卡片名称(必填)'); return; }
-  if(!caActs.length){ cardErr('请至少加入一个动作,再保存卡片'); return; }
-  const btn=$('#cardSaveBtn');
-  btn.classList.add('btnspin'); btn.textContent='保存中…';
-  hideCardErr();
-  const url=editCardId?'/api/cardedit':'/api/cardadd';
-  const cardData={name:name,desc:$('#ncDesc').value,actions:caActs,
-                  next:($('#ncNext')?$('#ncNext').value:'')};
-  const payload=editCardId
-    ?{id:editCardId, card:cardData}
-    :{card:cardData};
-  fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify(payload)})
-  .then(r=>{
-    if(!r.ok) throw new Error('服务器错误 '+r.status);
-    return r.json();
-  })
-  .then(d=>{
-    if(!d || !d.ok) throw new Error((d&&d.error)||'保存被拒绝');
-    // 服务端会回报"清洗时丢了几个动作、为什么"—— 必须让用户看见，
-    // 否则就是"保存成功但跑起来少了东西"的假成功。
-    const dp=d.dropped||[];
-    if(dp.length) toast('⚠️ 已保存，但有 '+dp.length+' 个动作被丢弃：'+dp.join('；'));
-    else toast(editCardId?'✏️ 卡片已更新':'🎬 卡片已创建');
-    caActs=[]; renderActs(); $('#ncName').value=''; $('#ncDesc').value='';
-    closeCardModal();
-  })
-  .catch(err=>cardErr('保存失败: '+(err&&err.message?err.message:'网络异常,请重试')))
-  .finally(()=>{
-    btn.classList.remove('btnspin'); btn.textContent='💾 保存卡片';
-  });
-}
-function openCardModal(card){
-  editCardId = card ? card.id : null;
-  $('#cardModalTitle').textContent = card ? '✏️ 编辑演出卡片' : '➕ 新建演出卡片';
-  $('#cardSaveBtn').textContent = card ? '💾 保存修改' : '💾 保存卡片';
-  // ⚠️ 三个字段都必须**无条件**重置。曾经的写法把 name/desc/caActs 全放在
-  //    `if(card){...}` 里 —— 新建卡片加几个动作 → 不保存直接关 → 再点"新建"，
-  //    上次的动作和名字都还在，用户会以为"自动保存了"。
-  $('#ncName').value = card ? (card.name || '') : '';
-  $('#ncDesc').value = card ? (card.desc || '') : '';
-  caActs = card ? JSON.parse(JSON.stringify(card.actions || [])) : [];
-  // 接续选择: 除自身外的所有卡片
-  const nxt=$('#ncNext');
-  nxt.innerHTML='<option value="">(无 · 执行完就停)</option>'
-    +(S.cards||[]).filter(x=>x.id!==editCardId)
-      .map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join('');
-  nxt.value=(card&&card.next)||'';
-  $('#cardModal').classList.add('on');
-  document.body.style.overflow='hidden';
-  updCaParams(); renderActs(); hideCardErr();
-  setTimeout(()=>$('#ncName').focus(),120);
-}
-function closeCardModal(){
-  $('#cardModal').classList.remove('on');
-  document.body.style.overflow='';
-  hideCardErr();
-  if(editCardId){
-    editCardId = null;
-    caActs = []; renderActs();
-    $('#ncName').value=''; $('#ncDesc').value='';
-  }
-  $('#ncName').classList.remove('inv');
-}
-function cardErr(msg){ const e=$('#cardErr'); e.textContent=msg; e.classList.add('on'); }
-function hideCardErr(){ $('#cardErr').classList.remove('on'); }
-document.addEventListener('keydown',e=>{ if(e.key==='Escape') closeCardModal(); });
-function delCard(id){ api('/api/carddel',{id:id}); }
-updNkIdx(); updCaParams(); renderActs(); updNmIdx();
-
-// ---- 效果器: FX 槽 1-8 / Tap 定拍 / 混响时间同步 ----
-// 页面覆盖全部 61 种算法（混响/延迟/组合/调制/变调/均衡/动态/增强/吉他），
-// 不是"混响专用"：算法名一律用真台英文名，中文只作括号里的辅助。
-// 与服务端同一套语义: BPM 取最近 8 个间隔均值, 抖动(<0.15s)忽略, 超时(>2s)重开;
-// 时间 = 拍数 × 60/BPM (附点 ×1.5); 实际写入由服务端按算法范围钳制。
-// 算法清单不再写死 —— 由服务端按**当前控台驱动**下发 (S.fx.algos)。
-// 换控台 = 换一套效果库, 下拉选项跟着重建; 这样"选的就是这台台子上真有的效果"。
-// 61 种算法平铺成一个长列表根本找不到东西 → 按分类分组 (optgroup);
-// heavy 算法带"仅FX1-4"标记, 免得用户选了才被拒。
-function fxAlgoOpts(emptyLabel){
-  const lib = (S && S.fx && S.fx.algos) || {};
-  const keys = Object.keys(lib);
-  if (!keys.length) return '<option value="">— 效果库未就绪 —</option>';
-  const el = (emptyLabel === undefined) ? '— 空槽 —' : emptyLabel;
-  const catLab = ((S.fx && S.fx.console) || {}).catLabel || {};
-  const byCat = {};
-  keys.forEach(k => { const c = lib[k].cat || 'misc'; (byCat[c] = byCat[c] || []).push(k); });
-  const order = Object.keys(catLab);
-  const groups = Object.keys(byCat).sort((a, b) => {
-    const ia = order.indexOf(a), ib = order.indexOf(b);
-    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
-  }).map(c => '<optgroup label="' + esc(catLab[c] || c) + '">'
-      + byCat[c].map(k => {
-          // 真台名在前、中文在后：用户照着台子/X32-Edit 上的字找效果器，
-          // 只给中文等于让他自己翻译（"立体声合唱" ↔ "Stereo Chorus"）。
-          const en = lib[k].en || k, zh = lib[k].label || '';
-          const nm = (!zh || zh === en) ? en : (en + '（' + zh + '）');
-          return '<option value="' + esc(k) + '">' + esc(nm)
-              + (lib[k].heavy ? ' · 仅FX1-4' : '') + '</option>';
-        }).join('')
-      + '</optgroup>').join('');
-  return '<option value="">' + esc(el) + '</option>' + groups;
-}
-const FX_BEATS = {'1/16':0.25, '1/8':0.5, '1/4':1, '1/2':2, '1':4, '2':8};
-const FX_NOTE_OPTS = [['1/16','1/16 音符'], ['1/8','1/8 音符'], ['1/4','1/4 音符'],
-                      ['1/2','1/2 音符'], ['1','全音符'], ['2','2 小节']];
-function fxNoteSecs(bpm, note, dotted){
-  let beats = FX_BEATS[note] || 1;
-  if (dotted) beats *= 1.5;
-  bpm = Math.min(Math.max(+bpm || 120, 30), 300);
-  return beats * 60 / bpm;
-}
-// 参数控件不再为每种算法写死 —— 服务端按标定表下发全部参数 (field/label/
-// unit/lo/hi/kind/opts/value/unset), 这里统一渲染: 数值=滑杆, 枚举=下拉。
-// 未设置 (unset) 的参数不拿 0 冒充: 大量参数 lo>0 (频率/时间), 0 越界会把
-// 滑杆骗到一端 —— 显示"未设置", 拖一下才真正写上台面。
-// ⚠️ 步长候选必须**升序**取第一个满足"≤200 档"的: 曾经写成降序, 于是永远
-//    返回 100 —— 0.2–5.0 的混响时间滑杆 step=100, 浏览器把 3.5 吸附回 0.2,
-//    界面看着正常、值根本拖不动 (只能靠交互测试抓出来)。
-function fxStep(lo, hi){
-  const span = Math.abs((+hi) - (+lo)) || 1;
-  for (const st of [0.001, 0.01, 0.05, 0.1, 0.5, 1, 5, 10, 50, 100])
-    if (span / st <= 200) return st;
-  return 1000;
-}
-function fxDec(lo, hi){
-  const st = fxStep(lo, hi);
-  return st >= 1 ? 0 : (st >= 0.1 ? 1 : 2);
-}
-function fxParsHTML(s, st){
-  if (!st || !st.loaded){
-    const lib = (S && S.fx && S.fx.algos) || {};
-    const c = (S && S.fx && S.fx.console) || {};
-    if (c.locked || !Object.keys(lib).length)
-      return '<div class="ds" style="margin:0">控台「' + esc(c.label || '当前控台')
-           + '」的效果库还没标定，这个槽暂时不可用（写入会被拒绝并记日志）。</div>';
-    // 库小就列名字 (5 种混响的时代), 库大 (61 种) 只报数 —— 全列出来是刷屏
-    const names = Object.keys(lib);
-    const hint = names.length <= 12
-      ? ('空槽 — 把上面的类型选成 ' + names.map(k => esc(lib[k].label)).join(' / ') + ' 中的一个。')
-      : ('空槽 — 从上面的类型下拉选一个算法（' + names.length + ' 种, 按分类分组）。');
-    return '<div class="ds" style="margin:0">' + hint + '</div>';
-  }
-  if (!st.known)
-    return '<div class="ds" style="margin:0">⚠ 真台上这个槽装的是「' + esc(st.type)
-         + '」，不在本控台「' + esc(((S.fx.console || {}).label) || '当前')
-         + '」的效果库里 — 没有标定参数，这个槽只能看不能调。</div>';
-  const clamp0 = (lo, hi) => Math.min(Math.max(0, +lo), +hi);
-  const rows = (st.params || []).map(p => {
-    const unit = p.unit ? ' ' + p.unit : '';
-    if (p.kind === 'i'){
-      const opts = (p.opts || []).map((o, i) =>
-        `<option value="${i}">${esc(o)}</option>`).join('');
-      const unset = (p.value === null || p.value === undefined);
-      const shown = unset ? '未设置'
-        : esc(String((p.opts || [])[p.value] != null ? (p.opts)[p.value] : p.value));
-      return `<div class="fxrow"><span class="fxlab">${esc(p.label)}</span>
-        <select class="fxsel" data-f="${p.field}" onchange="fxSet(${s},'${p.field}',+this.value)">
-          ${unset ? '<option value="">未设置</option>' : ''}${opts}</select>
-        <span class="fxval" data-v="${p.field}">${shown}</span></div>`;
-    }
-    const dec = fxDec(p.lo, p.hi), step = fxStep(p.lo, p.hi);
-    const unset = (p.value === null || p.value === undefined);
-    const val = unset ? clamp0(p.lo, p.hi) : +p.value;
-    return `<div class="fxrow"><span class="fxlab">${esc(p.label)}</span>
-      <input type="range" class="fxsl" data-f="${p.field}" data-unit="${esc(p.unit || '')}"
-        data-dec="${dec}" min="${p.lo}" max="${p.hi}" step="${step}" value="${val.toFixed(dec)}"
-        oninput="fxSlide(${s},'${p.field}',this)">
-      <span class="fxval" data-v="${p.field}">${unset ? '未设置' : val.toFixed(dec) + unit}</span></div>`;
-  }).join('');
-  // mix 是槽级字段 (不在算法参数表里), 固定排在最后
-  // 参数多于 8 个的算法 (GEQ 32 项 / P1A2 20 项…) 在宽屏排双列, 窄屏仍单列
-  const body = (st.params || []).length > 8
-    ? '<div class="fxgrid">' + rows + '</div>' : rows;
-  return body + `<div class="fxrow"><span class="fxlab">混合比</span>
-      <input type="range" class="fxsl" data-f="mix" data-unit="" data-dec="2"
-        min="0" max="1" step="0.01" value="${(+st.mix).toFixed(2)}"
-        oninput="fxSlide(${s},'mix',this)">
-      <span class="fxval" data-v="mix">${(+st.mix).toFixed(2)}</span></div>`;
-}
-function fxCardHTML(s){
-  const opts = fxAlgoOpts();
-  return `<div class="card" id="fxc-${s}">
-    <div class="nm">FX${s}
-      <select class="nkin fx-type" onchange="fxSet(${s},'type',this.value)">${opts}</select>
-      <input class="nkin fx-name" style="width:110px" maxlength="12" placeholder="名称"
-        onchange="fxSet(${s},'name',this.value)">
-      <button class="mute fx-on" onclick="fxToggle(${s})" title="效果开关">M</button>
-      <span class="ds fx-tag" style="margin:0"></span></div>
-    <div class="fxshot empty"><img alt="效果器面板" loading="lazy"></div>
-    <div class="fxpars"></div></div>`;
-}
-// ---- 效果器图鉴 (v1.8) ----
-// 图片是真机界面截图: X32 由 X32-Edit 4.4 逐算法渲染后截取(61 种全),
-// WING 取自官方手册的 FX 选择页(52 种)。只作"对号"用, 不参与参数运算。
-// 元数据在 /fx/fxlib.json, 由 X32Simulator/tools/export_fx_gallery.py 生成。
-let fxGalData = null, fxGalGroup = 'x32';
-function fxGallery(){
-  $('#fxGalModal').classList.add('on');
-  if (fxGalData){ fxGalRender(); return; }
-  const body = $('#fxGalBody');
-  body.innerHTML = '<div class="ds">加载中…</div>';
-  fetch('/fx/fxlib.json').then(r => r.json()).then(d => {
-    fxGalData = d; fxGalRender();
-  }).catch(e => {
-    body.innerHTML = '<div class="ds">图鉴元数据加载失败: ' + esc(String(e)) + '</div>';
-  });
-}
-function closeFxGallery(){ $('#fxGalModal').classList.remove('on'); }
-function fxGalTab(g){ fxGalGroup = g; fxGalRender(); }
-function fxGalRender(){
-  if (!fxGalData) return;
-  [...$('#fxGalTabs').children].forEach(b => b.classList.toggle('on', b.dataset.g === fxGalGroup));
-  let rows = [];
-  if (fxGalGroup === 'x32'){
-    rows = (fxGalData.x32.items || []).map(it => ({
-      img: it.img, name: it.en, sub: it.cn,
-      tag: it.heavy ? '仅 FX1-4' : (it.n + ' 参数')}));
-  } else {
-    const g = fxGalData.wing[fxGalGroup] || {items: []};
-    rows = g.items.map(it => ({img: it.img, name: it.name, sub: '', tag: ''}));
-  }
-  $('#fxGalBody').innerHTML = rows.length ? rows.map(r =>
-      '<figure><img src="/fx/' + esc(r.img) + '" loading="lazy" alt="' + esc(r.name) + '">'
-      + '<figcaption><span><b>' + esc(r.name) + '</b>'
-      + (r.sub ? ' <span class="cn">' + esc(r.sub) + '</span>' : '') + '</span>'
-      + (r.tag ? '<span class="tag">' + esc(r.tag) + '</span>' : '')
-      + '</figcaption></figure>').join('')
-    : '<div class="ds">这一类还没有图。</div>';
-}
-function buildFx(){
-  $('#fxNote').innerHTML = FX_NOTE_OPTS.map(([v,t]) => `<option value="${v}">${t}</option>`).join('');
-  let g = '';
-  for (let s = 1; s <= 8; s++)
-    g += `<label class="chip" id="fxg-${s}"><input type="checkbox" onchange="fxGroupSet()">FX${s}</label>`;
-  $('#fxGroup').innerHTML = g;
-  let h = '';
-  for (let s = 1; s <= 8; s++) h += fxCardHTML(s);
-  $('#fxlist').innerHTML = h;
-}
-function updFx(){
-  if (!S || !S.fx) return;
-  const slots = S.fx.slots || [], sync = S.fx.sync || {}, tap = S.fx.tap || {};
-  // 效果库换了（＝切了控台）→ 重建算法下拉。libId 就是控台 id, 由服务端下发,
-  // 前端不做任何"猜"—— 库内容永远以服务端为准。
-  if (window.fxLibId !== S.fx.libId){
-    window.fxLibId = S.fx.libId;
-    renderFxLibrary();
-  }
-  renderFxConsole(S.fx.console || {});
-  slots.forEach(st => {
-    const card = document.getElementById('fxc-' + st.slot);
-    if (!card) return;
-    const ts = card.querySelector('.fx-type');
-    if (ts){
-      // 真台上可能装着本控台效果库里没有的算法 —— 给它补一个条目, 否则 select
-      // 会落成空白, 用户就看不到"真台上到底装了什么"了。
-      if (st.type && ![...ts.options].some(o => o.value === st.type)){
-        const o = document.createElement('option');
-        o.value = st.type;
-        o.textContent = st.type + '（不在本控台效果库）';
-        ts.appendChild(o);
-      }
-      if (document.activeElement !== ts && ts.value !== st.type) ts.value = st.type;
-    }
-    const nm = card.querySelector('.fx-name');
-    if (document.activeElement !== nm && nm.value !== st.name) nm.value = st.name;
-    card.querySelector('.fx-on').classList.toggle('on', !st.on);
-    const tag = card.querySelector('.fx-tag');
-    // 下拉里已经有算法名了，这里显示该算法的时间范围（Tap 换算会被钳制到这个区间）；
-    // 非混响类算法没有时间参数，退而显示参数个数
-    const txt = !st.loaded ? '空槽'
-               : (!st.known ? '⚠ 未知算法（不在本控台效果库）'
-               : (st.time != null ? (st.tmin + '–' + st.tmax + ' ' + (st.tunit || 's'))
-                                  : (((st.params || []).length) + ' 个参数')));
-    if (tag.textContent !== txt) tag.textContent = txt;
-    // 面板图: 用真台算法代码查内嵌截图。算法不在库里/空槽就收起整块,
-    // 不留一个空白框 —— 空框会被当成"图没加载出来"。
-    const box = card.querySelector('.fxshot');
-    if (box) {
-      const img = box.querySelector('img');
-      const src = st.loaded && st.known
-        ? '/fx/x32/' + String(st.type).replace('/', '_') + '.webp' : '';
-      if (src) {
-        if (img.getAttribute('src') !== src) img.src = src;
-        box.classList.remove('empty');
-      } else {
-        img.removeAttribute('src');
-        box.classList.add('empty');
-      }
-    }
-    // 算法变了就重建这一张卡的参数区 (range 的 min/max 随算法范围变)
-    const pars = card.querySelector('.fxpars');
-    // 算法变了、或控台锁定状态变了 → 重建参数区（range 的 min/max 随算法范围变；
-    // 空槽的提示文案也随"当前控台是否标定"变，只看 type 会漏掉换控台那一次）
-    const sig = (st.type || '') + '|' + (((S.fx.console || {}).locked) ? 'L' : '');
-    if (pars.dataset.algo !== sig){
-      pars.dataset.algo = sig;
-      pars.innerHTML = fxParsHTML(st.slot, st);
-    }
-    // 值刷新: 算法参数 + 槽级 mix 一把抓。enum 是下拉, 数值是滑杆;
-    // 未设置 (value=null) 只更新文字, 不动滑杆 (滑杆停在钳制后的 0 位)。
-    (st.params || []).concat([{field: 'mix', unit: '', kind: 'f', lo: 0, hi: 1,
-                               value: st.mix}]).forEach(p => {
-      if (p.kind === 'i'){
-        const sel = pars.querySelector(`.fxsel[data-f="${p.field}"]`);
-        if (sel && document.activeElement !== sel)
-          sel.value = (p.value === null || p.value === undefined) ? '' : p.value;
-        return;
-      }
-      const sl = pars.querySelector(`.fxsl[data-f="${p.field}"]`); if (!sl) return;
-      const ve = pars.querySelector(`.fxval[data-v="${p.field}"]`);
-      if (p.value === null || p.value === undefined){
-        if (ve) ve.textContent = '未设置';
-        return;
-      }
-      const dec = fxDec(p.lo, p.hi);
-      const shown = (+p.value).toFixed(dec);
-      if (document.activeElement !== sl && +sl.value !== +shown) sl.value = shown;
-      if (ve) ve.textContent = shown + (p.unit ? ' ' + p.unit : '');
-    });
-  });
-  const msel = $('#fxMode');
-  if (msel && document.activeElement !== msel && msel.value !== sync.mode) msel.value = sync.mode;
-  const fck = $('#fxFollow'); if (fck && fck.checked !== !!sync.followTap) fck.checked = !!sync.followTap;
-  const nsel = $('#fxNote');
-  if (nsel && document.activeElement !== nsel && nsel.value !== sync.note) nsel.value = sync.note;
-  const dck = $('#fxDotted'); if (dck && dck.checked !== !!sync.dotted) dck.checked = !!sync.dotted;
-  const gset = new Set(sync.group || []);
-  for (let s = 1; s <= 8; s++){
-    const el = document.getElementById('fxg-' + s); if (!el) continue;
-    const inp = el.querySelector('input');
-    if (inp && inp.checked !== gset.has(s)) inp.checked = gset.has(s);
-    el.classList.toggle('on', gset.has(s));
-  }
-  const bpm = tap.bpm || 0;
-  $('#tapBpm').textContent = bpm ? (bpm.toFixed(1) + ' BPM') : '— BPM';
-  $('#tapInfo').textContent = bpm
-    ? ('已点 ' + (tap.count || 0) + ' 下 · 取最近 8 个间隔的均值')
-    : '连点 2 下以上定拍';
-  $('#fxTapSecs').textContent = bpm
-    ? ('当前时值换算 = ' + fxNoteSecs(bpm, sync.note, sync.dotted).toFixed(3) + ' 秒') : '';
-}
-// ---- 效果器页：效果库随控台自动切换 ----
-// 只在"效果库真的换了"时重建下拉（见 updFx 的 libId 判断）——
-// 否则 250ms 一次的轮询会把用户正在选的下拉反复重画。
-function renderFxLibrary(){
-  const slots = (S && S.fx && S.fx.slots) || [];
-  slots.forEach(st => {
-    const card = document.getElementById('fxc-' + st.slot);
-    if (!card) return;
-    const sel = card.querySelector('.fx-type');
-    if (!sel) return;
-    const cur = st.type || '';
-    sel.innerHTML = fxAlgoOpts();
-    if (cur && ![...sel.options].some(o => o.value === cur)){
-      const o = document.createElement('option');
-      o.value = cur; o.textContent = cur + '（不在本控台效果库）';
-      sel.appendChild(o);
-    }
-    sel.value = cur;
-  });
-}
-function renderFxConsole(c){
-  const nm = $('#fxConsoleName'), nm2 = $('#fxConsoleName2'),
-        tag = $('#fxConsoleTag'), note = $('#fxConsoleNote'),
-        btn = $('#fxPullBtn'), pn = $('#fxPullNote');
-  if (nm)  nm.textContent  = c.label || '—';
-  if (nm2) nm2.textContent = c.label || '当前控台';
-  if (tag){
-    tag.textContent = c.verified ? '✅ 效果库已标定'
-                    : (c.ready ? '⚠ 结构已填 · 未上真机核对' : '⚠ 待标定');
-  }
-  const nk = (c.label || '') + '|' + (c.libCount || 0) + '|' + !!c.locked;
-  if (note && note.dataset.k !== nk){
-    note.dataset.k = nk;
-    note.innerHTML = c.locked
-      ? ('控台「' + esc(c.label || '?') + '」的效果库还没标定 —— 效果器页暂时<b>只能看不能写</b>。'
-         + '写入会被拒绝并记进日志：地址蒙错会写到别的参数上，比干脆不动作难查得多。')
-      : ('本控台效果库共 <b>' + (c.libCount || 0) + '</b> 种算法，占用 <b>' + (c.slots || 0)
-         + '</b> 个效果槽。下面的算法下拉就是这台台子上真正有的效果。');
-  }
-  const list = $('#fxlist');
-  if (list){                       // 用 pointer-events 而不是 disabled：参数区是重建的，
-    const locked = !!c.locked;     // disabled 会随重建丢失，pointer-events 不会
-    list.style.pointerEvents = locked ? 'none' : '';
-    list.style.opacity = locked ? '0.42' : '';
-  }
-  const on = !!(S && S.bridge && S.bridge.on);
-  if (btn){
-    btn.disabled = !on;
-    btn.style.opacity = on ? '' : '0.55';
-    btn.style.background = on ? '' : '#565d6d';
-    btn.style.color = on ? '' : '#cfd4de';
-    btn.textContent = on ? '⟳ 从真台同步效果' : '⟳ 从真台同步效果（未桥接）';
-  }
-  if (pn && pn.dataset.b !== String(on)){
-    pn.dataset.b = String(on);
-    pn.textContent = on
-      ? ('读回真台各效果槽的算法/开关/参数（已桥接 ' + (S.bridge.addr || '真台') + '）')
-      : '读回真台各效果槽的算法/开关/参数（需先用 --bridge 桥接真台）';
-  }
-}
-function fxPull(){
-  fetch('/api/fx',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({action:'pull'})})
-   .then(r=>r.json()).then(d=>{
-     if(!d.ok){ showToast(d.error||'同步失败'); return; }
-     showToast('⟳ ' + (d.message || '已向真台请求效果状态'));
-   }).catch(()=>showToast('同步失败'));
-}
-function fxSet(s, field, value){ api('/api/fx', {slot:s, field:field, value:value}); }
-function fxToggle(s){
-  const st = ((S.fx && S.fx.slots) || []).find(x => x.slot === s);
-  if (!st) return;
-  api('/api/fx', {slot:s, field:'on', value: st.on ? 0 : 1});
-}
-// 拖参数时 60ms 合并一次请求, 免得刷爆
-const fxPend = {}; let fxPendT = null;
-function fxSlide(s, field, el){
-  const v = +el.value;
-  const card = document.getElementById('fxc-' + s);
-  const ve = card && card.querySelector(`.fxval[data-v="${field}"]`);
-  // 小数位/单位在渲染时写进 dataset (不同算法量程差几个数量级, 不能写死)
-  if (ve) ve.textContent = v.toFixed(+(el.dataset.dec === undefined ? 2 : el.dataset.dec))
-    + (el.dataset.unit ? ' ' + el.dataset.unit : '');
-  fxPend[s + '|' + field] = {slot:s, field:field, value:v};
-  if (!fxPendT) fxPendT = setTimeout(() => {
-    fxPendT = null;
-    const arr = Object.keys(fxPend).map(k => fxPend[k]);
-    for (const k in fxPend) delete fxPend[k];
-    arr.forEach(p => api('/api/fx', p));
-  }, 60);
-}
-function fxGroupSet(){
-  const g = [];
-  for (let s = 1; s <= 8; s++){
-    const el = document.getElementById('fxg-' + s);
-    if (el && el.querySelector('input').checked) g.push(s);
-  }
-  api('/api/fxsync', {group:g});
-}
-function fxSyncSet(){
-  api('/api/fxsync', {mode: $('#fxMode').value, followTap: $('#fxFollow').checked,
-                      note: $('#fxNote').value, dotted: $('#fxDotted').checked});
-}
-// Tap 计时放在服务端 (与协议规范同一份实现), 网页只管发点击
-function tapHit(){
-  fetch('/api/tap', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({action:'tap'})})
-  .then(r => r.json()).then(d => {
-    if (!d || !d.ok) return;
-    $('#tapBpm').textContent = d.bpm ? (d.bpm.toFixed(1) + ' BPM') : '— BPM';
-    $('#tapInfo').textContent = '已点 ' + d.count + ' 下' + (d.locked ? ' · 已成拍' : ' · 再点一下定拍');
-  }).catch(() => {});
-}
-function tapReset(){
-  api('/api/tap', {action:'reset'});
-  $('#tapBpm').textContent = '— BPM';
-  $('#tapInfo').textContent = '连点 2 下以上定拍';
-}
-function tapApply(){
-  const note = $('#fxNote') ? $('#fxNote').value : '1/4';
-  const dotted = $('#fxDotted') ? $('#fxDotted').checked : false;
-  api('/api/fxsync', {note: note, dotted: dotted});
-  fetch('/api/tap', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({action:'apply'})})
-  .then(r => r.json()).then(d => {
-    if (!d || !d.ok){ showToast('Tap 写入失败: ' + ((d && d.error) || '未知')); return; }
-    showToast('🎛 按 ' + note + (dotted ? ' 附点' : '') + ' 换算 = ' + d.seconds
-      + ' 秒, 已写入 ' + (d.written || []).length + ' 个效果槽');
-  }).catch(() => showToast('Tap 写入失败: 网络异常'));
-}
-
-// ---- 电动推子平滑动画: 显示值以缓动逼近目标值 ----
-// ⚠️ 这里必须用 forEach 逐个 try 之外, 还要先判空: 「控制键」/「卡片管理」等地方也用
-// .row 做布局, 但里面根本没有 <input>。早期版本直接 `sl.dataset.target` —— 一旦这些
-// 行被渲染出来(渲染发生在首帧之后), tick() 就抛 TypeError, 而
-// `requestAnimationFrame(tick)` 写在函数末尾, 异常一抛**整个缓动循环永久停摆**
-// (推子从"电动滑行"退化成"瞬移", 且只在控制台留一条报错)。改为跳过没有 input 的行。
-const anim = {};
-function tick(){
-  document.querySelectorAll('.row').forEach(r=>{
-    const sl=r.querySelector('input');
-    if(!sl) return;
-    if(document.activeElement===sl) return;
-    const t=parseFloat(sl.dataset.target);
-    if(isNaN(t)) return;
-    let c=anim[r.id];
-    if(c===undefined) c=t;
-    const d=t-c;
-    if(Math.abs(d)>0.001){
-      c += d*0.16;
-      anim[r.id]=c;
-      sl.value=c;
-      r.querySelector('.db').textContent=(c<=0.001?'-∞':dbOf(c).toFixed(1))+' dB';
-    } else {
-      delete anim[r.id];
-      sl.value=t;
-    }
-  });
-  requestAnimationFrame(tick);
-}
-requestAnimationFrame(tick);
-
-// ---- 卡片实时值: 从台面状态生成一行摘要 (E1: 卡片显示实时参数) ----
-function cardLive(c){
-  if(!S) return '';
-  const parts=[];
-  for(const a of (c.actions||[])){
-    if(a.kind==='mute'){
-      const ids=a.chs||(a.ch?[a.ch]:[]);
-      if(!ids.length) continue;
-      const muted=ids.every(i=>S.ch[i]&&!S.ch[i].on);
-      parts.push(ids.map(i=>dispName('ch',i)).join('、')+(muted?' 已静音':' 出声中'));
-    } else if(a.kind==='mute_bus'){
-      const ids=a.buses||(a.bus?[a.bus]:[]);
-      if(!ids.length) continue;
-      const muted=ids.every(i=>S.bus[i]&&!S.bus[i].on);
-      parts.push(ids.map(i=>dispName('bus',i)).join('、')+(muted?' 已静音':' 出声中'));
-    } else if(a.kind==='fade_ch'||a.kind==='fade_from'){
-      const i=(a.chs||[a.ch])[0];
-      if(!i) continue;
-      const f=S.ch[i]?S.ch[i].fader:0;
-      parts.push(dispName('ch',i)+' '+Math.round(f*100)+'%'+(a.to!==undefined?'→'+Math.round(a.to*100)+'%':''));
-    } else if(a.kind==='fade_bus'||a.kind==='fade_from_bus'){
-      const i=(a.buses||[a.bus])[0];
-      if(!i) continue;
-      const f=S.bus[i]?S.bus[i].fader:0;
-      parts.push(dispName('bus',i)+' '+Math.round(f*100)+'%'+(a.to!==undefined?'→'+Math.round(a.to*100)+'%':''));
-    } else if(a.kind==='wait'){
-      parts.push('停 '+(+a.duration||1)+'s');
-    } else if(a.kind==='rel_db'){
-      const g2=a.group||'ch';
-      const ids=a[{ch:'chs',bus:'buses',dca:'dcas'}[g2]]||[];
-      if(!ids.length) continue;
-      const f=S[g2]&&S[g2][ids[0]]?S[g2][ids[0]].fader:0;
-      parts.push(ids.map(i=>dispName(g2,i)).join('、')+' '+Math.round(f*100)+'%'
-        +(a.delta_db>=0?' +':' −')+Math.abs(+a.delta_db||0)+'dB');
-    }
-    if(parts.length>=2) break;
-  }
-  return parts.join(' · ');
-}
-function undoLast(){ api('/api/undo',{}); }
-
-// ---- 危险卡防误触: 含全体类动作的卡片需长按 0.8 秒 (P2) ----
-const DANGER=['unmute_all','fade_all','fade_odd_even'];
-function isDanger(c){ return (c.actions||[]).some(a=>DANGER.includes(a.kind)); }
-let holdRAF=null, holdEl=null, holdFired=false;
-function holdStart(ev,id){
-  const c=(S.cards||[]).find(x=>x.id===id);
-  if(!c) return;
-  if(!isDanger(c)){ runShow(id); return; }
-  holdEl=ev.currentTarget; holdFired=false;
-  ev.preventDefault();
-  const bar=document.createElement('div'); bar.className='holdbar';
-  holdEl.appendChild(bar);
-  const t0=Date.now();
-  const step=()=>{
-    const p=Math.min(1,(Date.now()-t0)/800);
-    bar.style.width=(p*100)+'%';
-    if(p>=1){ holdFired=true; holdCancel(); runShow(id); return; }
-    holdRAF=requestAnimationFrame(step);
-  };
-  holdRAF=requestAnimationFrame(step);
-}
-function holdCancel(){
-  if(holdRAF){ cancelAnimationFrame(holdRAF); holdRAF=null; }
-  if(holdEl){
-    const b=holdEl.querySelector('.holdbar'); if(b) b.remove();
-    if(!holdFired) showToast('⚠️ 危险卡片 — 需长按 0.8 秒确认执行');
-    holdEl=null;
-  }
-}
-document.addEventListener('pointerup',()=>holdCancel());
-
-// ---- 卡片状态高亮: 动作目标已生效的计数 (P2) ----
-function actSatisfied(a){
-  const T=0.02;
-  if(a.kind==='mute'){
-    const ids=a.chs||(a.ch?[a.ch]:[]); if(!ids.length) return null;
-    return ids.every(i=>S.ch[i]&&!S.ch[i].on);
-  }
-  if(a.kind==='mute_bus'){
-    const ids=a.buses||(a.bus?[a.bus]:[]); if(!ids.length) return null;
-    return ids.every(i=>S.bus[i]&&!S.bus[i].on);
-  }
-  if(a.kind==='scene') return S.scene===a.scene;
-  if(a.kind==='unmute_all'){
-    const all=x=>Object.values(x).every(v=>v.on);
-    return all(S.ch)&&all(S.bus)&&all(S.dca)&&all(S.auxin)&&all(S.usb)&&all(S.fxret)&&all(S.mtx)&&S.main.on;
-  }
-  if(a.kind==='fade_ch'||a.kind==='fade_from'||a.kind==='fade_bus'||a.kind==='fade_from_bus'){
-    const g=a.kind.indexOf('bus')>=0?'bus':'ch';
-    const ids=a.chs||a.buses||(a.ch||a.bus?[a.ch||a.bus]:[]);
-    if(!ids.length) return null;
-    return ids.every(i=>S[g]&&S[g][i]&&Math.abs(S[g][i].fader-(a.to||0))<T);
-  }
-  if(a.kind==='rel_db') return null;
-  return null;
-}
-function cardReady(c){
-  let ok=0,tot=0;
-  for(const a of (c.actions||[])){
-    const s=actSatisfied(a);
-    if(s!==null){ tot++; if(s) ok++; }
-  }
-  return tot?[ok,tot]:null;
-}
-function readyBadge(c){
-  const r=cardReady(c);
-  if(!r) return '';
-  const [ok,tot]=r;
-  return ok===tot
-    ?` <span class="readyok">✔ ${ok}/${tot} 已就绪</span>`
-    :` <span class="readyn">✔ ${ok}/${tot} 已生效</span>`;
-}
-
-// ---- 卡片定时触发 (P2) ----
-function schedAsk(id){
-  const v=prompt('定时启动卡片:\n输入等待秒数(如 30)\n或今天的时刻(如 20:30)','30');
-  if(!v) return;
-  const s=v.trim();
-  let payload;
-  if(/^[0-2]?\d:[0-5]\d$/.test(s)) payload={id:id,mode:'clock',time:s};
-  else{
-    const n=parseFloat(s);
-    if(!(n>0)){ alert('格式不对:输入秒数或 HH:MM'); return; }
-    payload={id:id,mode:'delay',delay:n};
-  }
-  fetch('/api/schedule',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify(payload)});
-}
-function fmtCd(sec){
-  sec=Math.max(0,Math.round(sec));
-  const h=Math.floor(sec/3600),m=Math.floor(sec%3600/60),s2=sec%60;
-  return (h?h+':':'')+String(m).padStart(2,'0')+':'+String(s2).padStart(2,'0');
-}
-function renderSched(){
-  const el=$('#schedRow'); if(!el) return;
-  const list=S.schedules||[];
-  if(!list.length){ if(el._sig!==''){el._sig='';el.innerHTML='';} return; }
-  const html=list.map(s=>{
-    const cd=fmtCd(s.runAt-Date.now()/1000);
-    const when=s.mode==='clock'?timeStr(s.runAt):(' '+cd+' 后');
-    return `<div class="schedrow">⏱ 定时 <b>${esc(s.name)}</b>
-      <span class="cd">${s.mode==='clock'?'今天 '+when:when+' 启动'}</span>
-      <button style="background:#565d6d;color:#fff;padding:5px 12px" onclick="api('/api/schedcancel',{sid:${s.sid}})">取消</button></div>`;
-  }).join('');
-  if(el._sig!==html){ el._sig=html; el.innerHTML=html; }
-}
-function timeStr(epoch){
-  const d=new Date(epoch*1000);
-  return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')+':'+String(d.getSeconds()).padStart(2,'0');
-}
-
-// ---- 配置导入 / 导出 (P2) ----
-function doExport(){ window.open('/api/export','_blank'); }
-function impFileChg(inp){
-  const f=inp.files&&inp.files[0]; if(!f) return;
-  const r=new FileReader();
-  r.onload=()=>{
-    $('#impText').style.display='block';
-    $('#impText').value=r.result;
-    $('#impRow').style.display='flex';
-  };
-  r.readAsText(f);
-}
-function doImport(){
-  let cfg;
-  try{ cfg=JSON.parse($('#impText').value); }
-  catch(e){ alert('JSON 解析失败: '+e.message); return; }
-  if(!cfg||typeof cfg!=='object'||!cfg.cards){ alert('不是有效的配置文件(缺 cards 字段)'); return; }
-  if(!confirm('导入将覆盖现有的卡片/控制键/通道命名,确定继续?')) return;
-  fetch('/api/import',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({config:cfg})})
-  .then(r=>r.json()).then(d=>{
-    if(d.ok){ $('#impText').value=''; $('#impRow').style.display='none'; $('#impFile').value=''; }
-    else alert('导入失败: '+(d.error||'未知错误'));
-  }).catch(()=>alert('导入失败: 网络异常'));
-}
-
-// ---- 桥接真台 ----
-function brGo(){
-  const addr=$('#brAddr').value.trim();
-  if(!addr){ alert('请填写真台地址,格式 IP:端口'); return; }
-  fetch('/api/bridge',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({addr:addr})})
-  .then(r=>r.json()).then(d=>{
-    showToast(d.ok?('🌉 '+d.msg):('桥接失败: '+(d.msg||'')));
-  });
-}
-// 局域网扫描: 广播 /xinfo 发现调音台, 点结果即连 (手机零安装的关键一步)
-function scanConsoles(){
-  const btn=$('#scanBtn'), hint=$('#scanHint'), box=$('#scanRes');
-  btn.disabled=true; btn.textContent='🔍 扫描中…';
-  hint.textContent='正在广播发现指令…';
-  box.innerHTML='';
-  fetch('/api/scan').then(r=>r.json()).then(d=>{
-    const found=(d&&d.found)||[];
-    if(!found.length){
-      hint.textContent='没找到调音台 — 请确认台子已通电、网线接好、与电脑在同一网段';
-      box.innerHTML='';
-      return;
-    }
-    hint.textContent='发现 '+found.length+' 台,点一下即连';
-    box.innerHTML=found.map(f=>`
-      <button class="scenechip" style="cursor:pointer;font-size:13px;padding:8px 14px"
-        onclick="brPick('${f.ip}:${f.port}')">
-        🎛 ${esc(f.name||'调音台')} · ${esc(f.ip)}${f.local?' (本机模拟器)':''}
-      </button>`).join('');
-  }).catch(()=>{ hint.textContent='扫描失败: 网络异常'; })
-   .finally(()=>{ btn.disabled=false; btn.textContent='🔍 扫描局域网调音台'; });
-}
-function brPick(addr){
-  $('#brAddr').value=addr;
-  brGo();
-}
-
-// ---- 冲突通知: 手动干预 → 只停该通道, 弹提示 (D 维安全策略) ----
-let evtSeen=-1;
-function showToast(t){
-  const d=document.createElement('div'); d.className='toast'; d.textContent=t;
-  document.body.appendChild(d);
-  requestAnimationFrame(()=>d.classList.add('in'));
-  setTimeout(()=>{ d.classList.remove('in'); setTimeout(()=>d.remove(),400); },6000);
-}
-function pollEvents(){
-  const evs=S.events||[];
-  if(evtSeen<0){ evtSeen=evs.length?evs[evs.length-1].id:0; return; }
-  evs.forEach(e=>{ if(e.id>evtSeen){ evtSeen=e.id; showToast(e.time+' '+e.text); } });
-}
-
-function render(){
-  if(!S) return;
-  const upd=(p,map)=>{
-    for(const k in map){
-      const r=document.getElementById('r-'+p+'-'+k); if(!r) continue;
-      const f=map[k].fader, on=map[k].on;
-      const sl=r.querySelector('input');
-      if(document.activeElement!==sl) sl.dataset.target=f;
-      r.querySelector('.db').textContent=(f<=0.001?'-∞':dbOf(f).toFixed(1))+' dB';
-      r.querySelector('.mute').classList.toggle('on',!on);
-      const nmEl=r.querySelector('.nm2');
-      if(nmEl){ const nm=nameOf(P2G[p],+k); nmEl.textContent=nm; }
-      // 该通道有任一处理在启用 (反相/延时/低切/插入/噪声门) → 编号上点个灯,
-      // 不用逐个点开就知道"哪几路带了处理"
-      const cn=r.querySelector('.chnum');
-      if(cn) cn.classList.toggle('on',
-        !!(map[k].invert||map[k].delay_on||map[k].hpf_on||map[k].ins_on||map[k].gate_on));
-    }
-  };
-  upd('c',S.ch); upd('b',S.bus); upd('d',S.dca); upd('m',{0:S.main});
-  upd('a',S.auxin); upd('u',S.usb); upd('x',S.fxret); upd('t',S.mtx);
-  chpSync();
-
-  // 电平表: 前 32 路是输入通道,后 16 路是输出 Bus
-  drawMeters();
-  $('#scene').textContent='场景 '+S.scene;
-  if($('#scene2')) $('#scene2').textContent='场景 '+S.scene;
-  $('#subs').textContent=S.subscribers;
-  renderConsole();
-  renderPorts();
-  $('#hdinfo').textContent='UDP '+((S.ports&&S.ports.udp)||10023)+' · 场景 '+S.scene+' · 订阅 '+S.subscribers
-    +(S.bridge&&S.bridge.on?(' · 🌉'+(S.bridge.live?'真台':'真台?')+' '+S.bridge.addr):'');
-  $('#conn').style.background=S?'#22c55e':'#ef4444';
-  if($('#brStat')){
-    const b=S.bridge||{};
-    $('#brStat').textContent=!b.on?'未桥接':(b.live?'🌉 已连接 '+b.addr:'⏳ 等待真台 '+b.addr);
-    $('#brStat').style.color=b.on&&b.live?'#22c55e':'';
-    const inp=$('#brAddr');
-    if(inp && document.activeElement!==inp && !inp.value && b.target) inp.value=b.target;
-    if($('#scanHint') && b.target && !b.on)
-      $('#scanHint').textContent='已记住 '+b.target+',服务启动时会自动重连';
-  }
-  renderSched();
-  updFx();
-
-  // 名称有变化时刷新命名编辑器与各处下拉 (避免每 250ms 重建破坏交互)
-  if($('#nmGroup')){
-    const sig=JSON.stringify(S.names||{});
-    if(window._nmSig!==sig){ window._nmSig=sig; updNmIdx(); }
-  }
-
-  // 快捷键 (签名相同不重建, 避免打断交互)
-  if($('#keylist') && S.quickKeys){
-    $('#stepSel').value=String(S.keyCfg.step_db);
-    $('#rampSel').value=String(S.keyCfg.ramp);
-    setHTML('keylist',S.quickKeys.map(k=>`
-      <div class="row" style="justify-content:space-between">
-        <div style="font-size:15px;font-weight:600">${esc(k.icon)} ${esc(k.name)}</div>
-        <div style="display:flex;gap:6px;align-items:center">
-          <button class="keybtn" onpointerdown="kpStart('${k.id}')" title="按住可连发">${k.sign>0?'＋':'－'} ${S.keyCfg.step_db} dB</button>
-          <button style="background:#565d6d;color:#fff;padding:8px 10px" onclick="editKey('${k.id}')">✏️</button>
-          <button style="background:#565d6d;color:#fff;padding:8px 10px" onclick="delKey('${k.id}')">🗑</button>
-        </div>
-      </div>`).join(''));
-  }
-
-  // 卡片 (置顶优先; 执行中显示当前动作)
-  const rv=S.show.running;
-  const cards=[...(S.cards||[])].sort((a,b)=>(b.pin?1:0)-(a.pin?1:0));
-  setHTML('cardlist',cards.map(c=>{
-    const run=rv===c.id;
-    const nxt=c.next?(cards.find(x=>x.id===c.next)||{}).name:'';
-    const danger=isDanger(c);
-    return `<div class="card"${c.pin?' style="border-color:rgba(255,180,84,.45)"':''}><div class="nm">${c.pin?'📌 ':''}${esc(c.name)}${readyBadge(c)}</div>
-      <div class="ds">${esc(c.desc)}${nxt?` <span style="color:var(--accent)">→ 接续「${esc(nxt)}」</span>`:''}</div>
-      ${run
-        ?`<button class="stop" onclick="stopShow()">■ 停止</button>
-          <div class="bar"><i style="width:${Math.round(S.show.progress*100)}%"></i></div>
-          <div class="prog">执行中 ${Math.round(S.show.progress*100)}%${S.show.step?' · '+S.show.step:''}</div>`
-        :`<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-            <button ${danger?'title="危险卡片:长按 0.8 秒执行"':''}
-              onpointerdown="holdStart(event,'${c.id}')" onpointerup="holdCancel()"
-              onpointerleave="holdCancel()" oncontextmenu="event.preventDefault()">▶ 运行${danger?' ⚠️':''}</button>
-            <button style="background:#565d6d;color:#fff" onclick="schedAsk('${c.id}')">⏱ 定时</button>
-            <button style="background:#565d6d;color:#fff" onclick="api('/api/cardpin',{id:'${c.id}'})">📌 ${c.pin?'取消置顶':'置顶'}</button>
-            <button style="background:#565d6d;color:#fff" onclick="editCard('${c.id}')">✏️ 编辑</button>
-            <button style="background:#565d6d;color:#fff" onclick="delCard('${c.id}')">🗑 删除</button>
-          </div>`}
-    </div>`;
-  }).join(''));
-
-  // 快照列表 + 回归进度
-  const rc=S.recall.running;
-  setHTML('snaplist',S.snapshots.map(sp=>{
-    const run=rc===sp.id;
-    return `<div class="card"><div class="nm">📌 ${esc(sp.name)} <small style="color:var(--sub);font-weight:400">· ${sp.time}</small></div>
-      <div class="ds" style="margin:2px 0 6px">${esc(sp.scopeText||'全部通道 · 推子+静音')} · ${sp.count||0} 个值</div>
-      ${run
-        ?`<button class="stop" onclick="stopRecall()">■ 停止回归</button>
-          <div class="bar"><i style="width:${Math.round(S.recall.progress*100)}%"></i></div>
-          <div class="prog">电动推子回归中 ${Math.round(S.recall.progress*100)}% — 切到"通道"页看全部推子滑动</div>`
-        :`<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-            <button onclick="recallSnap(${sp.id},document.getElementById('dur-${sp.id}'))">⏪ 回归</button>
-            <select id="dur-${sp.id}" style="padding:7px;border-radius:8px;border:1px solid var(--line);font-size:12px">
-              <option value="1.5">1.5 秒</option><option value="3" selected>3 秒</option>
-              <option value="6">6 秒</option><option value="10">10 秒</option>
-            </select>
-            <button style="background:#565d6d;color:#fff" onclick="delSnap(${sp.id})">删除</button>
-          </div>`}
-    </div>`;
-  }).join('') || '<div class="ds" style="color:var(--sub);font-size:12px;padding:4px">还没有预设。调好台面后点上方"保存预设",再拖乱推子,点"回归"看它们自动滑回去。</div>');
-
-  // 卡片遥控器页
-  if($('#tileCards')){
-    const rv2=S.show.running;
-    setHTML('undoRow',S.canUndo
-      ?`<div class="tile undo" onclick="undoLast()">↩<small>撤销上一次卡片执行 · 台面自动滑回执行前</small></div>`:'');
-    setHTML('tileCards',cards.map(c=>{
-      const run=rv2===c.id;
-      const evts=run?`onclick="stopShow()"`
-        :`onpointerdown="holdStart(event,'${c.id}')" onpointerup="holdCancel()"
-          onpointerleave="holdCancel()" oncontextmenu="event.preventDefault()"`;
-      return `<div class="tile ${run?'run':''}" ${evts}>${esc(c.name)}${isDanger(c)?' ⚠️':''}
-        ${run?`<div class="bar"><i style="width:${Math.round(S.show.progress*100)}%"></i></div><small>${S.show.step||'点按停止'}</small>`
-             :`<small class="live">${(cardLive(c)||'点按运行')+readyBadge(c)}</small>`}</div>`;
-    }).join('') + `<div class="tile add" onclick="openCardModal()">➕<small>新建演出卡片</small></div>`);
-    setHTML('tileKeys',S.quickKeys.map(k=>
-      `<div class="tile" onpointerdown="kpStart('${k.id}')" title="按住可连发">${esc(k.icon)}<small>${esc(k.name)} ${k.sign>0?'＋':'－'}${S.keyCfg.step_db}dB</small></div>`).join('')
-      + `<div class="tile add" onclick="openKeyModal()">➕<small>新增控制键</small></div>`);
-  }
-
-  const lg=$('#logbox');
-  const txt=S.log.join('\n');
-  if(lg.dataset.t!==txt){ lg.textContent=txt; lg.scrollTop=lg.scrollHeight; lg.dataset.t=txt; }
-}
-
-// 电平表单独刷新 (数据来自 /api/meters, 不进 /api/state 的内容指纹)
-function drawMeters(){
-  if(!S||!S.meters) return;
-  const meters=[...document.querySelectorAll('#chlist .meter i'),
-                ...document.querySelectorAll('#buslist .meter i')];
-  meters.forEach((el,idx)=>{
-    if(idx<S.meters.length){
-      const db=S.meters[idx];
-      el.style.height=(db<=-60?0:Math.min(100,(db+60)/60*100))+'%';
-    }
-  });
-}
-
-function poll(){
-  // 条件轮询: 带上一次的状态指纹 v, 服务端没变更就只回 ~30 字节
-  // (全量轮询曾达 271-300MB/h; 电平改走 /api/meters, 不进指纹)
-  let q=(window._logSeq===undefined?'/api/state':('/api/state?logseq='+window._logSeq));
-  q+=(q.indexOf('?')<0?'?':'&')+'v='+encodeURIComponent(window._stateVer||'');
-  fetch(q).then(r=>r.json()).then(d=>{
-    if(window._logSeq===undefined){ window._logAcc=(d.log||[]).slice(); }
-    else if(d.log && d.log.length){
-      window._logAcc=window._logAcc.concat(d.log);
-      if(window._logAcc.length>300) window._logAcc=window._logAcc.slice(-300);
-    }
-    window._logSeq=d.logseq;
-    if(d.unchanged){
-      // 状态没变: 只更新日志框, 不重建界面 (打断输入/按钮交互的元凶)
-      if(S){
-        S.log=window._logAcc||[];
-        const lg=$('#logbox'); const txt=S.log.join('\n');
-        if(lg.dataset.t!==txt){ lg.textContent=txt; lg.scrollTop=lg.scrollHeight; lg.dataset.t=txt; }
-      }
-      $('#conn').style.background='#22c55e';
-    }else{
-      d.log=window._logAcc||d.log||[];
-      if(d.ver) window._stateVer=d.ver;
-      S=d; $('#conn').style.background='#22c55e'; pollEvents(); render();
-    }
-  }).catch(()=>{ $('#conn').style.background='#ef4444'; $('#hdinfo').textContent='连接断开,重试中…'; })
-   .finally(()=>setTimeout(poll,pollMs(250)));
-}
-
-// 页面不可见时降频: 手机揣兜里、切到别的 App、锁屏, 都是"看不见屏幕"。
-// 演出 4 小时里这类时间往往占七成, 而 4 Hz 的电平轮询是流量大头 ——
-// 藏起来就降到 2s 一次 (状态也一起降), 回到前台立刻恢复。
-const POLL_HIDDEN_MS=2000;
-function pollMs(active){ return document.hidden?POLL_HIDDEN_MS:active; }
-function pollMeters(){
-  fetch('/api/meters').then(r=>r.json()).then(d=>{
-    if(!S) return;
-    if(document.hidden) return;          // 藏起来就别画了, 省一次 DOM 重建
-    S.meters=d.meters||S.meters; drawMeters();
-  }).catch(()=>{}).finally(()=>setTimeout(pollMeters,pollMs(250)));
-}
-// 局部刷新: 内容没变不重建 innerHTML (避免打断按钮交互/选中状态)
-function setHTML(id,html){
-  const el=document.getElementById(id);
-  if(el && el._sig!==html){ el._sig=html; el.innerHTML=html; }
-}
-function loadInfo(){
-  fetch('/api/info').then(r=>r.json()).then(d=>{
-    const u = d.lanUrl || '';
-    $('#lanurl').textContent = u;
-    $('#lanip2').textContent = d.lanIp;
-    // 二维码内容就是上面显示的地址（所见即所得）；后端只负责渲染，不联网。
-    const img = $('#lanqr');
-    if(img && u) img.src = '/qr.svg?u=' + encodeURIComponent(u.replace(/\/?$/, '/'));
-
-    // App 配对码：和网页地址的区别是它带 **OSC 端口**。用户把 UDP 端口改成
-    // 10025 之后，网页地址里的 8080 不能拿来当 OSC 端口用 —— 所以另给一张码。
-    const pc = d.pairCode || '';
-    const pimg = $('#pairqr'), pcell = $('#paircell');
-    if(pc && pimg && pcell){
-      pcell.style.display = '';
-      $('#paircode').textContent = pc;
-      $('#pairhint').textContent = '配对码里带着 OSC 端口，改过端口也能一次连对。';
-      pimg.src = '/pair.svg?h=' + encodeURIComponent(d.lanIp || '') +
-                 '&o=' + (d.udpPort || 10023) + '&w=' + (d.webPort || 8080);
-    }else if(pcell){
-      pcell.style.display = 'none';
-      const code = $('#paircode'); if(code) code.textContent = '';
-      const hint = $('#pairhint');
-      if(hint) hint.textContent = '未探测到局域网地址（断 VPN / 连上 WiFi 后刷新），App 配对码暂不可用。';
-    }
-  }).catch(()=>{});
-}
-// 复制连接地址（老浏览器没有 clipboard API 时退回 execCommand）
-function copyText(txt, btn){
-  const flash = () => {
-    if(!btn) return;
-    const old = btn.textContent;
-    btn.textContent = '✓ 已复制';
-    setTimeout(()=>{ btn.textContent = old; }, 1200);
-  };
-  if(navigator.clipboard && navigator.clipboard.writeText){
-    navigator.clipboard.writeText(txt).then(flash).catch(()=>{});
-    return;
-  }
-  const ta = document.createElement('textarea');
-  ta.value = txt; document.body.appendChild(ta); ta.select();
-  try{ document.execCommand('copy'); flash(); }catch(e){}
-  document.body.removeChild(ta);
-}
-function copyLan(){
-  copyText($('#lanurl').textContent || '', $('#lanCopy'));
-}
-function copyPair(){
-  copyText($('#paircode').textContent || '', $('#pairCopy'));
-}
-init();
-loadInfo();
-if ('serviceWorker' in navigator) {
-  try { navigator.serviceWorker.register('/sw.js').catch(()=>{}); } catch(e) {}
-}
-
-
-// ==================== 自动增益 / 自动推子 ====================
-// 控制律在服务端 (x32sim/rider.py)，这里只管配置与显示。
-// 速度三档: 慢/中/快 = 平均窗口 0.9/0.35/0.12 s、死区 0.6/0.4/0.3 dB、
-// 每秒最大修正 1.5/5/15 dB —— 页面只暴露"体感"，不暴露这些数字。
-const RIDER_SPD=[['slow','慢'],['medium','中'],['fast','快']];
-
-function loadRider(){
-  fetch('/api/rider').then(r=>r.json()).then(renderRider).catch(()=>{});
-}
-function riderPost(body){
-  fetch('/api/rider',{method:'POST',headers:{'Content-Type':'application/json'},
-                      body:JSON.stringify(body)})
-    .then(r=>r.json()).then(d=>{ if(d && d.rider) renderRider(d.rider); }).catch(()=>{});
-}
-function riderGlobal(on){ riderPost({enabled:!!on}); }
-function riderReset(){ riderPost({action:'reset'}); }
-function riderAdd(){
-  const el=$('#riderCh'); const v=parseInt(el && el.value, 10);
-  if(!(v>=1 && v<=32)){ if(el) el.focus(); return; }
-  riderPost({channel:v, on:true, target:-18, mode:'fader', speed:'medium'});
-  if(el) el.value='';
-}
-function riderSet(ch,patch){ riderPost(Object.assign({channel:ch}, patch)); }
-function riderDel(ch){ riderPost({channel:ch, remove:true}); }
-
-function renderRider(cfg){
-  window._rider=cfg;
-  const sw=$('#riderOn'); if(sw) sw.checked=!!cfg.enabled;
-  const box=$('#riderlist'); if(!box) return;
-  const ks=Object.keys(cfg.channels||{}).sort((a,b)=>(+a)-(+b));
-  const hint=$('#riderHint');
-  if(hint) hint.textContent = ks.length
-    ? '改动立即生效（下一拍 50ms 内按新参数跑）。电平取通道表，写入走台面同一条管道。'
-    : '还没配置通道。填通道号（1-32）→ 添加 → 打开「启用」。';
-  box.innerHTML = ks.map(k=>{
-    const c=cfg.channels[k];
-    const opts=RIDER_SPD.map(([v,l])=>`<option value="${v}"`+(c.speed===v?' selected':'')+`>${l}</option>`).join('');
-    return '<div class="card ridercard" data-ch="'+k+'">'
-      + '<div class="nm">CH'+String(k).padStart(2,'0')+' · '+(c.mode==='fader'?'自动推子':'自动增益')+'</div>'
-      + '<div class="rrow">'
-      +   '<label class="rsw"><input type="checkbox" '+(c.on?'checked':'')+' onchange="riderSet('+k+',{on:this.checked})"> 启用</label>'
-      +   '<select onchange="riderSet('+k+',{mode:this.value})">'
-      +     '<option value="fader"'+(c.mode==='fader'?' selected':'')+'>推子</option>'
-      +     '<option value="gain"'+(c.mode==='gain'?' selected':'')+'>增益</option></select>'
-      +   '<select onchange="riderSet('+k+',{speed:this.value})">'+opts+'</select>'
-      +   '<label class="rtarget">目标 <input type="number" step="0.5" min="-60" max="0" value="'+c.target+'"'
-      +     (c.curve?' disabled title="已启用目标曲线，固定目标不生效"':'')
-      +     ' onchange="riderSet('+k+',{target:this.value})"> dBFS</label>'
-      +   '<button class="rdel" onclick="riderDel('+k+')">删除</button>'
-      + '</div>'
-      + '<div class="rrow rrow2">'
-      +   '<label class="rtarget">表源 <select onchange="riderSet('+k+',{tap:this.value})">'
-      +     '<option value="post"'+(c.tap!=='pre'?' selected':'')+'>推子后</option>'
-      +     '<option value="pre"'+(c.tap==='pre'?' selected':'')+'>推子前</option></select></label>'
-      +   '<label class="rtarget">侧链 <input type="number" min="0" max="32" step="1" value="'+(c.sidechain||0)+'"'
-      +     ' onchange="riderSet('+k+',{sidechain:this.value})"> <span class="ds">0=本通道</span></label>'
-      + '</div>'
-      + curveArea(k, c)
-      + '<div class="rmeter"><span id="rbar-'+k+'"></span></div>'
-      + '<div class="ds" id="rlv-'+k+'">等待电平…</div>'
-      + '</div>';
-  }).join('');
-  riderLive();
-}
-
-function riderLive(){
-  const r=(S && S.rider)||null; if(!r) return;   // ⚠️ S 是 let，不在 window 上
-  const map={}; (r.on||[]).forEach(x=>{ map[x.ch]=x; });
-  document.querySelectorAll('.ridercard').forEach(card=>{
-    const ch=+card.dataset.ch, x=map[ch];
-    const bar=document.getElementById('rbar-'+ch), lv=document.getElementById('rlv-'+ch);
-    if(!bar||!lv) return;
-    if(!r.enabled){ bar.style.width='0%'; lv.textContent='总开关已关'; return; }
-    if(!x){ bar.style.width='0%'; lv.textContent='未启用'; return; }
-    if(x.level===null||x.level===undefined){
-      bar.style.width='0%'; lv.textContent='无信号（冻结中 · 不会往上推）'; return;
-    }
-    const pct=Math.max(0,Math.min(100,(x.level+60)/60*100));
-    bar.style.width=pct.toFixed(1)+'%';
-    const app=(x.applied===null||x.applied===undefined)?'—':(+x.applied).toFixed(1);
-    lv.textContent='电平 '+(+x.level).toFixed(1)+' dBFS · 修正 '+app+' dB · 目标 '+(+x.target).toFixed(1)
-                  +(x.curve?'（曲线）':'')
-                  +(x.sidechain?' · 侧链 CH'+String(x.sidechain).padStart(2,'0'):'')
-                  +(x.tap==='pre'?' · 推子前':'')
-                  +(x.paused?' · 人工接管中':'');
-  });
-}
-
-
-// ---------- 目标曲线编辑器（点击加点 / 拖动改点 / 双击删点）----------
-const CURVE_W=300, CURVE_H=84;
-function curveArea(ch, c){
-  const cv=c.curve||null, pts=(cv&&cv.points)||[];
-  const last=pts.length?pts[pts.length-1][0]:60;
-  const T=Math.max(10, (cv&&cv.loop)||last);
-  const pos=(t,db)=>[ (t/T)*CURVE_W, CURVE_H-((db+60)/60)*CURVE_H ];
-  const poly=pts.map(p=>{const q=pos(p[0],p[1]);return q[0].toFixed(1)+','+q[1].toFixed(1);}).join(' ');
-  const dots=pts.map((p,i)=>{const q=pos(p[0],p[1]);
-    return '<circle class="cdot" data-ch="'+ch+'" data-i="'+i+'" cx="'+q[0].toFixed(1)+'" cy="'+q[1].toFixed(1)+'" r="5"></circle>';}).join('');
-  return '<div class="curvebox">'
-    +  '<div class="cfn"><span>目标曲线'+(pts.length?' · '+pts.length+' 点 · 循环 '+(cv.loop||0)+'s':'（点图加点，双击点删除）')+'</span>'
-    +    '<button class="cbtn" onclick="riderCurveClear('+ch+')">清除</button></div>'
-    +  '<svg class="curvesvg" data-ch="'+ch+'" data-t="'+T+'" viewBox="0 0 '+CURVE_W+' '+CURVE_H+'">'
-    +    '<rect x="0" y="0" width="'+CURVE_W+'" height="'+CURVE_H+'" class="cgrid"></rect>'
-    +    (poly?'<polyline class="cline" points="'+poly+'"></polyline>':'')
-    +    dots
-    +  '</svg>'
-    +  '<div class="cfn"><span class="ds">横轴 0-'+(+T).toFixed(0)+'s · 纵轴 -60..0 dBFS</span>'
-    +    '<label class="rtarget">循环 <input type="number" min="0" max="3600" step="1" value="'+((cv&&cv.loop)||0)+'"'
-    +      ' onchange="riderCurveLoop('+ch+',this.value)"> s</label></div>'
-    + '</div>';
-}
-function curveOf(ch){
-  const c=window._rider&&window._rider.channels&&window._rider.channels[String(ch)];
-  return (c&&c.curve)||null;
-}
-function riderCurveClear(ch){ riderSet(ch,{curve:null}); }
-function riderCurveLoop(ch,v){
-  const cv=curveOf(ch); if(!cv) return;
-  riderSet(ch,{curve:{loop:parseFloat(v)||0, points:cv.points}});
-}
-const RCURVE_DRAG={ch:0,i:-1};
-function curveXY(svg,e){
-  const r=svg.getBoundingClientRect();
-  const T=parseFloat(svg.dataset.t)||60;
-  const t=Math.max(0,Math.min(T,(e.clientX-r.left)/r.width*T));
-  // 上边 = 0 dBFS, 下边 = -60 dBFS（绘制时 db=0 在顶部，这里必须同向）
-  const db=Math.max(-60,Math.min(0,-(e.clientY-r.top)/r.height*60));
-  return [Math.round(t*10)/10, Math.round(db*10)/10];
-}
-function curveApply(ch, pts, loop){
-  const c=window._rider.channels[String(ch)];
-  c.curve={loop:loop||0, points:pts};
-  renderRider(window._rider);
-}
-document.addEventListener('pointerdown', e=>{
-  const dot=e.target.closest('.cdot');
-  if(dot){ RCURVE_DRAG.ch=+dot.dataset.ch; RCURVE_DRAG.i=+dot.dataset.i; e.preventDefault(); return; }
-  const svg=e.target.closest('.curvesvg');
-  if(!svg) return;
-  const ch=+svg.dataset.ch, cv=curveOf(ch);
-  const [t,db]=curveXY(svg,e);
-  const pts=(cv&&cv.points?cv.points.map(p=>[p[0],p[1]]):[]).concat([[t,db]]);
-  pts.sort((a,b)=>a[0]-b[0]);
-  curveApply(ch, pts, (cv&&cv.loop)||0);
-  riderSet(ch,{curve:{loop:(cv&&cv.loop)||0, points:pts}});
-});
-document.addEventListener('pointermove', e=>{
-  if(!RCURVE_DRAG.ch) return;
-  const svg=document.querySelector('.curvesvg[data-ch="'+RCURVE_DRAG.ch+'"]');
-  if(!svg) return;
-  const cv=curveOf(RCURVE_DRAG.ch); if(!cv||!cv.points) return;
-  const [t,db]=curveXY(svg,e);
-  const pts=cv.points.map(p=>[p[0],p[1]]);
-  const i=RCURVE_DRAG.i; if(i<0||i>=pts.length) return;
-  pts[i]=[t,db];
-  curveApply(RCURVE_DRAG.ch, pts, cv.loop||0);
-});
-document.addEventListener('pointerup', ()=>{
-  if(!RCURVE_DRAG.ch) return;
-  const ch=RCURVE_DRAG.ch; RCURVE_DRAG.ch=0; RCURVE_DRAG.i=-1;
-  const cv=curveOf(ch);
-  if(cv&&cv.points&&cv.points.length>=2){
-    // 拖动时本地已渲染，这里只把结果落库
-    riderPost({channel:ch, curve:{loop:cv.loop||0, points:cv.points}});
-  }
-});
-document.addEventListener('dblclick', e=>{
-  const dot=e.target.closest('.cdot'); if(!dot) return;
-  const ch=+dot.dataset.ch, cv=curveOf(ch); if(!cv||!cv.points) return;
-  const pts=cv.points.filter((_,idx)=>idx!==+dot.dataset.i);
-  if(pts.length>=2) riderSet(ch,{curve:{loop:cv.loop||0, points:pts}});
-  else riderSet(ch,{curve:null});
-});
-
-loadRider();
-setInterval(riderLive, 300);
-
-</script>
-</body>
-</html>
-"""
 
 
 # ==================================================================

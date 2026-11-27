@@ -985,3 +985,87 @@ def param_spec(algo: str, field: str):
         if p["field"] == field:
             return p
     return None
+
+
+# ============================================================ WING 效果库
+#
+# 数据来源：Behringer 授权、Patrick-Gilles Maillot 维护的
+# 《WING Remote Protocols V3.1》Effects Settings / Effects and Plugins 章。
+# WING 的 FX 模型与 X32 **不是同一套**：
+#   * 算法选择 = `/fx/<槽>/mdl`，值是枚举名（写小写、读回大写）；
+#   * 参数是**命名**叶子（`/fx/1/time`、`/fx/2/pdel`、`/fx/5/dcy`），没有 par 号；
+#   * 枚举表里有大量 X32 没有的东西（VSS3 / CONCERT / SPRING / BBD-DL /
+#     PCORR / BODY / 各箱体模拟），X32 的 TruEQ / Combinator / Fair Comp /
+#     Xtec EQ 在 WING 里属于**通道插件**而非 FX 机架。
+#
+# 因此 WING 库是 X32 库的**子集 + 映射**，而不是另抄一份 61 项：
+# 内部 key（HALL/CRS/DLY…）继续是唯一标识 —— 卡片、预设、存档都用它，
+# 换控台时才不会各说各话。取不到的算法显式缺席（`_fx_sync_on_console_change`
+# 会把不在库里的槽位置空并记日志），不做"看起来像"的臆造映射。
+
+# WING `/fx/<n>/mdl` 的完整枚举（文档 `mdl list`，固件 3.0.6）。
+# 仅用于校验我们的映射不越界；顺序随固件变化，不参与任何 UI 排序。
+WING_MDL_LIST = (
+    "NONE", "EXT", "HALL", "ROOM", "CHAMBER", "PLATE", "CONCERT", "AMBI",
+    "V-ROOM", "V-REV", "V-PLATE", "GATED", "REVERSE", "DEL/REV", "SHIMMER",
+    "SPRING", "DIMCRS", "CHORUS", "FLANGER", "ST-DL", "TAP-DL", "TAPE-DL",
+    "OILCAN", "BBD-DL", "PITCH", "D-PITCH", "VSS3", "BPLATE", "GEQ", "PIA",
+    "DOUBLE", "PCORR", "LIMITER", "DE-S2", "ENHANCE", "EXCITER", "P-BASS",
+    "ROTARY", "PHASER", "PANNER", "TAPE", "MOOD", "SUB", "RACKAMP", "UKROCK",
+    "ANGEL", "JAZZC", "DELUXE", "BODY", "SOUL", "E88", "E84", "F110",
+    "PULSAR", "MACH4", "C5-CMB", "SUB-M", "V-IMG", "SPKMAN", "DEQ3",
+    "*EVEN*", "*SOUL*", "*VINTAGE*", "*BUS*", "*MASTER*",
+)
+
+# 内部 key → WING mdl。只收**语义与名字都对得上**的：名字不同就是不同效果，
+# 宁可缺席让用户看见"这台控台没有这个算法"，也不要让他在 WING 上选中一个
+# 心里以为是 3-Tap、实际是跟拍延迟的东西。
+WING_MDL = {
+    "HALL": "HALL",        # Hall Reverb
+    "PLAT": "PLATE",       # Plate Reverb
+    "AMBI": "AMBI",        # Ambience
+    "ROOM": "ROOM",        # Room Reverb
+    "CHAM": "CHAMBER",     # Chamber Reverb
+    "VREV": "V-REV",       # Vintage Reverb
+    "VRM": "V-ROOM",       # Vintage Room
+    "GATE": "GATED",       # Gated Reverb
+    "RVRS": "REVERSE",     # Reverse Reverb
+    "DLY": "ST-DL",        # Stereo Delay
+    "D/RV": "DEL/REV",     # Delay + Chamber → Delay + Reverb
+    "CRS": "CHORUS",       # Stereo Chorus
+    "FLNG": "FLANGER",     # Stereo Flanger
+    "PHAS": "PHASER",      # Stereo Phaser
+    "DIMC": "DIMCRS",      # Dimensional Chorus
+    "FILT": "MOOD",        # Mood Filter
+    "ROTA": "ROTARY",      # Rotary Speaker
+    "PAN": "PANNER",       # Tremolo / Panner
+    "SUB": "SUB",          # Suboctaver
+    "PIT": "PITCH",        # Stereo Pitch Shifter
+    "PIT2": "D-PITCH",     # Dual Pitch Shifter
+    "GEQ": "GEQ",          # Stereo Graphic EQ
+    "DES": "DE-S2",        # Stereo DeEsser
+    "LIM": "LIMITER",      # Precision Limiter
+    "ENH": "ENHANCE",      # Stereo Enhancer
+    "EXC": "EXCITER",      # Stereo Exciter
+    "IMG": "V-IMG",        # Stereo Imager
+}
+# 反查：WING mdl → 内部 key（真台回读 `/fx/N/mdl` 时用）
+WING_MDL_REV = {v: k for k, v in WING_MDL.items()}
+
+# WING 效果库（内部 key 顺序沿用 FX_ENUM_14，UI 下拉顺序不因换控台而跳变）
+WING_FX_ALGOS = {
+    k: dict(X32_FX_ALGOS[k], wing_mdl=WING_MDL[k])
+    for k in FX_ENUM_14 if k in WING_MDL
+}
+
+
+def wing_mdl(algo: str):
+    """内部算法 key → WING 的 mdl 枚举名；该算法 WING 没有则返回 None。"""
+    return WING_MDL.get(algo)
+
+
+def algorithm_for_wing_mdl(mdl: str):
+    """WING 回读的 mdl → 内部 key（大小写不敏感，真台回大写）。"""
+    if not isinstance(mdl, str):
+        return None
+    return WING_MDL_REV.get(mdl.strip().upper())

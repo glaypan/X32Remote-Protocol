@@ -450,13 +450,23 @@ def value_reply(kind, idx):
     # ⚠️ dyn/ratio 这类 **index 型枚举** 本地存 4.0(4:1)、线上要发 6,
     #    曾经这里直接 int(v) → 4, 真台解析成 5:1 (第 5 档), 静默改值。
     sp = PARAM_SPECS.get(kind)
+    p = profile()
     if sp is not None:
-        return OscMsg(a, [param_wire(sp, v)])
+        return OscMsg(a, [param_wire(sp, v, p)])
     if kind == "ch_dca":
         return OscMsg(a, [int(v)])
-    if kind in ("fx_type", "fx_name"):
+    if kind == "fx_type":
+        # WING 的算法枚举名与 X32 不同（`/fx/N/mdl`）。回包必须给**线格式**，
+        # 否则客户端按 X32 名去比对，会把"已经装上"看成"没换上"。
+        name = p.fx_wire_name(v)
+        return OscMsg(a, [str(name)]) if name is not None else None
+    if kind == "fx_name":
         return OscMsg(a, [str(v)])
-    if kind == "fx_mix" or fx_par_num(kind) is not None:   # FX 机架: 混合比/参数是浮点
+    if kind == "fx_mix":                        # FX 机架混合比: WING 是 0..100 整数
+        if (p.fx_mix_scale or 1) != 1:
+            return OscMsg(a, [int(round(float(v) * p.fx_mix_scale))])
+        return OscMsg(a, [float(v)])
+    if fx_par_num(kind) is not None:             # FX 参数: 浮点 (WING 是命名参数，P2)
         return OscMsg(a, [float(v)])
     return OscMsg(a, [int(v)])
 

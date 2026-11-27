@@ -170,6 +170,12 @@ GROUPS = [
     ("pair", ("App 配对码 (手机 App 扫码连接)", lambda: run("test_pair.py"))),
     # 自动增益/推子也是纯逻辑 (模拟"被控对象"跑闭环), 不占端口
     ("rider", ("自动增益/推子 (平滑与安全)", lambda: run("test_rider.py"))),
+    # WING 驱动同样纯逻辑: 地址不补零 / 推子 dB / 静音反向 / 算法映射
+    ("wing", ("WING 控台驱动 (地址/单位/反向/算法)", lambda: run("test_wing_profile.py"))),
+    # WING 端到端: 自带实例 28099/10099 + 假真台 10199, 验真正发出的报文
+    ("wing_e2e", ("WING 端到端报文", lambda: run("test_wing_e2e.py"))),
+    # 参数探测脚本: 自带假 WING (UDP 10223), 验解析与「不自动猜」
+    ("wing_probe", ("WING 参数探测", lambda: run("test_wing_probe.py"))),
 ]
 
 

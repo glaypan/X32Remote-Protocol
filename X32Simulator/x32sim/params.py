@@ -749,6 +749,41 @@ def level_from_db(db):
     return (db + 90.0) / 480.0
 
 
+# ------------------------------------------------------- 平台值转换（WING）
+# WING 的推子是 **dB 浮点**（-144 = -∞，上限 +10），X32 是 0..1 归一值。
+# 曲线本身两家一致（WING 文档实测 0.75→0 dB、0.7→-2 dB、0.675→-3 dB，
+# 与 level_db 第一段 dB = 40f - 30 逐点吻合），差别只在 **-∞ 的表示**：
+# X32 把 f=0 记作 -90，WING 发 -144。所以下行用 level_db、上行钳到 0，
+# 只在两端各加一个 -144 的特例 —— 不要另造一条曲线。
+WING_DB_SILENT = -144.0
+
+
+def fader_to_db(f):
+    """0..1 归一值 → WING 的 dB 推子值（0 = -144 即 -∞）。"""
+    f = _finite(f, 0.0)
+    if f <= 0.0:
+        return WING_DB_SILENT
+    return round(level_db(f), 2)
+
+
+def fader_from_db(db):
+    """WING 的 dB 推子值 → 0..1（-144 与 -90 都落到 0）。"""
+    db = _finite(db, WING_DB_SILENT)
+    if db <= -90.0:
+        return 0.0
+    return round(level_from_db(db), 4)
+
+
+def _is_group_fader(sp):
+    """是不是组级推子（ch_fader / bus_fader …），排除 EQ/门 里的同名 field。"""
+    return sp.kind == sp.group + "_fader"
+
+
+def _is_group_mute(sp):
+    """是不是组级静音（ch_on / bus_on …）。"""
+    return sp.kind == sp.group + "_on"
+
+
 def _snap(sp, v):
     """钳制 + 按档位量化。真台的旋钮是"有级"的，不是连续模拟量 ——
     存一个连续值回去，回读时就会发现"设 124.3 Hz 回来变成 124.3 但台上是 124.3±档"。"""
@@ -796,14 +831,23 @@ def param_coerce(kind, value):
     return _snap(sp, _finite(value, sp.default))
 
 
-def param_wire(sp, v):
+def param_wire(sp, v, prof=None):
     """本地存的值 → **线上**该发的值 (OSC 回包与桥接转发共用)。
 
-    三种换算:
-      · enum_wire="index"  → 本地比值/自然值换算成枚举下标 (dyn/ratio 4.0 → 6)
-      · enum_wire="label"  → 发**枚举名字符串** (发送取点 "POST")
+    四种换算:
+      · prof.fader_db       → 组级推子发 dB (WING)，不是 0..1
+      · prof.mute_inverted  → 组级静音线上 1=muted (WING)，本地 1=开
+      · enum_wire="index"   → 本地比值/自然值换算成枚举下标 (dyn/ratio 4.0 → 6)
+      · enum_wire="label"   → 发**枚举名字符串** (发送取点 "POST")
       · 其余按 vtype 定型 (float 发浮点 / bool 发 0-1 / int 发整数)
+
+    prof 省略时按 X32 规则（历史行为不变）—— 调用方拿不到控台实例就别传。
     """
+    if prof is not None:
+        if getattr(prof, "fader_db", False) and _is_group_fader(sp):
+            return fader_to_db(v)
+        if getattr(prof, "mute_inverted", False) and _is_group_mute(sp):
+            return 0 if _truthy(v) else 1
     if sp.vtype == "bool":
         return 1 if _truthy(v) else 0
     if sp.enum is not None and sp.enum_wire == "index":
@@ -816,16 +860,30 @@ def param_wire(sp, v):
     return float(v) if sp.vtype == "float" else int(round(float(v)))
 
 
-def param_from_wire(sp, v):
+def param_from_wire(sp, v, prof=None):
     """**线上**来的值 → 本地存的值 (外部 OSC 写入与真台回读共用)。
 
     真台的 dyn/ratio 收到的是索引 (0..11)，直接落库会把 6 存成 "6:1" ——
     实际是 4:1。这一层换算只在入线处做一次，落库之后全项目都看到比值。
 
+    prof.fader_db / prof.mute_inverted 的反向换算与 param_wire 对称：
+    WING 的 -144 dB 落回本地 0，`mute=1` 落回本地"开=0"。
+
     另外支持**枚举名字符串** (收到 "POST" / "GRP" / "GATE")：协议允许多种写法,
     真台不同固件回包可能是字符串。以前这里会把字符串当非法值 → 落回默认值,
     表现为"读一次真台，取点就从 POST 变成默认值"——静默改值, 最难查的一类。
     """
+    if prof is not None and not (isinstance(v, str) and sp.labels):
+        if getattr(prof, "fader_db", False) and _is_group_fader(sp):
+            return fader_from_db(v)
+        if getattr(prof, "mute_inverted", False) and _is_group_mute(sp):
+            # 真台回包可能是 `1` / `1.0` / `"1"` 三种形态，一律先转数值再取反；
+            # 转不动（返回 "NODE NOT FOUND" 之类）就交回通用路径，不吞掉错误。
+            try:
+                x = float(v) if isinstance(v, str) else v
+            except (TypeError, ValueError):
+                return param_coerce(sp.kind, v)
+            return 0 if _truthy(x) else 1
     if isinstance(v, str) and sp.labels:
         s = v.strip().upper()
         for _i, _lab in enumerate(sp.labels):

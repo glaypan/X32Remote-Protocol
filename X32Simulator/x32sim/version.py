@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """x32sim/version — 版本与设备身份常量 (xinfo 回包用)"""
 
-# 模拟器自身版本。与共享协议规范的 spec-v1.13 对齐
-# (v1.13 = 效果器名一律用真台写法 + 效果器页覆盖全部 9 类算法)。
-APP_VERSION = "1.9.0"
+# 模拟器自身版本。与共享协议规范的 spec-v1.14 对齐
+# (v1.14 = WING 控台标定：可选算法 + FX 命名参数 + 订阅回读)。
+APP_VERSION = "1.10.0"
 
 # /xinfo 回包的身份字段 (真台回 [ip, name, model, firmware]; 这里 name/model/firmware
 # 是模拟器自称, 原先是 handle() 里的字面量, 收敛到这里统一管理)。

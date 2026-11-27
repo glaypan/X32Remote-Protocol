@@ -8,6 +8,7 @@ from .kinds import fx_par_num, kind_group
 from .logbus import log
 from .osc import OscMsg, encode_bundle, encode_message
 from .params import PARAM_SPECS, param_fmt, param_from_wire, send_unpack
+from .profiles import profile
 from .state import METER_SUBSCRIBERS, STATE, compute_levels, get_name, get_value, match_address, set_name, set_value, subscribe_client, subscribe_pattern, unsubscribe_client, unsubscribe_pattern, value_reply
 from .version import SIM_FIRMWARE, SIM_MODEL, SIM_NAME
 
@@ -137,7 +138,8 @@ def handle(msg: OscMsg, addr, sock):
         if sp0 is not None:
             # 入线换算 (与回包/转发用的 param_wire 成对): dyn/ratio 线上是
             # 0..11 的索引, 直接落库会把"第 6 档(4:1)"存成"6:1"。只在入线处做一次。
-            raw = param_from_wire(sp0, raw)
+            # WING: 推子是 dB、静音 1=muted —— 同一份换算表按控台走 (param_from_wire)。
+            raw = param_from_wire(sp0, raw, profile())
         set_value(kind, idx, raw)
         label = KIND_LABEL.get(kind_group(kind), kind)
         sp = PARAM_SPECS.get(kind)

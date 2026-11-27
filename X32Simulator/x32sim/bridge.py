@@ -2,11 +2,13 @@
 """x32sim/bridge — 桥接真台: 转发合并 / 回读 / 回声抑制"""
 
 import math
+import os
 import socket
 import threading
 import time
 
 from .consts import FADER_ADDR, ON_ADDR
+from .fxlib import algorithm_for_wing_mdl
 from .kinds import fx_par_kind, fx_par_num, kind_group
 from .logbus import EVENTS, EVT_SEQ, log
 from .osc import OscMsg, decode_packet, encode_bundle, encode_message
@@ -18,6 +20,55 @@ from .util import _truthy
 # ------------------------------------------------------------
 # 以下代码自 x32_simulator.py 逐字搬运 (B1 模块化), 仅头部导入为本工具生成
 # ------------------------------------------------------------
+
+def _wire_arg(kind, value, p=None):
+    """(kind, 本地值) → 线上值。返回 None = 当前控台不支持 / 值非法（调用方跳过）。
+
+    抽成纯函数是为了可单测：这里每一条换算错了都是"写成功但声音错"，
+    而它在真实链路里只在 20ms 合并器刷新时才跑到，靠抓包很难覆盖全。
+    """
+    if p is None:
+        p = profile()
+    sp = PARAM_SPECS.get(kind)
+    if kind == "ch_dca":
+        return int(value) & 0xFF
+    if kind == "fx_type":
+        # 内部算法 key → 线上枚举名。WING 是 `/fx/N/mdl` 且枚举名与 X32 不同；
+        # 映射不到 = 这台控台没有这个算法 → 拒发并把名字说出来，
+        # 否则槽位在界面上"装着"、真台其实没换。
+        name = p.fx_wire_name(value)
+        if name is None:
+            log("BRIDGE 跳过 fx_type: 算法「%s」不在「%s」效果库中" % (value, p.label))
+            return None
+        return str(name)[:12]
+    if kind == "fx_name":
+        return str(value)[:12]
+    if sp is not None:
+        # 表驱动定线上类型 (与 state.value_reply 同一套规则, 都走 param_wire):
+        #   float → 浮点 (推子/增益/延时/频率/门限); int → 整数 (低切斜率);
+        #   bool  → 0/1 (静音/延时/低切/插入/门开关)
+        #   index 型枚举 (dyn/ratio) → 0..11 的**索引**, 不是比值
+        #   WING: 组级推子发 dB、组级静音发 1=muted (见 param_wire 的平台分支)
+        # ⚠️ 曾经这里是 `endswith("_fader") → float, 其余 _truthy` —— 新增的
+        #    通道参数全是非 _fader 结尾, 会被 _truthy 压成 0/1 发给真台
+        #    (trim 3.5 dB 变成 1), 于是"桥接转发"这一层整个失真。
+        arg = param_wire(sp, value, p)
+        # 第二道闸: 万一将来哪条路径漏了 _finite, 宁可拒发也不把 NaN 发给真台
+        if isinstance(arg, float) and not math.isfinite(arg):
+            log("BRIDGE 拒发非有限值: %s = %r" % (kind, value))
+            return None
+        return arg
+    if kind == "fx_mix" or fx_par_num(kind) is not None:
+        arg = float(value)
+        if kind == "fx_mix" and (p.fx_mix_scale or 1) != 1:
+            # WING 的干湿比是 0..100 整数，不是 0..1
+            arg = int(round(arg * p.fx_mix_scale))
+        if not math.isfinite(arg):
+            log("BRIDGE 拒发非有限值: %s = %r" % (kind, value))
+            return None
+        return arg
+    return _truthy(value)
+
 
 def _bridge_forward(kind, idx, value, source="manual", force=False):
     """桥接模式下把写入转成 OSC 发往真台, 并登记回声抑制记录。
@@ -31,36 +82,13 @@ def _bridge_forward(kind, idx, value, source="manual", force=False):
     try:
         if value is None:
             return          # 本地没有这个目标（换控台后规模不匹配等）
-        sp = PARAM_SPECS.get(kind)
-        if kind == "ch_dca":
-            arg = int(value) & 0xFF
-        elif kind in ("fx_type", "fx_name"):
-            arg = str(value)[:12]
-        elif sp is not None:
-            # 表驱动定线上类型 (与 state.value_reply 同一套规则, 都走 param_wire):
-            #   float → 浮点 (推子/增益/延时/频率/门限); int → 整数 (低切斜率);
-            #   bool  → 0/1 (静音/延时/低切/插入/门开关)
-            #   index 型枚举 (dyn/ratio) → 0..11 的**索引**, 不是比值
-            # ⚠️ 曾经这里是 `endswith("_fader") → float, 其余 _truthy` —— 新增的
-            #    通道参数全是非 _fader 结尾, 会被 _truthy 压成 0/1 发给真台
-            #    (trim 3.5 dB 变成 1), 于是"桥接转发"这一层整个失真。
-            arg = param_wire(sp, value)
-            # 第二道闸: 万一将来哪条路径漏了 _finite, 宁可拒发也不把 NaN 发给真台
-            if isinstance(arg, float) and not math.isfinite(arg):
-                log("BRIDGE 拒发非有限值: %s %s = %r" % (kind, idx, value))
-                return
-        elif kind == "fx_mix" or fx_par_num(kind) is not None:
-            arg = float(value)
-            # 第二道闸: 万一将来哪条路径漏了 _finite, 宁可拒发也不把 NaN 发给真台
-            if not math.isfinite(arg):
-                log("BRIDGE 拒发非有限值: %s %s = %r" % (kind, idx, value))
-                return
-        else:
-            arg = _truthy(value)
+        p = profile()
+        arg = _wire_arg(kind, value, p)
+        if arg is None:
+            return
         addr = addr_for_write(kind, idx)      # ⚠️ Main 无 %02d, 必须走统一映射 (见该函数注释)
         if addr is None:
             # 当前控台不支持这个目标 → 明说, 不要静默吞掉 (静默是这类 bug 的老家)
-            p = profile()
             log("BRIDGE 跳过 %s %s: 当前控台「%s」未提供该地址%s"
                 % (kind, idx, p.label, "（驱动待标定）" if not p.ready else ""))
             return
@@ -116,6 +144,58 @@ def _bridge_fwd_flusher():
             time.sleep(0.5)
 
 
+def _node_path(addr):
+    """`/ch/1/fdr` → `/ch.1.fdr`（WING 节点批量写的路径写法：点分隔、无空段）。"""
+    return "/" + ".".join([p for p in str(addr).split("/") if p])
+
+
+def _node_value(v):
+    """线上值 → 节点批量写里的文本。整数不带小数点，字符串原样。"""
+    if isinstance(v, str):
+        return v
+    if isinstance(v, bool):
+        return "1" if v else "0"
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return str(v)
+    if f == int(f) and abs(f) < 1e15:
+        return "%d" % int(f)
+    return ("%.4f" % f).rstrip("0").rstrip(".")
+
+
+def _send_node_batch(sock, batch, addr):
+    """一条 OSC 写多路：`/ ,s "/ch.1.fdr=0,/ch.2.fdr=-10"`（WING 官方语法）。
+
+    为什么默认不用：整包里只要有一条路径不被接受，WING 会整包回 `NODE NOT FOUND`，
+    这一批写入就全丢了 —— 逐条发虽然包多，但一条失败不影响其余。所以这是
+    **可选项**（环境变量 X32_WING_NODE_WRITE=1 / 配置项），且被拒一次就自动关掉，
+    退回逐条发（见 recv 循环里的 /*,s 处理）。
+    """
+    parts = ["%s=%s" % (_node_path(_a), _node_value(v)) for _a, v, _g, _f in batch]
+    payload = ",".join(parts)
+    if len(payload) > 900:
+        # 保守留余量：UDP 单包 32KB，但节点串越长越容易踩到台子的解析上限
+        for _a, v, _g, _f in batch:
+            sock.sendto(encode_message(OscMsg(_a, [v])), addr)
+        return
+    sock.sendto(encode_message(OscMsg("/", [payload])), addr)
+
+
+def _send_msgs(sock, msgs, addr):
+    """按控台能力发包。
+
+    X32 吃 Bundle（一次发一批）；**WING 不吃**——官方文档写明其 OSC 包内容
+    永远是单条 Message，Bundle 会被整包丢弃。发错的表现是最难查的一种：
+    网页/卡片照常动、日志干净、真台纹丝不动。所以这里按 profile 分路。
+    """
+    if getattr(profile(), "osc_bundle", True):
+        sock.sendto(encode_bundle(msgs), addr)
+        return
+    for m in msgs:
+        sock.sendto(encode_message(m), addr)
+
+
 def _bridge_fwd_flush_once():
     """一轮合并发送: 把到期的转发条目打包成一个 Bundle 发给真台。"""
     time.sleep(BRIDGE_FWD_TICK)
@@ -146,7 +226,14 @@ def _bridge_fwd_flush_once():
         return
     msgs = [OscMsg(a, [v]) for _k, (a, v, _g, _f) in batch]
     try:
-        sock.sendto(encode_bundle(msgs), addr)
+        pairs = [av for _k, av in batch]
+        use_nodes = (WING_NODE_WRITE[0] and not getattr(profile(), "osc_bundle", True)
+                     and len(pairs) > 1
+                     and all(not isinstance(av[1], str) for av in pairs))
+        if use_nodes:
+            _send_node_batch(sock, pairs, addr)
+        else:
+            _send_msgs(sock, msgs, addr)
     except OSError as e:
         log("BRIDGE 合并转发失败 (%d 条): %r" % (len(msgs), e))
         return
@@ -195,7 +282,16 @@ def _bridge_apply_readback(kind, idx, value):
     """
     key = (kind, idx)
     sp = PARAM_SPECS.get(kind)
-    local = param_from_wire(sp, value) if sp is not None else value
+    if kind == "fx_type" and profile().id == "wing":
+        # WING 回读的是 mdl 枚举（大写，如 CHORUS），本库内部 key 是 CRS。
+        # 反查不到 = 真台装的是 WING 独有算法（VSS3 / CONCERT / 吉他箱体…），
+        # 本库没有对应项 —— 记一条日志保留不动，绝不猜成别的算法。
+        _k = algorithm_for_wing_mdl(value)
+        if _k is None:
+            log("BRIDGE 真台 FX%s 装的是 WING 专有算法「%s」，本效果库无对应项" % (idx, value))
+            return
+        value = _k
+    local = param_from_wire(sp, value, profile()) if sp is not None else value
     if _fwd_is_echo(key, value):
         set_value(kind, idx, local, source="sync")     # 自己写入的回声, 只对齐本地
         return
@@ -249,7 +345,7 @@ def _bridge_full_sync(sock):
             _get(fx_par_kind(pn), s)
     for chunk in (gets[x:x + 64] for x in range(0, len(gets), 64)):
         try:
-            sock.sendto(encode_bundle(chunk), BRIDGE["addr"])
+            _send_msgs(sock, chunk, BRIDGE["addr"])
         except OSError as e:
             log("BRIDGE 全量同步发送失败: %r" % e)
     log("BRIDGE 全量状态同步已请求 (%d 项, 控台 %s)" % (len(gets), p.label))
@@ -309,7 +405,7 @@ def bridge_client(ip, port):
 
 
 def _bridge_client_run(ip, port):
-    """桥接后台线程: 5 秒 /xremote 保活, 持续接收真台回读并同步本地。"""
+    """桥接后台线程: 按控台保活（X32 /xremote 5s；WING 订阅 9s），持续回读。"""
     _ensure_fwd_flusher()            # 转发合并器 (幂等; --bridge 启动参数也走这里)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.settimeout(0.5)
@@ -318,14 +414,33 @@ def _bridge_client_run(ip, port):
     BRIDGE["ip"], BRIDGE["port"], BRIDGE["synced"] = ip, port, False
     BRIDGE["started"] = time.time()
     BRIDGE["last_warn"] = 0.0
-    log("BRIDGE 桥接启动: 真台 %s:%d (写入转发 + /xremote 保活 + 状态回读)" % (ip, port))
+    p0 = profile()
+    # 保活命令：X32 是 /xremote；WING 是订阅（/%<本地端口>/*S，10 秒不续即死）
+    keep_cmd = str(getattr(p0, "keepalive_cmd", "/xremote") or "/xremote")
+    if "{port}" in keep_cmd:
+        # WING 要一个明确的回包端口。必须先 bind 再取端口 —— Windows 上对
+        # 未 bind 的 UDP socket 调 getsockname() 会抛 OSError 10022(WSAEINVAL)，
+        # 而这个异常发生在桥接线程最开头，表现就是"桥接启动成功、一个包都不发"。
+        try:
+            sock.bind(("0.0.0.0", 0))
+        except OSError as e:
+            log("BRIDGE 绑定本地回包端口失败: %r" % e)
+        try:
+            keep_cmd = keep_cmd.replace("{port}", str(sock.getsockname()[1]))
+        except OSError:
+            keep_cmd = keep_cmd.replace("{port}", "2223")
+    keep_iv = float(getattr(p0, "keepalive_interval", 5.0) or 5.0)
+    log("BRIDGE 桥接启动: 真台 %s:%d (写入转发 + %s 保活/订阅 + 状态回读)" % (
+        ip, port, keep_cmd))
+    if getattr(p0, "keepalive_note", ""):
+        log("BRIDGE 注意: %s" % p0.keepalive_note)
     _bridge_full_sync(sock)
-    BRIDGE["last_keep"] = 0.0        # 立即发首次 /xremote 完成订阅
+    BRIDGE["last_keep"] = 0.0        # 立即发首次保活完成订阅
     while BRIDGE["addr"] is not None:
-        # 保活: 每 5 秒发一次 /xremote (真台 10 秒无保活会取消遥控链接)
-        if time.time() - BRIDGE["last_keep"] >= 5.0:
+        # 保活: X32 每 5 秒 /xremote；WING 每 9 秒续订阅（真台 10 秒无保活就断）
+        if time.time() - BRIDGE["last_keep"] >= keep_iv:
             try:
-                sock.sendto(encode_message(OscMsg("/xremote", [])), (ip, port))
+                sock.sendto(encode_message(OscMsg(keep_cmd, [])), (ip, port))
                 BRIDGE["last_keep"] = time.time()
             except OSError:
                 pass
@@ -354,20 +469,35 @@ def _bridge_client_run(ip, port):
                 a = msg.address
                 if a.startswith("/meters") or a == "/xinfo" or a.startswith("/xremote"):
                     continue
-                matches = match_address(a)
+                if a == "/*":
+                    # 节点批量写的回执：WING 只回 OK 或错误串（NODE NOT FOUND /
+                    # VALUE ERROR / BUFFER OVERFLOW / NODE IS NOT PAR / INCOMPLETE DATA）
+                    txt = str(msg.args[0]) if msg.args else ""
+                    if txt and txt.upper() != "OK":
+                        log("BRIDGE 批量写被拒: %s" % txt)
+                        if WING_NODE_WRITE[0]:
+                            WING_NODE_WRITE[0] = False
+                            log("BRIDGE 已自动关闭 WING 节点批量写，退回逐条发送")
+                    continue
+                # WING 的地址空间与 X32 不通用，先让驱动自己认领；
+                # 认不出再回落到 X32 的模板反查（M32 等仍走那条）。
+                own = profile().parse_addr(a)
+                matches = [own] if own else match_address(a)
                 if not matches or not msg.args:
                     continue
+                k, i = matches[0]
                 raw = msg.args[0]
                 if isinstance(raw, str) and raw:
                     try:
                         raw = float(raw)
                     except ValueError:
-                        continue
-                for k, i in matches[:1]:
-                    try:
-                        _bridge_apply_readback(k, i, raw)
-                    except Exception as e:
-                        log("BRIDGE 回读处理出错 %s: %r" % (a, e))
+                        # 算法名（WING 的 mdl / X32 的 type）本来就是字符串，不能丢
+                        if k not in ("fx_type", "fx_name"):
+                            continue
+                try:
+                    _bridge_apply_readback(k, i, raw)
+                except Exception as e:
+                    log("BRIDGE 回读处理出错 %s: %r" % (a, e))
     BRIDGE_SOCK[0] = None
     BRIDGE["synced"] = False
     log("BRIDGE 桥接已断开 (%s:%d)" % (ip, port))
@@ -427,6 +557,12 @@ BRIDGE_FWD_TICK = 0.02       # 合并器轮询间隔
 BRIDGE_FWD_MAX_BATCH = 256   # 单拍最多发出条数 (防极端堆积把 UDP 包撑爆)
 BRIDGE_FWD = {"pending": {}, "last": {}, "lock": threading.Lock()}
 BRIDGE_FWD_THREAD = [None]
+# WING 节点批量写（`/ ,s "/ch.1.fdr=0,/ch.2.fdr=-10"`）—— **默认关**。
+# WING 对整包做原子校验：一条路径不被接受就整批回 `NODE NOT FOUND`，这一拍
+# 所有写入全丢；逐条发虽然包多，但一条失败不影响其余。需要时用环境变量
+# X32_WING_NODE_WRITE=1 打开，且被台子拒一次会自动关回去（见 recv 里的 /*,s）。
+WING_NODE_WRITE = [os.environ.get("X32_WING_NODE_WRITE", "").strip().lower()
+                   not in ("", "0", "false", "off", "no")]
 
 
 class _BridgeSink(WriteSink):

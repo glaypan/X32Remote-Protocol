@@ -1,8 +1,10 @@
 
 from .consts import FX_COUNT, M32_FX_ALGOS, X32_FX_ALGOS
-from .kinds import fx_par_num
+from .fxlib import WING_FX_ALGOS, wing_mdl
+from .kinds import fx_par_kind, fx_par_num
 from .logbus import log
 from .params import CH_PARAM_SPECS, PARAM_SPECS, SEND_PARAM_SPECS, spec_addr
+from .wingfx import wing_par_name, wing_par_num
 # -*- coding: utf-8 -*-
 """x32sim/profiles — 控台驱动层: ConsoleProfile 与各控台地址表"""
 
@@ -50,9 +52,34 @@ class ConsoleProfile:
                            # 空表 = 该控台效果库未标定 → 混响页禁用、写入被拒绝
     param_limits = {}      # kind → (lo,hi): 控台实际接受的范围。空 = 用参数表量程。
                            # 目前只有 trim 会因固件版本不同而变 (见 app --trim-range)
+    # --- 平台值转换开关（bridge / params 直接读字段，不再各自写 if id=="wing"）---
+    fader_db = False       # True = 组级推子线上是 dB 浮点（WING 是 -144..+10）
+    mute_inverted = False  # True = 组级静音线上 1=muted（X32 是 /mix/on 1=开）
+    fx_mix_scale = 1       # 干湿比倍数（WING 是 0..100 整数）
+    index_fmt = "%02d"     # 地址编号格式（WING 不补零，用 "%d"）
+    fx_slots = FX_COUNT    # 协议侧效果槽数（本地仍受 FX_COUNT 限制）
+    osc_bundle = True      # False = 真台不接受 Bundle，转发/回读要逐条发（WING）
+    # 遥控会话保活：X32 是 /xremote 每 5 s；WING 是订阅命令（10 s 不续即死）。
+    # {port} 会替换成本地 socket 端口 —— WING 支持 /%<port> 指定回包端口。
+    keepalive_cmd = "/xremote"
+    keepalive_interval = 5.0
+    keepalive_note = ""
 
     def addr(self, kind, idx):
         """(kind, idx) → 真实地址；本控台不支持则返回 None。"""
+        return None
+
+    def fx_wire_name(self, algo):
+        """内部算法名 → 线上枚举名。X32 直接发算法 key，WING 要换成 mdl。"""
+        return str(algo)
+
+    def parse_addr(self, addr):
+        """真台回包地址 → (kind, idx)。返回 None = 不归本驱动管。
+
+        X32 走通用的 match_address（地址模板反查）；WING 的地址空间与 X32 不同
+        （`/ch/1/fdr` 而不是 `/ch/01/mix/fader`），必须自己解析，否则回读全部丢失
+        —— 症状是"台面上动了推子，软件纹丝不动"，而日志只有一行"未识别"。
+        """
         return None
 
     def supports(self, kind):
@@ -133,26 +160,160 @@ class _StubProfile(ConsoleProfile):
     ready = False
 
     def pending(self):
-        base = ["ch_fader", "ch_on", "bus_fader", "bus_on", "dca_fader",
-                "dca_on", "main_fader", "main_on"]
-        base += [g + "_fader" for g in ("auxin", "usb", "fxret", "mtx")]
-        base += [g + "_on" for g in ("auxin", "usb", "fxret", "mtx")]
-        base += ["ch_dca", "fx_type", "fx_on", "fx_mix", "fx_name", "fx_par_NN"]
-        # 通道参数 (增益/反相/延时/低切/插入/门/动态/EQ): 从登记表推导, 新增即跟上
-        base += [sp.kind for sp in CH_PARAM_SPECS]
-        # 发送 (通道→Bus): 二维地址, 同样从登记表推导
-        base += [sp.kind for sp in SEND_PARAM_SPECS]
-        return base
+        return list(_ALL_KINDS)
 
 
-class WingProfile(_StubProfile):
+def _all_kinds():
+    """语义管道里的全部 kind（卡片目标 / 预设范围 / 校验的并集）。"""
+    base = ["ch_fader", "ch_on", "bus_fader", "bus_on", "dca_fader",
+            "dca_on", "main_fader", "main_on"]
+    base += [g + "_fader" for g in ("auxin", "usb", "fxret", "mtx")]
+    base += [g + "_on" for g in ("auxin", "usb", "fxret", "mtx")]
+    base += ["ch_dca", "fx_type", "fx_on", "fx_mix", "fx_name", "fx_par_NN"]
+    # 通道参数 (增益/反相/延时/低切/插入/门/动态/EQ): 从登记表推导, 新增即跟上
+    base += [sp.kind for sp in CH_PARAM_SPECS]
+    # 发送 (通道→Bus): 二维地址, 同样从登记表推导
+    base += [sp.kind for sp in SEND_PARAM_SPECS]
+    return base
+
+
+_ALL_KINDS = _all_kinds()
+
+
+# ---------------------------------------------------------------- WING
+#
+# 地址与语义全部来自《WING Remote Protocols V3.1》(Behringer 授权,
+# Patrick-Gilles Maillot 维护)。与 X32 的三处硬差异必须在 addr() 与值转换层
+# 同时体现，任何一处漏掉都是"写成功但声音错"：
+#   1. 编号**不补零**: `/ch/1/fdr`（X32 是 `/ch/01/mix/fader`）
+#   2. 推子是 **dB 浮点**: -144 = -∞，上限 +10（X32 是 0..1 归一值）
+#   3. 静音 **1 = muted**（X32 是 `/mix/on` 1 = 开）
+# 另外 main 在 WING 是 4 路且带编号（本地只有 1 路、idx 恒 0 → 地址用 idx+1）。
+
+# 内部组名 → WING 地址里的组名（fxret/usb 在 WING 没有对应组，故意缺席）
+_WING_GROUP = {"ch": "ch", "auxin": "aux", "bus": "bus",
+               "main": "main", "mtx": "mtx", "dca": "dca"}
+# 内部 field → WING 叶子名
+_WING_TAIL = {"fader": "fdr", "on": "mute", "pan": "pan"}
+# 地址编号偏移（本地 main 的 idx 是 0，WING 的 main 从 1 起）
+_WING_IDX_BASE = {"main": 1}
+# 反查表（回读用）：地址里的组名/叶子名 → 内部组/field
+_WING_GROUP_REV = {v: k for k, v in _WING_GROUP.items()}
+_WING_TAIL_REV = {v: k for k, v in _WING_TAIL.items()}
+
+
+def _slot_algo(slot):
+    """槽位当前算法（延迟导入 STATE：profiles→state 会成环，只在调用时取）。
+    取不到（未初始化/越界）一律当空槽 —— 空槽没有参数可写。"""
+    try:
+        from .state import STATE
+        return (STATE.fx.get(int(slot), {}) or {}).get("type") or ""
+    except Exception:
+        return ""
+
+
+class WingProfile(ConsoleProfile):
+    """WING —— 按《WING Remote Protocols V3.1》实装，尚未上真台核对（verified=False）。
+
+    已标定（有文档/实测证据，可直接写）：推子(dB) / 静音(反向) / 声像 /
+    算法选择(`/fx/N/mdl`) / 干湿比(`/fx/N/fxmix`) /
+    **FX 命名参数**(`/fx/1/time`、`/fx/2/pdel|dcy`，见 wingfx.py 的证据分级) /
+    订阅回读(`/%<port>/*S`) / 节点批量写(`/ ,s "/ch.1.fdr=0,..."`，默认关)。
+
+    仍未标定的部分**显式缺席**而不是猜地址：
+      · 通道处理参数 (EQ/门/动态/发送) —— WING 的树结构与 X32 完全不同；
+      · 场景召回 —— `$stat`/`show` 子树尚未核实；
+      · FX 返回组 —— WING 没有 fxrtn 组（X32 的 8 条返回在 WING 里是普通通道）。
+    这些在 UI 上灰显（caps 不含对应能力 / `w=false` 灰掉单个滑杆），
+    写入时记一条明确日志后跳过。
+    """
+
     id = "wing"
-    label = "Wing"
+    label = "WING"
     vendor = "Behringer"
-    note = "Wing 是全新平台，OSC 地址空间与 X32 不通用，地址表待填"
-    counts = {"ch": 48, "bus": 16, "dca": 8, "auxin": 8, "usb": 4,
-              "fxret": 8, "mtx": 8, "main": 1, "fx": 16}
-    caps = ("fader", "mute", "dca", "scene", "fx", "raw_osc")
+    ready = True
+    verified = False
+    note = ("地址表来自《WING Remote Protocols V3.1》：编号不补零、推子为 dB、"
+            "静音 1=静音（与 X32 相反）、不支持 Bundle。FX 命名参数仅标定有证据的部分，"
+            "其余滑杆在前端灰显；通道处理参数待标定")
+    # counts = **本机能实际控制**的规模（受本地台面建模限制），不是协议规模。
+    # 协议规模见 proto_counts —— 写 counts 用 40 会造成"卡片能选 ch40、实际无声"。
+    counts = {"ch": 32, "bus": 16, "dca": 8, "auxin": 6, "usb": 0,
+              "fxret": 0, "mtx": 6, "main": 1, "fx": FX_COUNT}
+    proto_counts = {"ch": 40, "aux": 8, "bus": 16, "main": 4, "mtx": 8,
+                    "dca": 16, "fx": 16}
+    caps = ("fader", "mute", "dca", "fx", "fx_par", "meter", "raw_osc")
+    fx_algos = WING_FX_ALGOS
+    # 值转换层的开关（bridge/params 读这三个，不再各自写 if profile==...）
+    fader_db = True          # 推子线上是 dB，不是 0..1
+    mute_inverted = True     # 静音线上 1 = muted
+    fx_mix_scale = 100       # 干湿比 0..100，不是 0..1
+    index_fmt = "%d"         # 地址编号不补零
+    fx_slots = 16
+    # WING 的 OSC 包内容**永远是单条 Message**（官方文档明说 Bundles are not
+    # supported）——整包 Bundle 发过去会被丢弃，症状恰好是"界面全动、台子不动"。
+    osc_bundle = False
+    # 订阅: `/%<port>/*S`，10 秒不续即死（官方文档）。**全台只允许 1 个订阅**。
+    keepalive_cmd = "/%{port}/*S"
+    keepalive_interval = 9.0
+    keepalive_note = ("WING 全台只允许 1 个订阅；与 Co-Pilot / Mixing Station "
+                      "同时使用会互相抢（日志里会看到订阅无回包）")
+
+    def addr(self, kind, idx):
+        if kind == "fx_type":
+            return "/fx/%d/mdl" % idx
+        if kind == "fx_mix":
+            return "/fx/%d/fxmix" % idx
+        if fx_par_num(kind) is not None:
+            # WING 的参数是**名字**而不是 par 号：`/fx/1/time`、`/fx/2/pdel`。
+            # 名字由 (该槽当前算法, par 号→field) 查表得来；查不到 = 无证据支持，
+            # 返回 None 拒发 —— 绝不发 `/fx/1/par/02` 这种 X32 地址。
+            name = wing_par_name(_slot_algo(idx), fx_par_num(kind))
+            if not name:
+                return None
+            return "/fx/%d/%s" % (idx, name)
+        grp, _, field = kind.rpartition("_")
+        tail = _WING_TAIL.get(field)
+        g = _WING_GROUP.get(grp)
+        if tail is None or g is None:
+            return None
+        n = int(idx) + _WING_IDX_BASE.get(grp, 0)
+        if n < 1:
+            return None
+        return "/%s/%d/%s" % (g, n, tail)
+
+    def fx_wire_name(self, algo):
+        """内部算法 key → WING 的 mdl 枚举；该算法 WING 没有则 None（拒发）。"""
+        return wing_mdl(str(algo or "").upper())
+
+    def parse_addr(self, addr):
+        s = str(addr or "").strip("/")
+        parts = s.split("/")
+        if len(parts) != 3:
+            return None
+        head, num, tail = parts
+        try:
+            n = int(num)
+        except ValueError:
+            return None
+        if head == "fx":
+            if n < 1:
+                return None
+            if tail == "mdl":
+                return ("fx_type", n)
+            if tail == "fxmix":
+                return ("fx_mix", n)
+            pnum = wing_par_num(_slot_algo(n), tail)
+            return (fx_par_kind(pnum), n) if pnum else None
+        g = _WING_GROUP_REV.get(head)
+        f = _WING_TAIL_REV.get(tail)
+        if g and f:
+            return (g + "_" + f, n - _WING_IDX_BASE.get(g, 0))
+        return None
+
+    def pending(self):
+        """尚未标定的 kind（供界面提示与规范使用）。"""
+        return [k for k in _ALL_KINDS if self.addr(k, 0) is None]
 
 
 class YamahaProfile(_StubProfile):
