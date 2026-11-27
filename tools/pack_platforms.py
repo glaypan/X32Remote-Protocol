@@ -16,8 +16,8 @@
 这样只发服务端或只发 Android 时也能用。
 
 用法:
-    python tools/pack_platforms.py --version 1.8.0 --macos-version 1.2.0
-    python tools/pack_platforms.py --version 1.8.0 --only android ios
+    python tools/pack_platforms.py --version 1.10.0 --macos-version 1.2.2
+    python tools/pack_platforms.py --version 1.10.0 --only android ios
 """
 import argparse
 import hashlib
