@@ -148,4 +148,7 @@ App 端本版没有代码改动：WING 标定全在服务端（模拟器 / 桌�
 - 桌面版未签名：macOS 需右键→打开，Windows 可能触发 SmartScreen
 - WING 的 `verified` 仍是 `False`（见上）；通道处理 / 场景召回 / FX 返回组未标定
 - WING 全台只允许 1 个订阅：和 Co-Pilot / Mixing Station 同时用会互相抢
+- **iOS / Android 端尚未按 `w` 字段灰显**：网页上"未标定"的 FX 参数滑杆会变灰，
+  手机 App 里还是能拖（拖了会写到未标定的地址）。真台会回 `NODE NOT FOUND`
+  —— **安全失败，不会误改别的参数**，但表现为"拖了没反应"。下一版补上灰显
 - 在线版 `x32-mixer-console.app.workbuddy.host` 仍是旧版，未随本次重新部署
