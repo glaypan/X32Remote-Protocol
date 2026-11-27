@@ -68,10 +68,22 @@ check("main_on(0) → /main/1/mute", W.addr("main_on", 0) == "/main/1/mute")
 check("fx_type(2) → /fx/2/mdl", W.addr("fx_type", 2) == "/fx/2/mdl")
 check("fx_mix(2) → /fx/2/fxmix", W.addr("fx_mix", 2) == "/fx/2/fxmix")
 # WING 没有这些组/参数 —— 必须 None，绝不能编一个"看着像"的地址
-for _k, _i in (("fxret_fader", 1), ("usb_fader", 1), ("ch_trim", 1),
-               ("ch_dca", 1), ("ch_eq_on", 1), ("send_level", 1),
+for _k, _i in (("fxret_fader", 1), ("usb_fader", 1), ("ch_dca", 1),
                ("fx_name", 1), ("fx_on", 1)):
     check("%s 未标定 → None（不猜地址）" % _k, W.addr(_k, _i) is None,
+          str(W.addr(_k, _i)))
+# N1 起这些参数有地址了（通道处理参数标定）—— 从"必须 None"改为"必须精确匹配"
+check("ch_trim(1) → /ch/1/in/set/trim",
+      W.addr("ch_trim", 1) == "/ch/1/in/set/trim", str(W.addr("ch_trim", 1)))
+check("ch_eq_on(1) → /ch/1/eq/on",
+      W.addr("ch_eq_on", 1) == "/ch/1/eq/on", str(W.addr("ch_eq_on", 1)))
+check("send_level(ch1→bus1) → /ch/1/send/1/lvl",
+      W.addr("send_level", 1) == "/ch/1/send/1/lvl", str(W.addr("send_level", 1)))
+# 这些是**结构不同**、确实无对应 —— 仍然必须 None
+for _k, _i in (("ch_eq1_type", 1), ("ch_gate_mode", 1), ("ch_ins_sel", 1),
+               ("ch_dyn_pos", 1), ("bus_ins_on", 1), ("auxin_eq1_f", 1),
+               ("ch_delay_ms", 1), ("ch_dyn_filter_f", 1)):
+    check("%s 结构不同 → None（不硬凑）" % _k, W.addr(_k, _i) is None,
           str(W.addr(_k, _i)))
 # fx_par 是**条件支持**：名字取决于该槽当前算法，故在 C2 段按算法断言
 check("空槽的 fx_par_01 → None", W.addr("fx_par_01", 99) is None,
@@ -136,7 +148,7 @@ check("mdl 大小写不敏感（真台回大写）",
       and algorithm_for_wing_mdl("CHORUS") == "CRS")
 check("wing_mdl('CRS') → CHORUS", wing_mdl("CRS") == "CHORUS")
 check("X32 独有算法在 WING 下缺席（TEQ）", wing_mdl("TEQ") is None)
-check("WING 的 note 已写明未上真台", "待标定" in W.note or "未" in W.note)
+check("WING 的 note 已写明未上真台", "标定" in W.note or "未" in W.note, W.note[:60])
 check("WING 标为 ready 但未 verified", W.ready and not W.verified)
 check("WING 支持 fx_par（仅限已标定名字）", "fx_par" in W.caps)
 

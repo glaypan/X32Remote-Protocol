@@ -3,6 +3,7 @@
 
 import struct
 
+from .bridge import bridge_scene
 from .consts import KIND_LABEL, NAME_COUNTS
 from .kinds import fx_par_num, kind_group
 from .logbus import log
@@ -84,7 +85,10 @@ def handle(msg: OscMsg, addr, sock):
             return
         with STATE.lock:
             STATE.scene = n
-        log("    场景切换 -> %d" % n)
+        # 桥接时同步给真台 —— 客户端直连模拟器发 /scene/N/load 也要落到台面上,
+        # 否则"网页切了、真台没切"，且这条路径连日志都看不出问题。
+        _fwd = bridge_scene(n)
+        log("    场景切换 -> %d%s" % (n, "（已转发真台）" if _fwd else ""))
         return
 
     if a == "/reboot" or a == "/quit":

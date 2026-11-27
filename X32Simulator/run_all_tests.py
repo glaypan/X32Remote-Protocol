@@ -176,6 +176,8 @@ GROUPS = [
     ("wing_e2e", ("WING 端到端报文", lambda: run("test_wing_e2e.py"))),
     # 参数探测脚本: 自带假 WING (UDP 10223), 验解析与「不自动猜」
     ("wing_probe", ("WING 参数探测", lambda: run("test_wing_probe.py"))),
+    # 通道处理参数 (N1): 纯计算, 验地址/回读闭环/值转换/钳制/规格过滤
+    ("wing_params", ("WING 通道处理参数", lambda: run("test_wing_params.py"))),
 ]
 
 

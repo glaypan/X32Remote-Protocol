@@ -171,10 +171,24 @@ class WebHandler(BaseHTTPRequestHandler):
             # 各组参数的**元数据** (名称/量程/单位/枚举/默认值)。
             # 前端不再维护一份手抄的控件表: 抄一份就必然有一天与后端漂移,
             # 而漂移的症状是"滑块能拖到后端不认的区间"——只能靠回归抓。
+            # 传 profile: WING 下不下发它没有地址的参数(aux 的 EQ / EQ 段类型 /
+            # 插入 / 门模型), 否则界面上会多出一排永远拖不动的滑杆。
             self._send(200, "application/json; charset=utf-8",
-                       json.dumps({"specs": {g: ui_specs(g)
+                       json.dumps({"specs": {g: ui_specs(g, profile())
                                              for g in GROUP_PARAM_SPECS}},
                                   allow_nan=False).encode("utf-8"))
+        elif path == "/api/fxcaps":
+            # 效果参数的**可写性表** —— 给 App 用。
+            # 网页走 /api/state.fx.slots[].params[].w（每参数一个布尔），
+            # 但 App 是 OSC 直连，拿不到 HTTP 状态里的字段；它只在进 FX 页时
+            # 拉这一个轻量接口就够。返回 null 表示"全部可写"（X32）。
+            _p = profile()
+            caps = _p.fx_param_caps()
+            body = {"console": _p.id,
+                    "all": caps is None,
+                    "slots": caps or {}}
+            self._send(200, "application/json; charset=utf-8",
+                       json.dumps(body, allow_nan=False).encode("utf-8"))
         elif path == "/api/meters":
             # 电平单独取: 它每 tick 都变, 不能进 /api/state 的内容指纹,
             # 否则"没变更"永远命中不了。旧 /api/state 仍带 meters (App 兼容)。

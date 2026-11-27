@@ -59,13 +59,24 @@ def push_readback(addr, value):
     return True
 
 
-def enc_osc(addr, value):
+def enc_osc(addr, value=None):
     def pad(b):
         return b + b"\x00" * (4 - len(b) % 4)
     out = pad(addr.encode())
+    if value is None:                      # 无参 trigger（/scene/N/load）
+        return out + pad(b",")
     if isinstance(value, str):
         return out + pad(b",s") + pad(value.encode())
+    if isinstance(value, int) and not isinstance(value, bool):
+        return out + pad(b",i") + struct.pack(">i", value)
     return out + pad(b",f") + struct.pack(">f", float(value))
+
+
+def send_to_sim(addr, value=None):
+    """以"外部客户端"身份给模拟器发一条 OSC（测 oscsrv 那条入线路径）。"""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.sendto(enc_osc(addr, value), ("127.0.0.1", OSC))
+    s.close()
 
 
 def post(path, obj):
@@ -181,6 +192,128 @@ def main():
         print(("PASS " if not zero_pad else "FAIL ") + "没有补零地址")
         print(("PASS " if not bad else "FAIL ") + "全部报文符合 WING 语义")
 
+        # ---------------- N1: 通道处理参数 ----------------
+        # 验的是**真正发出的地址与线值**：WING 的 EQ 段是 /ch/1/eq/1f（不是 X32 的
+        # /ch/01/eq/1/f），低切在 flt/lc*，取点/检波/压缩比要发字符串。
+        # 这一层错了的症状是"界面动、台面不动、日志干净"。
+        got.clear()
+        post("/api/set", {"kind": "ch", "param": "eq1_f", "idx": 1, "value": 500})
+        time.sleep(0.15)
+        post("/api/set", {"kind": "ch", "param": "eq2_g", "idx": 1, "value": 3.5})
+        time.sleep(0.15)
+        post("/api/set", {"kind": "ch", "param": "gate_thr", "idx": 2, "value": -40})
+        time.sleep(0.15)
+        post("/api/set", {"kind": "ch", "param": "dyn_thr", "idx": 1, "value": -30})
+        time.sleep(0.15)
+        post("/api/set", {"kind": "ch", "param": "dyn_ratio", "idx": 1, "value": 4.0})
+        time.sleep(0.15)
+        post("/api/set", {"kind": "ch", "param": "hpf_f", "idx": 1, "value": 100})
+        time.sleep(0.15)
+        post("/api/set", {"kind": "ch", "param": "hpf_slope", "idx": 1, "value": 12})
+        time.sleep(0.15)
+        post("/api/set", {"kind": "ch", "param": "trim", "idx": 1, "value": 3.5})
+        time.sleep(0.15)
+        post("/api/set", {"kind": "bus", "param": "dyn_thr", "idx": 1, "value": -22})
+        time.sleep(0.15)
+        post("/api/set", {"kind": "main", "param": "dyn_thr", "idx": 0, "value": -18})
+        time.sleep(0.8)
+
+        print("\n--- N1 通道参数报文 (%d 个) ---" % len(got))
+        n1_seen = []
+        for p in got:
+            a, args = parse(p)
+            if a:
+                n1_seen.append((a, args[0] if args else None))
+                print("  %-22s %r" % (a, args[0] if args else None))
+
+        # 频率类是对数档位量化（logsteps=201 → 201 个点），500 Hz 落在最近档
+        # 500.83 上，不是"值错了"。容差按协议的半步（约 1.5%）给。
+        n1_want = [
+            ("/ch/1/eq/1f", 500.0, False, 0.02),
+            ("/ch/1/eq/2g", 3.5, False, 1e-4),
+            ("/ch/2/gate/thr", -40.0, False, 1e-4),
+            ("/ch/1/dyn/thr", -30.0, False, 1e-4),
+            ("/ch/1/dyn/ratio", "4.0", True, 0),   # WING ch 的压缩比是**字符串**
+            ("/ch/1/flt/lcf", 100.0, False, 0.02),  # 低切在 flt 子树
+            ("/ch/1/flt/lcs", "12", True, 0),       # 斜率是 S 类型
+            ("/ch/1/in/set/trim", 3.5, False, 1e-4),  # 输入段在 in/set
+            ("/bus/1/dyn/thr", -22.0, False, 1e-4),   # bus 不补零
+            ("/main/1/dyn/thr", -18.0, False, 1e-4),  # main 在 WING 是 /main/1
+        ]
+        n1_bad = []
+        for a, v, is_str, tol in n1_want:
+            hit = [x for x in n1_seen if x[0] == a]
+            if not hit:
+                n1_bad.append((a, v, "未发出"))
+                continue
+            got_v = hit[0][1]
+            if is_str:
+                ok = str(got_v) == v
+            else:
+                ok = got_v is not None and abs(float(got_v) - float(v)) <= \
+                    max(tol, tol * abs(float(v)))
+            if not ok:
+                n1_bad.append((a, v, got_v))
+        print("\n--- N1 断言 ---")
+        for a, v, _s, _t in n1_want:
+            ok = not any(b[0] == a for b in n1_bad)
+            print(("PASS " if ok else "FAIL ") + "%s = %r" % (a, v))
+        bad_x32_addr = [a for a, _ in n1_seen
+                        if a and (a.startswith("/ch/0") or "/eq/1/" in a
+                                  or a.startswith("/auxin/") or a.startswith("/fxrtn/"))]
+        print(("PASS " if not bad_x32_addr else "FAIL ")
+              + "没有 X32 地址混入（补零 / eq/N/x / auxin / fxrtn）")
+        print(("PASS " if not n1_bad else "FAIL ") + "N1 全部报文符合 WING 语义")
+
+        n1_ok = (not n1_bad) and (not bad_x32_addr)
+
+        # ---------------- N2: 场景召回（两段式） ----------------
+        # WING 没有 /scene/N/load 这种一步到位的地址，必须
+        #   $actionidx = N  →  $action = "GO"
+        # 只写号 = 高亮不执行；只写 GO = 切上一次的场景。
+        got.clear()
+        send_to_sim("/scene/7/load")       # 外部客户端发给模拟器
+        time.sleep(0.8)
+        n2_seen = []
+        for p in got:
+            a, args = parse(p)
+            if a:
+                n2_seen.append((a, args[0] if args else None))
+                print("  %-24s %r" % (a, args[0] if args else None))
+        idx_hit = [v for a, v in n2_seen if a == "/$ctl/lib/$actionidx"]
+        go_hit = [v for a, v in n2_seen if a == "/$ctl/lib/$action"]
+        x32_leak = [a for a, _ in n2_seen if a.startswith("/scene/")]
+        n2_ok = (idx_hit == [7]) and (go_hit == ["GO"]) and not x32_leak
+        print("\n--- N2 场景召回 ---")
+        print(("PASS " if idx_hit == [7] else "FAIL ")
+              + "$actionidx = 7（实测 %r）" % (idx_hit,))
+        print(("PASS " if go_hit == ["GO"] else "FAIL ")
+              + "$action = 'GO'（实测 %r）" % (go_hit,))
+        print(("PASS " if not x32_leak else "FAIL ")
+              + "没有把 X32 的 /scene/N/load 发给 WING" + (" %r" % (x32_leak,)))
+        print(("PASS " if n2_ok else "FAIL ") + "两段式顺序执行")
+
+        # N2b: 切回 X32 —— 同一个场景动作必须变成 X32 的形状（单条、不补零）。
+        # 这条测的是"地址由 profile 决定"，而不是在调用方写 if。
+        post("/api/ctrlprofile", {"id": "x32"})
+        time.sleep(0.5)
+        got.clear()
+        send_to_sim("/scene/9/load")
+        time.sleep(0.8)
+        x32_seen = [parse(p)[0] for p in got]
+        x32_scene = [a for a in x32_seen if a and a.startswith("/scene/")]
+        wing_leak = [a for a in x32_seen if a and a.startswith("/$ctl/")]
+        n2b_ok = (x32_scene == ["/scene/9/load"]) and not wing_leak
+        print(("PASS " if n2b_ok else "FAIL ")
+              + "切回 X32 后场景召回是 /scene/9/load（实测 %r）" % (x32_scene,))
+        print(("PASS " if not wing_leak else "FAIL ")
+              + "X32 下不发 WING 的 $ctl 地址" + (" %r" % (wing_leak,) if wing_leak else ""))
+        n2_ok = n2_ok and n2b_ok
+        # 必须切回 WING：下面 P3 的假真台推的是 /ch/5/fdr（WING 地址），
+        # 留在 X32 会一条都解析不出来 —— 表现为"回读断言莫名失败"。
+        post("/api/ctrlprofile", {"id": "wing"})
+        time.sleep(0.4)
+
         # ---------------- P3: 订阅与回读 ----------------
         time.sleep(1.2)
         print("\n--- 订阅与回读 ---")
@@ -197,7 +330,7 @@ def main():
         print(("PASS " if ok_rb else "FAIL ")
               + "真台推 /ch/5/fdr -20 dB → 本地推子 0.375 (实测 %r)" % (f5,))
 
-        all_ok = (not bad) and (not zero_pad) and sub_ok and ok_rb
+        all_ok = (not bad) and (not zero_pad) and sub_ok and ok_rb and n1_ok and n2_ok
         return 0 if all_ok else 1
     finally:
         proc.terminate()

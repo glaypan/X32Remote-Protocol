@@ -196,6 +196,38 @@ def _send_msgs(sock, msgs, addr):
         sock.sendto(encode_message(m), addr)
 
 
+def bridge_scene(n):
+    """把场景召回转发给真台。未桥接返回 False（调用方只改本地状态）。
+
+    ⚠️ 这条路径以前**不存在**：`actions` 里切场景只写 `STATE.scene`，注释说
+    "真台发 /scene/N/load" 但从来没有代码真的发过 —— 症状是桥接模式下点切场景，
+    网页的场景号变了、台面纹丝不动，而日志里一个字都没有。现在补上，
+    并且地址由 profile 给（WING 是两段式，见 ConsoleProfile.scene_msgs）。
+
+    返回 True = 已发出；False = 未桥接/发送失败（调用方据此决定是否提示）。
+    """
+    addr = BRIDGE["addr"]
+    sock = BRIDGE_SOCK[0]
+    if addr is None or sock is None:
+        return False
+    try:
+        msgs = [OscMsg(a, args) for a, args in profile().scene_msgs(n)]
+    except (TypeError, ValueError) as e:
+        log("BRIDGE 场景号非法: %r (%r)" % (n, e))
+        return False
+    try:
+        # ⚠️ 场景召回**逐条发，不打包 Bundle**：它是 trigger 不是参数批写，
+        #    而 WING 里 `$actionidx` 与 `$action` 还必须**严格按序**到达
+        #    （先选号再 GO）。Bundle 在 X32 上或许也能工作，但顺序语义更脆，
+        #    且这条路径一次只发 1~2 条，省不下什么。
+        for m in msgs:
+            sock.sendto(encode_message(m), addr)
+    except OSError as e:
+        log("BRIDGE 场景召回转发失败: %r" % e)
+        return False
+    return True
+
+
 def _bridge_fwd_flush_once():
     """一轮合并发送: 把到期的转发条目打包成一个 Bundle 发给真台。"""
     time.sleep(BRIDGE_FWD_TICK)

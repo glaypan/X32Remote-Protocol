@@ -3,7 +3,7 @@
 
 import math
 
-from .bridge import BRIDGE, BRIDGE_SOCK
+from .bridge import BRIDGE, BRIDGE_SOCK, bridge_scene
 from .consts import CURVES, FADE_ACT_KINDS, SAVE_MAX, SET_GROUPS, SET_KINDMAP, SET_PARAMS, SET_PARAM_LABEL
 from .fx import fx_algo
 from .kinds import fx_par_kind
@@ -407,9 +407,15 @@ def _exec_instant(act):
                 % (int(act.get("scene", 1)), snap.get("name", ""),
                    float(act.get("duration", 1.0) or 0.0)))
             return
+        _n = int(act.get("scene", 1))
         with STATE.lock:
-            STATE.scene = int(act.get("scene", 1))
-        log("SHOW 切换到场景 %d（全局 recall）" % int(act.get("scene", 1)))
+            STATE.scene = _n
+        # 真台召回：地址由 profile 给（X32 一条 /scene/N/load；WING 两段式）。
+        # 以前这里只改本地状态，"真台发 /scene/N/load" 只写在注释里 ——
+        # 桥接模式下点切场景，网页变了、台面不动、日志干净。
+        _fwd = bridge_scene(_n)
+        log("SHOW 切换到场景 %d（全局 recall）%s"
+            % (_n, "，已发往真台" if _fwd else "，未桥接（仅本地）"))
     elif k == "preset":
         snap = find_snapshot(act.get("presetId"))
         if not snap:

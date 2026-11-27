@@ -1,0 +1,4170 @@
+{
+ "ch": [
+  {
+   "a": "/ch",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Channel node"
+  },
+  {
+   "a": "/ch/1",
+   "t": "N",
+   "r": "1..40",
+   "x": "",
+   "d": "Channel 1 node"
+  },
+  {
+   "a": "/ch/1/in",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Channel 1 input node"
+  },
+  {
+   "a": "/ch/1/in/set",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Channel 1 input set node"
+  },
+  {
+   "a": "/ch/1/in/set/$mode",
+   "t": "S",
+   "r": "",
+   "x": "M, ST, M/S",
+   "d": "Channel 1 input mode [RO]"
+  },
+  {
+   "a": "/ch/1/in/set/srcauto",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Channel 1 input auto source switch"
+  },
+  {
+   "a": "/ch/1/in/set/altsrc",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Channel 1 input main/alt switch"
+  },
+  {
+   "a": "/ch/1/in/set/inv",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Channel 1 input phase invert switch"
+  },
+  {
+   "a": "/ch/1/in/set/trim",
+   "t": "F",
+   "r": "-18..18",
+   "x": "361 steps",
+   "d": "Channel 1 input trim (dB)"
+  },
+  {
+   "a": "/ch/1/in/set/bal",
+   "t": "F",
+   "r": "-9..9",
+   "x": "181 steps",
+   "d": "Channel 1 input balance (dB)"
+  },
+  {
+   "a": "/ch/1/in/set/$g",
+   "t": "F",
+   "r": "-2.5..45\n-3.0..45.5",
+   "x": "20 steps (LCL)\n98 steps (AES)",
+   "d": "Channel 1 input gain (dB) – depends on source type"
+  },
+  {
+   "a": "/ch/1/in/set/$vph",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Channel 1 input phantom power – depends on source type"
+  },
+  {
+   "a": "/ch/1/in/set/dlymode",
+   "t": "S",
+   "r": "",
+   "x": "M, FT, MS, SMP",
+   "d": "Meters, feet, milliseconds, samples"
+  },
+  {
+   "a": "/ch/1/in/set/dly",
+   "t": "F",
+   "r": "0..150 m / 0.5..500 ft / 0.5..500 ms\n/ 16..500 smp",
+   "x": "1501 steps /\n1000 steps /\n4996 steps /\n485 steps",
+   "d": "Channel 1 input delay (meters, feet, ms, samples)"
+  },
+  {
+   "a": "/ch/1/in/set/dlyon",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Channel 1 input delay"
+  },
+  {
+   "a": "/ch/1/in/conn",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Channel 1 input connection node"
+  },
+  {
+   "a": "/ch/1/in/conn/grp",
+   "t": "S",
+   "r": "",
+   "x": "OFF, LCL, AUX, A, B, C, SC, USB, CRD, MOD, PLAY, AES, USR, OSC,\nBUS, MAIN, MTX",
+   "d": "Channel 1 main input connection group"
+  },
+  {
+   "a": "/ch/1/in/conn/in",
+   "t": "I",
+   "r": "1..64",
+   "x": "",
+   "d": "Channel 1 main input connection group index"
+  },
+  {
+   "a": "/ch/1/in/conn/altgrp",
+   "t": "S",
+   "r": "",
+   "x": "OFF, LCL, AUX, A, B, C, SC, USB, CRD, MOD, PLAY, AES, USR, OSC,\nBUS, MAIN, MTX",
+   "d": "Channel 1 alt input connection group"
+  },
+  {
+   "a": "/ch/1/in/conn/altin",
+   "t": "I",
+   "r": "1..64",
+   "x": "",
+   "d": "Channel 1 alt input connection group index"
+  },
+  {
+   "a": "/ch/1/flt",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Channel 1 filter node"
+  },
+  {
+   "a": "/ch/1/flt/lc",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Channel 1 low cut switch"
+  },
+  {
+   "a": "/ch/1/flt/lcf",
+   "t": "F",
+   "r": "20..2000",
+   "x": "641 steps",
+   "d": "Channel 1 low cut frequency (Hz)"
+  },
+  {
+   "a": "/ch/1/flt/lcs",
+   "t": "S",
+   "r": "",
+   "x": "6, 12, 18, 24",
+   "d": "Channel 1 low cut slope"
+  },
+  {
+   "a": "/ch/1/flt/hc",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Channel 1 high cut switch"
+  },
+  {
+   "a": "/ch/1/flt/hcf",
+   "t": "F",
+   "r": "50..20000",
+   "x": "833 steps",
+   "d": "Channel 1 high cut frequency (Hz)"
+  },
+  {
+   "a": "/ch/1/flt/hcs",
+   "t": "S",
+   "r": "",
+   "x": "6, 12",
+   "d": "Channel 1 high cut slope"
+  },
+  {
+   "a": "/ch/1/flt/tf",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Channel 1 tool filter switch"
+  },
+  {
+   "a": "/ch/1/flt/mdl",
+   "t": "S",
+   "r": "",
+   "x": "TILT, MAX, AP1, AP2",
+   "d": "Channel 1 filter model (see Appendix on Filter plugins for\nparameters details, OSC patterns in italic below correspond to\nTILT)"
+  },
+  {
+   "a": "/ch/1/flt/tilt",
+   "t": "F",
+   "r": "-6..6",
+   "x": "49 steps",
+   "d": "Channel 1 tilt level (dB)"
+  },
+  {
+   "a": "/ch/1/clink",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Channel 1 custom link"
+  },
+  {
+   "a": "/ch/1/col",
+   "t": "I",
+   "r": "1..18",
+   "x": "",
+   "d": "Channel 1 color"
+  },
+  {
+   "a": "/ch/1/name",
+   "t": "S",
+   "r": "",
+   "x": "16 chars max",
+   "d": "Channel 1 name"
+  },
+  {
+   "a": "/ch/1/icon",
+   "t": "I",
+   "r": "0..999",
+   "x": "",
+   "d": "Channel 1 icon"
+  },
+  {
+   "a": "/ch/1/led",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Channel 1 scribble light"
+  },
+  {
+   "a": "/ch/1/$col",
+   "t": "I",
+   "r": "1..18",
+   "x": "",
+   "d": "Channel 1 color [RO] reflects linked source or current strip\nvalue"
+  },
+  {
+   "a": "/ch/1/$name",
+   "t": "S",
+   "r": "",
+   "x": "16 chars max",
+   "d": "Channel 1 name [RO] reflects linked source or current strip\nvalue"
+  },
+  {
+   "a": "/ch/1/$icon",
+   "t": "I",
+   "r": "0..999",
+   "x": "",
+   "d": "Channel 1 icon [RO] reflects linked source or current strip\nvalue"
+  },
+  {
+   "a": "/ch/1/mute",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Channel 1 mute"
+  },
+  {
+   "a": "/ch/1/fdr",
+   "t": "F",
+   "r": "-144..10",
+   "x": "-oo..10 in 1024 steps",
+   "d": "Channel 1 fader"
+  },
+  {
+   "a": "/ch/1/pan",
+   "t": "F",
+   "r": "-100..100",
+   "x": "201 steps",
+   "d": "Channel 1 pan"
+  },
+  {
+   "a": "/ch/1/wid",
+   "t": "F",
+   "r": "-150..150",
+   "x": "61 steps",
+   "d": "Channel 1 width (%)"
+  },
+  {
+   "a": "/ch/1/$solo",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Channel 1 solo switch"
+  },
+  {
+   "a": "/ch/1/$sololed",
+   "t": "I",
+   "r": "0..2",
+   "x": "",
+   "d": "Channel 1 solo LED [RO]"
+  },
+  {
+   "a": "/ch/1/solosafe",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Channel 1 solo safe"
+  },
+  {
+   "a": "/ch/1/mon",
+   "t": "S",
+   "r": "",
+   "x": "A, B, A+B",
+   "d": "Channel 1 monitor mode"
+  },
+  {
+   "a": "/ch/1/proc",
+   "t": "S",
+   "r": "",
+   "x": "GEDI, GEID, GIED, IGED, GDEI, GDIE, GIDE, IGDE, EGDI, EGID, EIGD,\nIEGD, EDGI, EDIG, EIDG, IEDG, DEGI, DEIG, DIEG, IDEG, DGEI, DGIE, DIGE,\nIDGE",
+   "d": "Channel 1 process order (G: Gate, E: EQ, D: Dynamics, I:\nInsert"
+  },
+  {
+   "a": "/ch/1/ptap",
+   "t": "S",
+   "r": "",
+   "x": "IN, FILT, 3, 4, 5, PFL, AFL, POST",
+   "d": "Channel 1 pretap (to sends)"
+  },
+  {
+   "a": "/ch/1/$presolo",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Channel 1 presolo"
+  },
+  {
+   "a": "/ch/1/peq",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Channel 1 PreSend EQ node"
+  },
+  {
+   "a": "/ch/1/peq/on",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Channel 1 PEQ switch"
+  },
+  {
+   "a": "/ch/1/peq/1g",
+   "t": "F",
+   "r": "-15..15",
+   "x": "301 steps",
+   "d": "Channel 1 PEQ band 1 gain (dB)"
+  },
+  {
+   "a": "/ch/1/peq/1f",
+   "t": "F",
+   "r": "20..20000",
+   "x": "960 steps",
+   "d": "Channel 1 PEQ band 1 frequency (Hz)"
+  },
+  {
+   "a": "/ch/1/peq/1q",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Channel 1 PEQ band 1 Q"
+  },
+  {
+   "a": "/ch/1/peq/2g",
+   "t": "F",
+   "r": "-15..15",
+   "x": "301 steps",
+   "d": "Channel 1 PEQ band 2 gain 9dB)"
+  },
+  {
+   "a": "/ch/1/peq/2f",
+   "t": "F",
+   "r": "20..20000",
+   "x": "960 steps",
+   "d": "Channel 1 PEQ band 2 frequency (Hz)"
+  },
+  {
+   "a": "/ch/1/peq/2q",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Channel 1 PEQ band 2 Q"
+  },
+  {
+   "a": "/ch/1/peq/3g",
+   "t": "F",
+   "r": "-15..15",
+   "x": "301 steps",
+   "d": "Channel 1 PEQ band 3 gain 9dB)"
+  },
+  {
+   "a": "/ch/1/peq/3f",
+   "t": "F",
+   "r": "20..20000",
+   "x": "960 steps",
+   "d": "Channel 1 PEQ band 3 frequency (Hz)"
+  },
+  {
+   "a": "/ch/1/peq/3q",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Channel 1 PEQ band 3 Q"
+  },
+  {
+   "a": "/ch/1/gate",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Channel 1 gate node"
+  },
+  {
+   "a": "/ch/1/gate/on",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Channel 1 gate switch"
+  },
+  {
+   "a": "/ch/1/gate/mdl",
+   "t": "S",
+   "r": "",
+   "x": "GATE, DUCK, E88, 9000G, D241G, DS902, DEQ, DEQ2, WAVE, PSE, CMB,\nRIDE, WARM, COMP, EXP, B160, B560, D241C, ECL33, 9000C, SBUS, RED3,\n76LA, LA, F670, BLISS, NSTR, 2250, L100, E88C, LMT, ONEC",
+   "d": "Channel 1 gate model (see Appendix on Gate plugins for parameters\ndetails, OSC patterns in italic below correspond to GATE)"
+  },
+  {
+   "a": "/ch/1/gate/mix",
+   "t": "F",
+   "r": "0..100",
+   "x": "101 steps",
+   "d": "Channel 1 gate mix (%)"
+  },
+  {
+   "a": "/ch/1/gate/gain",
+   "t": "F",
+   "r": "-6..12",
+   "x": "37 steps",
+   "d": "Channel 1 gate gain (dB)"
+  },
+  {
+   "a": "/ch/1/gate/thr",
+   "t": "F",
+   "r": "-80..0",
+   "x": "161 steps",
+   "d": "Channel 1 gate threshold (dB)"
+  },
+  {
+   "a": "/ch/1/gate/range",
+   "t": "F",
+   "r": "3..60",
+   "x": "115 steps",
+   "d": "Channel 1 gate range (dB)"
+  },
+  {
+   "a": "/ch/1/gate/att",
+   "t": "F",
+   "r": "0..120",
+   "x": "121 steps",
+   "d": "Channel 1 gate attack (ms)"
+  },
+  {
+   "a": "/ch/1/gate/hld",
+   "t": "F",
+   "r": "0..200",
+   "x": "200 steps",
+   "d": "Channel 1 gate hold (ms)"
+  },
+  {
+   "a": "/ch/1/gate/rel",
+   "t": "F",
+   "r": "4..4000",
+   "x": "130 steps",
+   "d": "Channel 1 gate release(ms)"
+  },
+  {
+   "a": "/ch/1/gate/acc",
+   "t": "F",
+   "r": "0..100",
+   "x": "21 steps",
+   "d": "Channel 1 gate accent (5)"
+  },
+  {
+   "a": "/ch/1/gate/ratio",
+   "t": "S",
+   "r": "",
+   "x": "1:1.5, 1:2, 1:3, 1:4, gate",
+   "d": "Channel 1 gate ratio"
+  },
+  {
+   "a": "/ch/1/gatesc",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Channel 1 gate sidechain node"
+  },
+  {
+   "a": "/ch/1/gatesc/type",
+   "t": "S",
+   "r": "",
+   "x": "Off, LP12, HP12, BP, NOTCH",
+   "d": "Channel 1 gate sidechain type"
+  },
+  {
+   "a": "/ch/1/gatesc/f",
+   "t": "F",
+   "r": "20..20000",
+   "x": "961 steps",
+   "d": "Channel 1 gate sidechain frequency (Hz)"
+  },
+  {
+   "a": "/ch/1/gatesc/q",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Channel 1 gate sidechain Q"
+  },
+  {
+   "a": "/ch/1/gatesc/src",
+   "t": "S",
+   "r": "",
+   "x": "SHELF, CH.1..CH.40",
+   "d": "Channel 1 gate sidechain source"
+  },
+  {
+   "a": "/ch/1/gatesc/tap",
+   "t": "S",
+   "r": "",
+   "x": "IN, FILT, 3, 4, 5, PFL, AFL, POST",
+   "d": "Channel 1 gate sidechain tap"
+  },
+  {
+   "a": "/ch/1/gatesc/$solo",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Channel 1 gate sidechain solo"
+  },
+  {
+   "a": "/ch/1/eq",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Channel 1 EQ node"
+  },
+  {
+   "a": "/ch/1/eq/on",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Channel 1 EQ switch"
+  },
+  {
+   "a": "/ch/1/eq/mdl",
+   "t": "S",
+   "r": "",
+   "x": "STD, SOUL, E88, E84, F110, PULSAR, MACH4",
+   "d": "Channel 1 EQ model (see Appendix on EQ plugins for parameters\ndetails, OSC patterns in italic below correspond to STD)"
+  },
+  {
+   "a": "/ch/1/eq/mix",
+   "t": "F",
+   "r": "0..125",
+   "x": "126 steps",
+   "d": "Channel 1 EQ mix (%)"
+  },
+  {
+   "a": "/ch/1/eq/$solo",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Channel 1 EQ solo"
+  },
+  {
+   "a": "/ch/1/eq/$solobd",
+   "t": "I",
+   "r": "0..6",
+   "x": "",
+   "d": "Channel 1 EQ solo band"
+  },
+  {
+   "a": "/ch/1/eq/lg",
+   "t": "F",
+   "r": "-15..15",
+   "x": "301 steps",
+   "d": "Channel 1 EQ low gain (dB)"
+  },
+  {
+   "a": "/ch/1/eq/lf",
+   "t": "F",
+   "r": "20..2000",
+   "x": "641 steps",
+   "d": "Channel 1 EQ low frequency (Hz)"
+  },
+  {
+   "a": "/ch/1/eq/lq",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Channel 1 EQ low Q"
+  },
+  {
+   "a": "/ch/1/eq/leq",
+   "t": "S",
+   "r": "",
+   "x": "PEQ, SHV",
+   "d": "Channel 1 EQ low type"
+  },
+  {
+   "a": "/ch/1/eq/1g",
+   "t": "F",
+   "r": "-15..15",
+   "x": "301 steps",
+   "d": "Channel 1 EQ band 1 gain (dB)"
+  },
+  {
+   "a": "/ch/1/eq/1f",
+   "t": "F",
+   "r": "20..20000",
+   "x": "961 steps",
+   "d": "Channel 1 EQ band 1 frequency (Hz)"
+  },
+  {
+   "a": "/ch/1/eq/1q",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Channel 1 EQ band 1 Q"
+  },
+  {
+   "a": "/ch/1/eq/2g",
+   "t": "F",
+   "r": "-15..15",
+   "x": "301 steps",
+   "d": "Channel 1 EQ band 2 gain (dB)"
+  },
+  {
+   "a": "/ch/1/eq/2f",
+   "t": "F",
+   "r": "20..20000",
+   "x": "961 steps",
+   "d": "Channel 1 EQ band 2 frequency (Hz)"
+  },
+  {
+   "a": "/ch/1/eq/2q",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Channel 1 EQ band 2 Q"
+  },
+  {
+   "a": "/ch/1/eq/3g",
+   "t": "F",
+   "r": "-15..15",
+   "x": "301 steps",
+   "d": "Channel 1 EQ band 3 gain (dB)"
+  },
+  {
+   "a": "/ch/1/eq/3f",
+   "t": "F",
+   "r": "20..20000",
+   "x": "961 steps",
+   "d": "Channel 1 EQ band 3 frequency (Hz)"
+  },
+  {
+   "a": "/ch/1/eq/3q",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Channel 1 EQ band 3 Q"
+  },
+  {
+   "a": "/ch/1/eq/4g",
+   "t": "F",
+   "r": "-15..15",
+   "x": "301 steps",
+   "d": "Channel 1 EQ band 4 gain (dB)"
+  },
+  {
+   "a": "/ch/1/eq/4f",
+   "t": "F",
+   "r": "20..20000",
+   "x": "961 steps",
+   "d": "Channel 1 EQ band 4 frequency (Hz)"
+  },
+  {
+   "a": "/ch/1/eq/4q",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Channel 1 EQ band 4 Q"
+  },
+  {
+   "a": "/ch/1/eq/hg",
+   "t": "F",
+   "r": "-15..15",
+   "x": "301 steps",
+   "d": "Channel 1 EQ high gain (dB)"
+  },
+  {
+   "a": "/ch/1/eq/hf",
+   "t": "F",
+   "r": "50..20000",
+   "x": "833 steps",
+   "d": "Channel 1 EQ high frequency (Hz)"
+  },
+  {
+   "a": "/ch/1/eq/hq",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Channel 1 EQ high Q"
+  },
+  {
+   "a": "/ch/1/eq/heq",
+   "t": "S",
+   "r": "",
+   "x": "PEQ, SHV",
+   "d": "Channel 1 EQ high type"
+  },
+  {
+   "a": "/ch/1/dyn",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Channel 1 dynamic (compressor) node"
+  },
+  {
+   "a": "/ch/1/dyn/on",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Channel 1 compressor switch"
+  },
+  {
+   "a": "/ch/1/dyn/mdl",
+   "t": "S",
+   "r": "",
+   "x": "GATE, DUCK, E88, 9000G, D241G, DS902, DEQ, DEQ2, WAVE, PSE, CMB,\nRIDE, WARM, COMP, EXP, B160, B560, D241C, ECL33, 9000C, SBUS, RED3,\n76LA, LA, F670, BLISS, NSTR, 2250, L100, E88C, LMT, ONEC",
+   "d": "Channel 1 compressor model (see Appendix on Compressor plugins\nfor parameters details, OSC patterns in italic below correspond to\nCOMP)"
+  },
+  {
+   "a": "/ch/1/dyn/mix",
+   "t": "F",
+   "r": "0..100",
+   "x": "101 steps",
+   "d": "Channel 1 compressor mix (%)"
+  },
+  {
+   "a": "/ch/1/dyn/gain",
+   "t": "F",
+   "r": "-6..12",
+   "x": "37 steps",
+   "d": "Channel 1 compressor gain (dB)"
+  },
+  {
+   "a": "/ch/1/dyn/thr",
+   "t": "F",
+   "r": "-60..0",
+   "x": "121 steps",
+   "d": "Channel 1 compressor threshold (dB)"
+  },
+  {
+   "a": "/ch/1/dyn/ratio",
+   "t": "S",
+   "r": "",
+   "x": "1.1, 1.2, 1.3, 1.5, 1.7, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0, 6.0, 8.0,\n10, 20, 50, 100",
+   "d": "Channel 1 compressor ratio"
+  },
+  {
+   "a": "/ch/1/dyn/knee",
+   "t": "I",
+   "r": "0..5",
+   "x": "",
+   "d": "Channel 1 compressor knee"
+  },
+  {
+   "a": "/ch/1/dyn/det",
+   "t": "S",
+   "r": "",
+   "x": "PEAK, RMS",
+   "d": "Channel 1 compressor detect"
+  },
+  {
+   "a": "/ch/1/dyn/att",
+   "t": "F",
+   "r": "0..120",
+   "x": "121 steps",
+   "d": "Channel 1 compressor attack (ms)"
+  },
+  {
+   "a": "/ch/1/dyn/hld",
+   "t": "F",
+   "r": "1..200",
+   "x": "200 steps",
+   "d": "Channel 1 compressor hold (ms)"
+  },
+  {
+   "a": "/ch/1/dyn/rel",
+   "t": "F",
+   "r": "4..4000",
+   "x": "130 steps",
+   "d": "Channel 1 compressor release (ms)"
+  },
+  {
+   "a": "/ch/1/dyn/env",
+   "t": "S",
+   "r": "",
+   "x": "LIN, LOG",
+   "d": "Channel 1 compressor envelope"
+  },
+  {
+   "a": "/ch/1/dyn/auto",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Channel 1 compressor auto switch"
+  },
+  {
+   "a": "/ch/1/dynxo",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Channel 1 compressor crossover node"
+  },
+  {
+   "a": "/ch/1/dynxo/depth",
+   "t": "F",
+   "r": "0..20",
+   "x": "41 steps",
+   "d": "Channel 1 compressor crossover depth (dB)"
+  },
+  {
+   "a": "/ch/1/dynxo/type",
+   "t": "S",
+   "r": "",
+   "x": "OFF, LO, HI, S6, S12, PEAK",
+   "d": "Channel 1 compressor crossover type"
+  },
+  {
+   "a": "/ch/1/dynxo /f",
+   "t": "F",
+   "r": "20..20000",
+   "x": "901 steps",
+   "d": "Channel 1 compressor crossover frequency (Hz)"
+  },
+  {
+   "a": "/ch/1/dynxo/q",
+   "t": "F",
+   "r": "0.40..4.00",
+   "x": "121 steps",
+   "d": "Channel 1 compressor crossover quality factor"
+  },
+  {
+   "a": "/ch/1/dynxo/$solo",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Channel 1 compressor crossover solo"
+  },
+  {
+   "a": "/ch/1/dynsc",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Channel 1 compressor sidechain node"
+  },
+  {
+   "a": "/ch/1/dynsc/type",
+   "t": "S",
+   "r": "",
+   "x": "OFF, LP12, HP12, BP, NOTCH",
+   "d": "Channel 1 compressor sidechain type"
+  },
+  {
+   "a": "/ch/1/dynsc/f",
+   "t": "F",
+   "r": "20..20000",
+   "x": "901 steps",
+   "d": "Channel 1 compressor sidechain frequency (Hz)"
+  },
+  {
+   "a": "/ch/1/dynsc/q",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Channel 1 compressor sidechain Q"
+  },
+  {
+   "a": "/ch/1/dynsc/src",
+   "t": "S",
+   "r": "",
+   "x": "SELF, CH.1..CH.40",
+   "d": "Channel 1 compressor sidechain source"
+  },
+  {
+   "a": "/ch/1/dynsc/tap",
+   "t": "S",
+   "r": "",
+   "x": "IN, FILT, 3, 4, 5, PFL, AFL, POST",
+   "d": "Channel 1 compressor sidechain tap"
+  },
+  {
+   "a": "/ch/1/dynsc/$solo",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Channel 1 compressor sidechain solo"
+  },
+  {
+   "a": "/ch/1/preins",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Channel 1 pre-insert node"
+  },
+  {
+   "a": "/ch/1/preins/on",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Channel 1 pre-insert switch"
+  },
+  {
+   "a": "/ch/1/preins/ins",
+   "t": "S",
+   "r": "",
+   "x": "NONE, FX1..FX16",
+   "d": "Channel 1 pre-insert FX slot"
+  },
+  {
+   "a": "/ch/1/preins/$stat",
+   "t": "S",
+   "r": "",
+   "x": "-, OK, N/A",
+   "d": "Channel 1 pre-insert status [RO]"
+  },
+  {
+   "a": "/ch/1/main",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Channel 1 Main node"
+  },
+  {
+   "a": "/ch/1/main/1",
+   "t": "N",
+   "r": "1..4",
+   "x": "",
+   "d": "Channel 1 Main 1 node"
+  },
+  {
+   "a": "/ch/1/main/1/on",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Channel 1 Main 1 on switch"
+  },
+  {
+   "a": "/ch/1/main/1/lvl",
+   "t": "F",
+   "r": "-144..10",
+   "x": "-oo..10 in 1024 steps",
+   "d": "Channel 1 Main 1 fader level (dB)"
+  },
+  {
+   "a": "/ch/1/main/1/pre",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Channel 1 sent pre fader to Main 1"
+  },
+  {
+   "a": "/ch/1/send",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Channel 1 sends node"
+  },
+  {
+   "a": "/ch/1/send/1",
+   "t": "N",
+   "r": "1..16",
+   "x": "",
+   "d": "Channel 1 sends 1 node"
+  },
+  {
+   "a": "/ch/1/send/1/on",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Channel 1 sends 1 on switch"
+  },
+  {
+   "a": "/ch/1/send/1/lvl",
+   "t": "F",
+   "r": "-144..10",
+   "x": "-oo..10 in 1024 steps",
+   "d": "Channel 1 sends 1 fader level (dB)"
+  },
+  {
+   "a": "/ch/1/send/1/pon",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Channel 1 sends 1 pre always on switch"
+  },
+  {
+   "a": "/ch/1/send/1/mode",
+   "t": "S",
+   "r": "",
+   "x": "PRE, POST, GRP",
+   "d": "Channel 1 sends 1 mode"
+  },
+  {
+   "a": "/ch/1/send/1/plink",
+   "t": "I",
+   "r": "0..2",
+   "x": "",
+   "d": "Channel 1 sends 1 pan link (0=individual)"
+  },
+  {
+   "a": "/ch/1/send/1/pan",
+   "t": "F",
+   "r": "-100..100",
+   "x": "201 steps",
+   "d": "Channel 1 sends 1 pan"
+  },
+  {
+   "a": "/ch/1/send/MX<x>",
+   "t": "N",
+   "r": "<x>:1..8",
+   "x": "",
+   "d": "Channel 1 sends matrix <x> node"
+  },
+  {
+   "a": "/ch/1/send/MX<x>/on",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Channel 1 sends mtx on switch"
+  },
+  {
+   "a": "/ch/1/send/MX<x>/lvl",
+   "t": "F",
+   "r": "-144..10",
+   "x": "-oo..10 in 1024 steps",
+   "d": "Channel 1 sends mtx fader level (dB)"
+  },
+  {
+   "a": "/ch/1/send/MX<x>/pon",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Channel 1 sends mtx pre always on switch (ignore channel\nmute)"
+  },
+  {
+   "a": "/ch/1/send/MX<x>/mode",
+   "t": "S",
+   "r": "",
+   "x": "PRE, POST, GRP",
+   "d": "Channel 1 sends mtx mode"
+  },
+  {
+   "a": "/ch/1/send/MX<x>/plink",
+   "t": "I",
+   "r": "0..2",
+   "x": "",
+   "d": "Channel 1 sends mtx pan link (0=individual)"
+  },
+  {
+   "a": "/ch/1/send/MX<x>/pan",
+   "t": "F",
+   "r": "-100..100",
+   "x": "201 steps",
+   "d": "Channel 1 sends mtx pan"
+  },
+  {
+   "a": "/ch/1/tapwid",
+   "t": "F",
+   "r": "-150..150",
+   "x": "",
+   "d": "Channel 1 width"
+  },
+  {
+   "a": "/ch/1/postins",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Channel 1 post insert node"
+  },
+  {
+   "a": "/ch/1/postins/on",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Channel 1 post insert on switch"
+  },
+  {
+   "a": "/ch/1/postins/mode",
+   "t": "S",
+   "r": "",
+   "x": "FX, AUTO_X, AUTO_Y",
+   "d": "Channel 1 post insert mode"
+  },
+  {
+   "a": "/ch/1/postins/ins",
+   "t": "S",
+   "r": "",
+   "x": "NONE, FX1..FX16",
+   "d": "Channel 1 post insert FX slot"
+  },
+  {
+   "a": "/ch/1/postins/w",
+   "t": "F",
+   "r": "-12..12",
+   "x": "241 steps",
+   "d": "Channel 1 post insert autogain weight"
+  },
+  {
+   "a": "/ch/1/postins/$stat",
+   "t": "S",
+   "r": "",
+   "x": "-, OK, N/A",
+   "d": "Channel 1 post insert status [RO]"
+  },
+  {
+   "a": "/ch/1/tags",
+   "t": "S",
+   "r": "",
+   "x": "80 chars max",
+   "d": "Channel 1 tags"
+  },
+  {
+   "a": "/ch/1/$fdr",
+   "t": "F",
+   "r": "-144..10",
+   "x": "-oo..10 in 1024 steps",
+   "d": "Channel 1 fader level as affected by dca (dB) [RO]"
+  },
+  {
+   "a": "/ch/1/$mute",
+   "t": "I",
+   "r": "0..2",
+   "x": "",
+   "d": "Channel 1 mute [RO]"
+  },
+  {
+   "a": "/ch/1/$muteovr",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Channel 1 mute override"
+  }
+ ],
+ "auxin": [
+  {
+   "a": "/aux",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Aux node"
+  },
+  {
+   "a": "/aux/1",
+   "t": "N",
+   "r": "1..8",
+   "x": "",
+   "d": "Aux 1 node"
+  },
+  {
+   "a": "/aux/1/in",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Aux 1 input node"
+  },
+  {
+   "a": "/aux/1/in/set",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Aux 1 input set node"
+  },
+  {
+   "a": "/aux/1/in/set/$mode",
+   "t": "S",
+   "r": "",
+   "x": "M, ST, M/S",
+   "d": "Aux 1 input mode [RO]"
+  },
+  {
+   "a": "/aux/1/in/set/srcauto",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Aux 1 input auto source switch"
+  },
+  {
+   "a": "/aux/1/in/set/altsrc",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Aux 1 input main/alt switch"
+  },
+  {
+   "a": "/aux/1/in/set/inv",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Aux 1 input phase invert switch"
+  },
+  {
+   "a": "/aux/1/in/set/trim",
+   "t": "F",
+   "r": "-18..18",
+   "x": "361 steps",
+   "d": "Aux 1 input trim (dB)"
+  },
+  {
+   "a": "/aux/1/in/set/bal",
+   "t": "F",
+   "r": "-9..9",
+   "x": "181 steps",
+   "d": "Aux 1 input balance (dB)"
+  },
+  {
+   "a": "/aux/1/in/set/$g",
+   "t": "F",
+   "r": "-3..45",
+   "x": "98 steps",
+   "d": "Aux 1 input gain (dB)"
+  },
+  {
+   "a": "/aux/1/in/set/$vph",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Aux 1 input phantom power"
+  },
+  {
+   "a": "/aux/1/in/set/dlymode",
+   "t": "S",
+   "r": "",
+   "x": "M, FT, MS, SMP",
+   "d": "Meters, feet, milliseconds, samples"
+  },
+  {
+   "a": "/aux/1/in/set/dly",
+   "t": "F",
+   "r": "0..150 m / 0.5..500 ft / 0.5..500 ms\n/ 16..500 smp",
+   "x": "1501 steps /\n1000 steps /\n4996 steps /\n485 steps",
+   "d": "Aux 1 input delay (meters, feet, ms, samples)"
+  },
+  {
+   "a": "/aux/1/in/set/dlyon",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Aux 1 input delay"
+  },
+  {
+   "a": "/aux/1/in/conn",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Aux 1 input connection node"
+  },
+  {
+   "a": "/aux/1/in/conn/grp",
+   "t": "S",
+   "r": "",
+   "x": "OFF, LCL, AUX, A, B, C, SC, USB, CRD, MOD, PLAY, AES, USR, OSC,\nBUS, MAIN, MTX",
+   "d": "Aux 1 input connection group"
+  },
+  {
+   "a": "/aux/1/in/conn/in",
+   "t": "I",
+   "r": "1..64",
+   "x": "",
+   "d": "Aux 1 input connection group index"
+  },
+  {
+   "a": "/aux/1/in/conn/altgrp",
+   "t": "S",
+   "r": "",
+   "x": "OFF, LCL, AUX, A, B, C, SC, USB, CRD, MOD, PLAY, AES, USR, OSC,\nBUS, MAIN, MTX",
+   "d": "Aux 1 alt input connection group"
+  },
+  {
+   "a": "/aux/1/in/conn/altin",
+   "t": "I",
+   "r": "1..64",
+   "x": "",
+   "d": "Aux 1 alt input connection group index"
+  },
+  {
+   "a": "/aux/1/clink",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Aux 1 custom link"
+  },
+  {
+   "a": "/aux/1/col",
+   "t": "I",
+   "r": "1..18",
+   "x": "",
+   "d": "Aux 1 color"
+  },
+  {
+   "a": "/aux/1/name",
+   "t": "S",
+   "r": "",
+   "x": "16 chars max",
+   "d": "Aux 1 name"
+  },
+  {
+   "a": "/aux/1/icon",
+   "t": "I",
+   "r": "0..999",
+   "x": "",
+   "d": "Aux 1 icon"
+  },
+  {
+   "a": "/aux/1/led",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Aux 1 scribble light"
+  },
+  {
+   "a": "/aux/1/$col",
+   "t": "I",
+   "r": "1..18",
+   "x": "",
+   "d": "Aux 1 color [RO] reflects linked source or current strip\nvalue"
+  },
+  {
+   "a": "/aux/1/$name",
+   "t": "S",
+   "r": "",
+   "x": "16 chars max",
+   "d": "Aux 1 name [RO] reflects linked source or current strip\nvalue"
+  },
+  {
+   "a": "/aux/1/$icon",
+   "t": "I",
+   "r": "0..999",
+   "x": "",
+   "d": "Aux 1 icon [RO] reflects linked source or current strip\nvalue"
+  },
+  {
+   "a": "/aux/1/mute",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Aux 1 mute"
+  },
+  {
+   "a": "/aux/1/fdr",
+   "t": "F",
+   "r": "-144..10",
+   "x": "-oo..10 in 1024 steps",
+   "d": "Aux 1 fader level (dB)"
+  },
+  {
+   "a": "/aux/1/pan",
+   "t": "F",
+   "r": "-100..100",
+   "x": "201 steps",
+   "d": "Aux 1 pan"
+  },
+  {
+   "a": "/aux/1/wid",
+   "t": "F",
+   "r": "-150..150",
+   "x": "61 steps",
+   "d": "Aux 1 width (%)"
+  },
+  {
+   "a": "/aux/1/$solo",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Aux 1 solo"
+  },
+  {
+   "a": "/aux/1/$sololed",
+   "t": "I",
+   "r": "0..2",
+   "x": "",
+   "d": "Aux 1 solo LED [RO]"
+  },
+  {
+   "a": "/aux/1/solosafe",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Aux 1 solo safe"
+  },
+  {
+   "a": "/aux/1/mon",
+   "t": "S",
+   "r": "",
+   "x": "A, B, A+B",
+   "d": "Aux 1 monitor mode"
+  },
+  {
+   "a": "/aux/1/eq",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Aux 1 EQ node"
+  },
+  {
+   "a": "/aux/1/eq/on",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Aux 1 EQ switch"
+  },
+  {
+   "a": "/aux/1/eq/mdl",
+   "t": "S",
+   "r": "",
+   "x": "STD, SOUL, E88, E84, F110, PULSAR",
+   "d": "Aux 1 EQ model (see Appendix on EQ plugins for parameters\ndetails, OSC patterns in italic below correspond to STD)"
+  },
+  {
+   "a": "/aux /1/eq/mix",
+   "t": "F",
+   "r": "0..125",
+   "x": "126 steps",
+   "d": "Aux 1 EQ mix (%)"
+  },
+  {
+   "a": "/aux /1/eq/$solo",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Aux 1 EQ solo"
+  },
+  {
+   "a": "/aux /1/eq/$solobd",
+   "t": "I",
+   "r": "0..6",
+   "x": "",
+   "d": "Aux 1 EQ solo band"
+  },
+  {
+   "a": "/aux /1/eq/lg",
+   "t": "F",
+   "r": "-15..15",
+   "x": "301 steps",
+   "d": "Aux 1 EQ low gain (dB)"
+  },
+  {
+   "a": "/aux /1/eq/lf",
+   "t": "F",
+   "r": "20..2000",
+   "x": "641 steps",
+   "d": "Aux 1 EQ low frequency (Hz)"
+  },
+  {
+   "a": "/aux /1/eq/lq",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Aux 1 EQ low Q"
+  },
+  {
+   "a": "/aux /1/eq/leq",
+   "t": "S",
+   "r": "",
+   "x": "PEQ, SHV, CUT",
+   "d": "Aux 1 EQ low type"
+  },
+  {
+   "a": "/aux /1/eq/1g",
+   "t": "F",
+   "r": "-15..15",
+   "x": "301 steps",
+   "d": "Aux 1 EQ band 1 gain (dB)"
+  },
+  {
+   "a": "/aux /1/eq/1f",
+   "t": "F",
+   "r": "20..20000",
+   "x": "961 steps",
+   "d": "Aux 1 EQ band 1 frequency (Hz)"
+  },
+  {
+   "a": "/aux /1/eq/1q",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Aux 1 EQ band 1 Q"
+  },
+  {
+   "a": "/aux /1/eq/2g",
+   "t": "F",
+   "r": "-15..15",
+   "x": "301 steps",
+   "d": "Aux 1 EQ band 2 gain (dB)"
+  },
+  {
+   "a": "/aux /1/eq/2f",
+   "t": "F",
+   "r": "20..20000",
+   "x": "961 steps",
+   "d": "Aux 1 EQ band 2 frequency (Hz)"
+  },
+  {
+   "a": "/aux /1/eq/2q",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Aux 1 EQ band 2 Q"
+  },
+  {
+   "a": "/aux /1/eq/3g",
+   "t": "F",
+   "r": "-15..15",
+   "x": "301 steps",
+   "d": "Aux 1 EQ band 3 gain (dB)"
+  },
+  {
+   "a": "/aux /1/eq/3f",
+   "t": "F",
+   "r": "20..20000",
+   "x": "961 steps",
+   "d": "Aux 1 EQ band 3 frequency (Hz)"
+  },
+  {
+   "a": "/aux /1/eq/3q",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Aux 1 EQ band 3 Q"
+  },
+  {
+   "a": "/aux /1/eq/4g",
+   "t": "F",
+   "r": "-15..15",
+   "x": "301 steps",
+   "d": "Aux 1 EQ band 4 gain (dB)"
+  },
+  {
+   "a": "/aux /1/eq/4f",
+   "t": "F",
+   "r": "20..20000",
+   "x": "961 steps",
+   "d": "Aux 1 EQ band 4 frequency (Hz)"
+  },
+  {
+   "a": "/aux /1/eq/4q",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Aux 1 EQ band 4 Q"
+  },
+  {
+   "a": "/aux /1/eq/hg",
+   "t": "F",
+   "r": "-15..15",
+   "x": "301 steps",
+   "d": "Aux 1 EQ high gain (dB)"
+  },
+  {
+   "a": "/aux /1/eq/hf",
+   "t": "F",
+   "r": "50..20000",
+   "x": "833 steps",
+   "d": "Aux 1 EQ high frequency (Hz)"
+  },
+  {
+   "a": "/aux /1/eq/hq",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Aux 1 EQ high Q"
+  },
+  {
+   "a": "/aux /1/eq/heq",
+   "t": "S",
+   "r": "",
+   "x": "PEQ, SHV, CUT",
+   "d": "Aux 1 EQ high type"
+  },
+  {
+   "a": "/aux/1/dyn",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Aux 1 dynamic (PSE/LA combo) node"
+  },
+  {
+   "a": "/aux/1/dyn/on",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Aux 1 compressor switch"
+  },
+  {
+   "a": "/aux/1/dyn/mdl",
+   "t": "S",
+   "r": "",
+   "x": "GATE, DUCK, E88, 9000G, D241G, WAVE, PSE, CMB, RIDE, COMP, EXP,\nB160, B560, D241C, ECL33, 9000C, SBUS, RED3, 76LA, LA, F670, BLISS,\nNSTR, 2250, L100, E88C, LMT, ONEC",
+   "d": "Aux 1 compressor model (see Appendix on Compressor plugins for\nparameters details, OSC patterns in italic below correspond to\nCOMP)"
+  },
+  {
+   "a": "/aux/1/dyn/mix",
+   "t": "F",
+   "r": "0..100",
+   "x": "101 steps",
+   "d": "Aux 1 compressor mix (%)"
+  },
+  {
+   "a": "/aux/1/dyn/gain",
+   "t": "F",
+   "r": "-6..12",
+   "x": "37 steps",
+   "d": "Aux 1 compressor gain (dB)"
+  },
+  {
+   "a": "/aux/1/gate/thr",
+   "t": "F",
+   "r": "-80..0",
+   "x": "161 steps",
+   "d": "Aux 1 gate threshold (dB)"
+  },
+  {
+   "a": "/aux/1/gate/range",
+   "t": "F",
+   "r": "3..60",
+   "x": "115 steps",
+   "d": "Aux 1 gate range (dB)"
+  },
+  {
+   "a": "/aux/1/gate/att",
+   "t": "F",
+   "r": "0..120",
+   "x": "121 steps",
+   "d": "Aux 1 gate attack (ms)"
+  },
+  {
+   "a": "/aux/1/gate/hld",
+   "t": "F",
+   "r": "0..200",
+   "x": "200 steps",
+   "d": "Aux 1 gate hold (ms)"
+  },
+  {
+   "a": "/aux/1/gate/rel",
+   "t": "F",
+   "r": "4..4000",
+   "x": "130 steps",
+   "d": "Aux 1 gate release(ms)"
+  },
+  {
+   "a": "/aux/1/gate/acc",
+   "t": "F",
+   "r": "0..100",
+   "x": "21 steps",
+   "d": "Aux 1 gate accent (5)"
+  },
+  {
+   "a": "/aux/1/gate/ratio",
+   "t": "S",
+   "r": "",
+   "x": "1:1.5, 1:2, 1:3, 1:4, gate",
+   "d": "Aux 1 gate ratio"
+  },
+  {
+   "a": "/aux/1/dynsc",
+   "t": "",
+   "r": "",
+   "x": "",
+   "d": "Aux 1 dyn sidechain node"
+  },
+  {
+   "a": "/aux/1/dynsc/type",
+   "t": "S",
+   "r": "",
+   "x": "OFF, LP12, HP12, BP, NOTCH",
+   "d": "Aux 1 dyn sidechain type"
+  },
+  {
+   "a": "/aux/1/dynsc/f",
+   "t": "F",
+   "r": "20..20000",
+   "x": "901 steps",
+   "d": "Aux 1 dyn sidechain frequency [Hz]"
+  },
+  {
+   "a": "/aux/1/dynsc/q",
+   "t": "F",
+   "r": "0.44..10.0",
+   "x": "181 steps",
+   "d": "Aux 1 dyn sidechain quality"
+  },
+  {
+   "a": "/aux/1/dynsc/src",
+   "t": "S",
+   "r": "",
+   "x": "SELF, BUS.1..BUS.16, MAIN.1..MAIN.4, MTX.1.. MTX.8, AUX.1..\nAUX.8",
+   "d": "Aux 1 dyn sidechain source"
+  },
+  {
+   "a": "/aux/1/dynsc/tap",
+   "t": "S",
+   "r": "",
+   "x": "BUS, DYN, PFL, AFL, EQ, INS2",
+   "d": "Aux 1 dyn sidechain tap point"
+  },
+  {
+   "a": "/aux/1/dynsc/$solo",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Aux 1 dyn sidechain solo"
+  },
+  {
+   "a": "/aux/1/preins",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Aux 1 pre-insert node"
+  },
+  {
+   "a": "/aux/1/preins/on",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Aux 1 pre-insert switch"
+  },
+  {
+   "a": "/aux/1/preins/ins",
+   "t": "S",
+   "r": "",
+   "x": "NONE, FX1..FX16",
+   "d": "Aux 1 pre-insert FX slot"
+  },
+  {
+   "a": "/aux/1/preins/$stat",
+   "t": "S",
+   "r": "",
+   "x": "-, OK, N/A",
+   "d": "Aux 1 pre-insert status [RO]"
+  },
+  {
+   "a": "/aux/1/main",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Aux 1 Main node"
+  },
+  {
+   "a": "/aux/1/main/1",
+   "t": "N",
+   "r": "1..4",
+   "x": "",
+   "d": "Aux 1 Main 1 node"
+  },
+  {
+   "a": "/aux/1/main/1/on",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Aux 1 Main 1 on switch"
+  },
+  {
+   "a": "/aux/1/main/1/lvl",
+   "t": "F",
+   "r": "-144..10",
+   "x": "-oo..10 in 1024 steps",
+   "d": "Aux 1 Main 1 fader level (dB)"
+  },
+  {
+   "a": "/aux/1/main/1/pre",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Aux 1 sent pre fader to Main 1"
+  },
+  {
+   "a": "/aux/1/send",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Aux 1 sends node"
+  },
+  {
+   "a": "/aux/1/send/1",
+   "t": "N",
+   "r": "1..16",
+   "x": "",
+   "d": "Aux 1 sends 1 node"
+  },
+  {
+   "a": "/aux/1/send/1/on",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Aux 1 sends 1 on switch"
+  },
+  {
+   "a": "/aux/1/send/1/lvl",
+   "t": "F",
+   "r": "-144..10",
+   "x": "-oo..10 in 1024 steps",
+   "d": "Aux 1 sends 1 fader level (dB)"
+  },
+  {
+   "a": "/aux/1/send/1/pon",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Aux 1 sends 1 pre always on switch"
+  },
+  {
+   "a": "/aux/1/send/1/mode",
+   "t": "S",
+   "r": "",
+   "x": "PRE, POST, GRP",
+   "d": "Aux 1 sends 1 mode"
+  },
+  {
+   "a": "/aux/1/send/1/plink",
+   "t": "I",
+   "r": "0..2",
+   "x": "",
+   "d": "Aux 1 sends 1 pan link (0=individual)"
+  },
+  {
+   "a": "/aux/1/send/1/pan",
+   "t": "F",
+   "r": "-100..100",
+   "x": "201 steps",
+   "d": "Aux 1 sends 1 pan"
+  },
+  {
+   "a": "/aux/1/send/MX<x>",
+   "t": "N",
+   "r": "<x>:1..8",
+   "x": "",
+   "d": "Aux 1 sends matrix <x> node"
+  },
+  {
+   "a": "/aux/1/send/MX<x>/on",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Aux 1 sends mtx on switch"
+  },
+  {
+   "a": "/aux/1/send/MX<x>/lvl",
+   "t": "F",
+   "r": "-144..10",
+   "x": "-oo..10 in 1024 steps",
+   "d": "Aux 1 sends mtx fader level (dB)"
+  },
+  {
+   "a": "/aux/1/send/MX<x>/pon",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Aux 1 sends mtx pre always on switch (ignore channel\nmute)"
+  },
+  {
+   "a": "/aux/1/send/MX<x>/mode",
+   "t": "S",
+   "r": "",
+   "x": "PRE, POST, GRP",
+   "d": "Aux 1 sends mtx mode"
+  },
+  {
+   "a": "/aux/1/send/MX<x>/plink",
+   "t": "I",
+   "r": "0..2",
+   "x": "",
+   "d": "Aux 1 sends mtx pan link (0=individual)"
+  },
+  {
+   "a": "/aux/1/send/MX<x>/pan",
+   "t": "F",
+   "r": "-100..100",
+   "x": "201 steps",
+   "d": "Aux 1 sends mtx pan"
+  },
+  {
+   "a": "/aux/1/tags",
+   "t": "S",
+   "r": "80 chars max",
+   "x": "",
+   "d": "Aux 1 tags"
+  },
+  {
+   "a": "/aux/1/$fdr",
+   "t": "F",
+   "r": "-144..10",
+   "x": "-oo..10 in 1024 steps",
+   "d": "Aux 1 fader level as affected by dca (dB)[RO]"
+  },
+  {
+   "a": "/aux/1/$mute",
+   "t": "I",
+   "r": "0..2",
+   "x": "",
+   "d": "Aux 1 mute {RO]"
+  },
+  {
+   "a": "/aux/1/$muteovr",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Aux 1 mute override"
+  }
+ ],
+ "bus": [
+  {
+   "a": "/bus",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Bus node"
+  },
+  {
+   "a": "/bus/1",
+   "t": "N",
+   "r": "1..16",
+   "x": "",
+   "d": "Bus 1 node"
+  },
+  {
+   "a": "/bus/1/in",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Bus 1 input node"
+  },
+  {
+   "a": "/bus/1/in/set",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Bus 1 input set node"
+  },
+  {
+   "a": "/bus/1/in/set/inv",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Bus 1 input phase invert"
+  },
+  {
+   "a": "/bus/1/in/set/trim",
+   "t": "F",
+   "r": "-18..18",
+   "x": "361 steps",
+   "d": "Bus 1 input trim (dB)"
+  },
+  {
+   "a": "/bus/1/in/set/bal",
+   "t": "F",
+   "r": "-9..9",
+   "x": "181 steps",
+   "d": "Bus 1 input balance (dB)"
+  },
+  {
+   "a": "/bus/1/col",
+   "t": "I",
+   "r": "1..18",
+   "x": "",
+   "d": "Bus 1 color"
+  },
+  {
+   "a": "/bus/1/name",
+   "t": "S",
+   "r": "",
+   "x": "16 chars max",
+   "d": "Bus 1 name"
+  },
+  {
+   "a": "/bus/1/icon",
+   "t": "I",
+   "r": "0..999",
+   "x": "",
+   "d": "Bus 1 icon"
+  },
+  {
+   "a": "/bus/1/led",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Bus 1 scribble light"
+  },
+  {
+   "a": "/bus/1/$col",
+   "t": "I",
+   "r": "1..18",
+   "x": "",
+   "d": "Bus 1 color [RO] reflects linked source or current strip\nvalue"
+  },
+  {
+   "a": "/bus/1/$name",
+   "t": "S",
+   "r": "",
+   "x": "16 chars max",
+   "d": "Bus 1 name [RO] reflects linked source or current strip\nvalue"
+  },
+  {
+   "a": "/bus/1/$icon",
+   "t": "I",
+   "r": "0..999",
+   "x": "",
+   "d": "Bus 1 icon [RO] reflects linked source or current strip\nvalue"
+  },
+  {
+   "a": "/bus/1/busmono",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Bus 1 mono switch"
+  },
+  {
+   "a": "/bus/1/mute",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Bus 1 mute"
+  },
+  {
+   "a": "/bus/1/fdr",
+   "t": "F",
+   "r": "-144..10",
+   "x": "-oo..10 in 1024 steps",
+   "d": "Bus 1 fader level (dB)"
+  },
+  {
+   "a": "/bus/1/pan",
+   "t": "F",
+   "r": "-100..100",
+   "x": "201 steps",
+   "d": "Bus 1 pan"
+  },
+  {
+   "a": "/bus/1/wid",
+   "t": "F",
+   "r": "-150..150",
+   "x": "61 steps",
+   "d": "Bus 1 width (%)"
+  },
+  {
+   "a": "/bus/1/$solo",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Bus 1 solo"
+  },
+  {
+   "a": "/bus/1/$sololed",
+   "t": "I",
+   "r": "0..2",
+   "x": "",
+   "d": "Bus 1 solo LED {RO]"
+  },
+  {
+   "a": "/bus/1/mon",
+   "t": "S",
+   "r": "",
+   "x": "A, B, A+B",
+   "d": "Bus 1 monitor mode"
+  },
+  {
+   "a": "/bus/1/eq",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Bus 1 EQ node"
+  },
+  {
+   "a": "/bus/1/eq/on",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Bus 1 EQ on switch"
+  },
+  {
+   "a": "/bus/1/eq/mdl",
+   "t": "S",
+   "r": "",
+   "x": "STD, SOUL, E88, E84, F110, PULSAR, PIA",
+   "d": "Bus 1 EQ model (see Appendix on EQ plugins for parameters\ndetails, OSC patterns in italic below correspond to STD)"
+  },
+  {
+   "a": "/bus/1/eq/mix",
+   "t": "F",
+   "r": "0..100",
+   "x": "126 steps",
+   "d": "Bus 1 EQ mix"
+  },
+  {
+   "a": "/bus/1/eq/$solo",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Bus 1 EQ solo"
+  },
+  {
+   "a": "/bus/1/eq/$solobd",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Bus 1 EQ band solo"
+  },
+  {
+   "a": "/bus/1/eq/lg",
+   "t": "F",
+   "r": "-15..15",
+   "x": "301 steps",
+   "d": "Bus 1 EQ low gain (dB)"
+  },
+  {
+   "a": "/bus/1/eq/lf",
+   "t": "F",
+   "r": "20..2000",
+   "x": "641 steps",
+   "d": "Bus 1 EQ low frequency (Hz)"
+  },
+  {
+   "a": "/bus/1/eq/lq",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Bus 1 EQ low Q"
+  },
+  {
+   "a": "/bus/1/eq/leq",
+   "t": "S",
+   "r": "",
+   "x": "PEQ, SHV, CUT, BW6, BW12, BS12, LR12, BW18, BW24, BS24, LR24,\nBW48, LR48",
+   "d": "Bus 1 EQ low type"
+  },
+  {
+   "a": "/bus/1/eq/1g",
+   "t": "F",
+   "r": "-15..15",
+   "x": "301 steps",
+   "d": "Bus 1 EQ band 1 gain (dB)"
+  },
+  {
+   "a": "/bus/1/eq/1f",
+   "t": "F",
+   "r": "20..20000",
+   "x": "961 steps",
+   "d": "Bus 1 EQ band 1 frequency (Hz)"
+  },
+  {
+   "a": "/bus/1/eq/1q",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Bus 1 EQ band 1 Q"
+  },
+  {
+   "a": "/bus/1/eq/2g",
+   "t": "F",
+   "r": "-15..15",
+   "x": "301 steps",
+   "d": "Bus 1 EQ band 2 gain (dB)"
+  },
+  {
+   "a": "/bus/1/eq/2f",
+   "t": "F",
+   "r": "20..20000",
+   "x": "961 steps",
+   "d": "Bus 1 EQ band 2 frequency (Hz)"
+  },
+  {
+   "a": "/bus/1/eq/2q",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Bus 1 EQ band 2 Q"
+  },
+  {
+   "a": "/bus/1/eq/3g",
+   "t": "F",
+   "r": "-15..15",
+   "x": "301 steps",
+   "d": "Bus 1 EQ band 3 gain (dB)"
+  },
+  {
+   "a": "/bus/1/eq/3f",
+   "t": "F",
+   "r": "20..20000",
+   "x": "961 steps",
+   "d": "Bus 1 EQ band 3 frequency (Hz)"
+  },
+  {
+   "a": "/bus/1/eq/3q",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Bus 1 EQ band 3 Q"
+  },
+  {
+   "a": "/bus/1/eq/4g",
+   "t": "F",
+   "r": "-15..15",
+   "x": "301 steps",
+   "d": "Bus 1 EQ band 4 gain (dB)"
+  },
+  {
+   "a": "/bus/1/eq/4f",
+   "t": "F",
+   "r": "20..20000",
+   "x": "961 steps",
+   "d": "Bus 1 EQ band 4 frequency (Hz)"
+  },
+  {
+   "a": "/bus/1/eq/4q",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Bus 1 EQ band 4 Q"
+  },
+  {
+   "a": "/bus/1/eq/5g",
+   "t": "F",
+   "r": "-15..15",
+   "x": "301 steps",
+   "d": "Bus 1 EQ band 5 gain (dB)"
+  },
+  {
+   "a": "/bus/1/eq/5f",
+   "t": "F",
+   "r": "20..20000",
+   "x": "961 steps",
+   "d": "Bus 1 EQ band 5 frequency (Hz)"
+  },
+  {
+   "a": "/bus/1/eq/5q",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Bus 1 EQ band 5 Q"
+  },
+  {
+   "a": "/bus/1/eq/6g",
+   "t": "F",
+   "r": "-15..15",
+   "x": "301 steps",
+   "d": "Bus 1 EQ band 6 gain (dB)"
+  },
+  {
+   "a": "/bus/1/eq/6f",
+   "t": "F",
+   "r": "20..20000",
+   "x": "961 steps",
+   "d": "Bus 1 EQ band 6 frequency (Hz)"
+  },
+  {
+   "a": "/bus/1/eq/6q",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Bus 1 EQ band 6 Q"
+  },
+  {
+   "a": "/bus/1/eq/hg",
+   "t": "F",
+   "r": "-15..15",
+   "x": "301 steps",
+   "d": "Bus 1 EQ high gain (dB)"
+  },
+  {
+   "a": "/bus/1/eq/hf",
+   "t": "F",
+   "r": "50..20000",
+   "x": "833 steps",
+   "d": "Bus 1 EQ high frequency (Hz)"
+  },
+  {
+   "a": "/bus/1/eq/hq",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Bus 1 EQ high Q"
+  },
+  {
+   "a": "/bus/1/eq/heq",
+   "t": "S",
+   "r": "",
+   "x": "PEQ, SHV, CUT, BW6, BW12, BS12, LR12, BW18, BW24, BS24, LR24,\nBW48, LR48",
+   "d": "Bus 1 EQ high type"
+  },
+  {
+   "a": "/bus/1/eq/tilt",
+   "t": "F",
+   "r": "-6..6",
+   "x": "49 steps",
+   "d": "Bus 1 EQ tilt level"
+  },
+  {
+   "a": "/bus/1/dyn",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Bus 1 dynamic (compressor) node"
+  },
+  {
+   "a": "/bus/1/dyn/on",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Bus 1 compressor switch"
+  },
+  {
+   "a": "/bus/1/dyn/mdl",
+   "t": "S",
+   "r": "",
+   "x": "GATE, DUCK, E88, 9000G, D241G, DS902, DEQ, DEQ2, WAVE, PSE, CMB,\nRIDE, WARM, COMP, EXP, B160, B560, D241C, ECL33, 9000C, SBUS, RED3,\n76LA, LA, F670, BLISS, NSTR, 2250, L100, E88C, LMT, ONEC",
+   "d": "Bus 1 compressor model, (see Appendix on Compressor plugins for\nparameters details, OSC patterns in italic below correspond to\nCOMP)"
+  },
+  {
+   "a": "/bus/1/dyn/mix",
+   "t": "F",
+   "r": "0..100",
+   "x": "101 steps",
+   "d": "Bus 1 compressor mix (%)"
+  },
+  {
+   "a": "/bus/1/dyn/gain",
+   "t": "F",
+   "r": "-6..12",
+   "x": "37 steps",
+   "d": "Bus 1 compressor gain (dB)"
+  },
+  {
+   "a": "/bus/1/dyn/thr",
+   "t": "F",
+   "r": "-60..0",
+   "x": "121 steps",
+   "d": "Bus 1 compressor threshold (dB)"
+  },
+  {
+   "a": "/bus/1/dyn/ratio",
+   "t": "F",
+   "r": "1.1..100",
+   "x": "",
+   "d": "Bus 1 compressor ratio"
+  },
+  {
+   "a": "/bus/1/dyn/knee",
+   "t": "I",
+   "r": "0..5",
+   "x": "",
+   "d": "Bus 1 compressor knee"
+  },
+  {
+   "a": "/bus/1/dyn/det",
+   "t": "S",
+   "r": "",
+   "x": "PEAK, RMS",
+   "d": "Bus 1 compressor detect"
+  },
+  {
+   "a": "/bus/1/dyn/att",
+   "t": "F",
+   "r": "0..120",
+   "x": "121 steps",
+   "d": "Bus 1 compressor attack (ms)"
+  },
+  {
+   "a": "/bus/1/dyn/hld",
+   "t": "F",
+   "r": "1..200",
+   "x": "200 steps",
+   "d": "Bus 1 compressor hold (ms)"
+  },
+  {
+   "a": "/bus/1/dyn/rel",
+   "t": "F",
+   "r": "4..4000",
+   "x": "130 steps",
+   "d": "Bus 1 compressor release (ms)"
+  },
+  {
+   "a": "/bus/1/dyn/env",
+   "t": "S",
+   "r": "",
+   "x": "LIN, LOG",
+   "d": "Bus 1 compressor envelope"
+  },
+  {
+   "a": "/bus/1/dyn/auto",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Bus 1 compressor auto switch"
+  },
+  {
+   "a": "/bus/1/dynxo",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Bus 1 compressor crossover node"
+  },
+  {
+   "a": "/bus/1/dynxo/depth",
+   "t": "F",
+   "r": "0..20",
+   "x": "41 steps",
+   "d": "Bus 1 compressor crossover depth (dB)"
+  },
+  {
+   "a": "/bus/1/dynxo/type",
+   "t": "S",
+   "r": "",
+   "x": "OFF, LO, HI, S6, S12, PEAK",
+   "d": "Bus 1 compressor crossover type"
+  },
+  {
+   "a": "/bus/1/dynxo/f",
+   "t": "F",
+   "r": "20..20000",
+   "x": "901 steps",
+   "d": "Bus 1 compressor crossover frequency (Hz)"
+  },
+  {
+   "a": "/bus/1/dynxo/q",
+   "t": "F",
+   "r": "0.40..4.0",
+   "x": "121 steps",
+   "d": "Bus 1 compressor crossover quality"
+  },
+  {
+   "a": "/bus/1/dynxo/$solo",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Bus 1 compressor crossover solo"
+  },
+  {
+   "a": "/bus/1/dynsc",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Bus 1 compressor sidechain node"
+  },
+  {
+   "a": "/bus/1/dynsc/type",
+   "t": "S",
+   "r": "",
+   "x": "OFF, LP12, HP12, BP, NOTCH",
+   "d": "Bus 1 compressor sidechain type"
+  },
+  {
+   "a": "/bus/1/dynsc/f",
+   "t": "F",
+   "r": "20..20000",
+   "x": "901 steps",
+   "d": "Bus 1 compressor sidechain frequency (Hz)"
+  },
+  {
+   "a": "/bus/1/dynsc/q",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Bus 1 compressor sidechain Q"
+  },
+  {
+   "a": "/bus/1/dynsc/src",
+   "t": "S",
+   "r": "",
+   "x": "SELF, BUS.1..BUS.16, MAIN.1..MAIN.4, MTX.1..MTX.8,\nAUX.1..AUX.8",
+   "d": "Bus 1 compressor sidechain source"
+  },
+  {
+   "a": "/bus/1/dynsc/tap",
+   "t": "S",
+   "r": "",
+   "x": "BUS, DYN, PFL, AFL, EQ, INS2",
+   "d": "Bus 1 compressor sidechain tap"
+  },
+  {
+   "a": "/bus/1/dynsc/$solo",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Bus 1 compressor sidechain solo"
+  },
+  {
+   "a": "/bus/1/preins",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Bus 1 pre-insert node"
+  },
+  {
+   "a": "/bus/1/preins/on",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Bus 1 pre-insert switch"
+  },
+  {
+   "a": "/bus/1/preins/ins",
+   "t": "S",
+   "r": "",
+   "x": "NONE, FX1..FX16",
+   "d": "Bus 1 pre-insert FX slot"
+  },
+  {
+   "a": "/bus/1/preins/$stat",
+   "t": "S",
+   "r": "",
+   "x": "-, OK, N/A",
+   "d": "Bus 1 pre-insert status [RO]"
+  },
+  {
+   "a": "/bus/1/main",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Bus 1 Main node"
+  },
+  {
+   "a": "/bus/1/main/1",
+   "t": "N",
+   "r": "1..4",
+   "x": "",
+   "d": "Bus 1 Main 1 node"
+  },
+  {
+   "a": "/bus/1/main/1/on",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Bus 1 Main 1 on switch"
+  },
+  {
+   "a": "/bus/1/main/1/lvl",
+   "t": "F",
+   "r": "-144..10",
+   "x": "-oo..10 in 1024 steps",
+   "d": "Bus 1 Main 1 fader level (dB)"
+  },
+  {
+   "a": "/bus/1/main/1/pre",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Bus 1 sent pre fader to Main 1"
+  },
+  {
+   "a": "/bus/1/send",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Bus 1 sends node"
+  },
+  {
+   "a": "/bus/1/send/1",
+   "t": "N",
+   "r": "1..16",
+   "x": "",
+   "d": "Bus 1 sends 1 node"
+  },
+  {
+   "a": "/bus/1/send/1/on",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Bus 1 sends 1 on switch"
+  },
+  {
+   "a": "/bus/1/send/1/lvl",
+   "t": "F",
+   "r": "-144..10",
+   "x": "-oo..10 in 1024 steps",
+   "d": "Bus 1 sends 1 fader level (dB)"
+  },
+  {
+   "a": "/bus/1/send/1/pre",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Bus 1 sends 1 pre/post switch"
+  },
+  {
+   "a": "/bus/1/send/MX<x>",
+   "t": "N",
+   "r": "<x>:1..8",
+   "x": "",
+   "d": "Bus 1 matrix <x> sends node"
+  },
+  {
+   "a": "/bus/1/send/MX<x>/on",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Bus 1 mtx on switch"
+  },
+  {
+   "a": "/bus/1/send/MX<x.>/lvl",
+   "t": "F",
+   "r": "-144..10",
+   "x": "-oo..10 in 1024 steps",
+   "d": "Bus 1 mtx fader level (dB)"
+  },
+  {
+   "a": "/bus/1/send/MX<x>/pre",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Bus 1 mtx pre/post switch"
+  },
+  {
+   "a": "/bus/1/postins",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Bus 1 post insert node"
+  },
+  {
+   "a": "/bus/1/postins/on",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Bus 1 post insert on switch"
+  },
+  {
+   "a": "/bus/1/postins/ins",
+   "t": "S",
+   "r": "",
+   "x": "NONE, FX1..FX16",
+   "d": "Bus 1 post insert mode"
+  },
+  {
+   "a": "/bus/1/postins/$stat",
+   "t": "S",
+   "r": "",
+   "x": "-, OK, N/A",
+   "d": "Bus 1 post insert status [RO]"
+  },
+  {
+   "a": "/bus/1/dly",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Bus 1 delay node"
+  },
+  {
+   "a": "/bus/1/dly/on",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Bus 1 delay on"
+  },
+  {
+   "a": "/bus/1/dly/mode",
+   "t": "S",
+   "r": "",
+   "x": "M, FT, MS, SMP",
+   "d": "Meters, feet, milliseconds, samples"
+  },
+  {
+   "a": "/bus/1/dly/dly",
+   "t": "F",
+   "r": "0..150 m / 0.5..500 ft/ 0.5..500 ms/\n16..500 smp",
+   "x": "1501 steps /\n1000 steps /\n4996 steps /\n485 steps",
+   "d": "Bus 1 delay (meters, feet, ms, samples)"
+  },
+  {
+   "a": "/bus/1/tags",
+   "t": "S",
+   "r": "",
+   "x": "80 chars max",
+   "d": "Bus 1 tags"
+  },
+  {
+   "a": "/bus/1/$fdr",
+   "t": "F",
+   "r": "-144..10",
+   "x": "-oo..10 in 1024 steps",
+   "d": "Bus 1 fader level as affected by dca (dB)[RO]"
+  },
+  {
+   "a": "/bus/1/$mute",
+   "t": "I",
+   "r": "0..2",
+   "x": "",
+   "d": "Bus 1 mute [RO]"
+  },
+  {
+   "a": "/bus/1/$muteovr",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Bus 1 mute override"
+  }
+ ],
+ "main": [
+  {
+   "a": "/main",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Main node"
+  },
+  {
+   "a": "/main/1",
+   "t": "N",
+   "r": "1..4",
+   "x": "",
+   "d": "Main 1 node"
+  },
+  {
+   "a": "/main/1/in",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Main 1 input node"
+  },
+  {
+   "a": "/main/1/in/set",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Main 1 input set node"
+  },
+  {
+   "a": "/main/1/in/set/inv",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Main 1 input phase invert switch"
+  },
+  {
+   "a": "/main/1/in/set/trim",
+   "t": "F",
+   "r": "-18..18",
+   "x": "361 steps",
+   "d": "Main 1 input trim"
+  },
+  {
+   "a": "/main/1/in/set/bal",
+   "t": "F",
+   "r": "-9..9",
+   "x": "181 steps",
+   "d": "Main 1 input balance"
+  },
+  {
+   "a": "/main/1/col",
+   "t": "I",
+   "r": "1..18",
+   "x": "",
+   "d": "Main 1 color"
+  },
+  {
+   "a": "/main/1/name",
+   "t": "S",
+   "r": "",
+   "x": "16 chars max",
+   "d": "Main 1 name"
+  },
+  {
+   "a": "/main/1/icon",
+   "t": "I",
+   "r": "0..999",
+   "x": "",
+   "d": "Main 1 icon"
+  },
+  {
+   "a": "/main/1/led",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Main 1 scribble light"
+  },
+  {
+   "a": "/main/1/$col",
+   "t": "I",
+   "r": "1..18",
+   "x": "",
+   "d": "Main 1 color [RO] reflects linked source or current strip\nvalue"
+  },
+  {
+   "a": "/main/1/$name",
+   "t": "S",
+   "r": "",
+   "x": "16 chars max",
+   "d": "Main 1 name [RO] reflects linked source or current strip\nvalue"
+  },
+  {
+   "a": "/main/1/$icon",
+   "t": "I",
+   "r": "0..999",
+   "x": "",
+   "d": "Main 1 icon [RO] reflects linked source or current strip\nvalue"
+  },
+  {
+   "a": "/main/1/busmono",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Main 1 mono switch"
+  },
+  {
+   "a": "/main/1/mute",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Main 1 mute"
+  },
+  {
+   "a": "/main/1/fdr",
+   "t": "F",
+   "r": "-144..10",
+   "x": "-oo..10 in 1024 steps",
+   "d": "Main 1 fader level (dB)"
+  },
+  {
+   "a": "/main/1/pan",
+   "t": "F",
+   "r": "-100..100",
+   "x": "201 steps",
+   "d": "Main 1 pan"
+  },
+  {
+   "a": "/main/1/wid",
+   "t": "F",
+   "r": "-150..150",
+   "x": "61 steps",
+   "d": "Main 1 width (%)"
+  },
+  {
+   "a": "/main/1/$solo",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Main 1 solo switch"
+  },
+  {
+   "a": "/main/1/$sololed",
+   "t": "I",
+   "r": "0..2",
+   "x": "",
+   "d": "Main 1 solo LED [RO]"
+  },
+  {
+   "a": "/main/1/mon",
+   "t": "S",
+   "r": "",
+   "x": "A, B, A+B",
+   "d": "Main 1 monitor mode"
+  },
+  {
+   "a": "/main/1/eq",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Main 1 EQ node"
+  },
+  {
+   "a": "/main/1/eq/on",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Main 1 EQ on switch"
+  },
+  {
+   "a": "/main/1/eq/mdl",
+   "t": "S",
+   "r": "",
+   "x": "STD, SOUL, E88, E84, F110, PULSAR, PIA",
+   "d": "Main 1 EQ model, (see Appendix on EQ plugins for parameters\ndetails, OSC patterns in italic below correspond to STD)"
+  },
+  {
+   "a": "/main/1/eq/mix",
+   "t": "F",
+   "r": "0..100",
+   "x": "126 steps",
+   "d": "Main 1 EQ mix"
+  },
+  {
+   "a": "/main/1/eq/$solo",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Main 1 EQ solo"
+  },
+  {
+   "a": "/main/1/eq/$solobd",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Main 1 EQ band solo"
+  },
+  {
+   "a": "/main/1/eq/lg",
+   "t": "F",
+   "r": "-15..15",
+   "x": "301 steps",
+   "d": "Main 1 EQ low gain (dB)"
+  },
+  {
+   "a": "/main/1/eq/lf",
+   "t": "F",
+   "r": "20..2000",
+   "x": "641 steps",
+   "d": "Main 1 EQ low frequency (Hz)"
+  },
+  {
+   "a": "/main/1/eq/lq",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Main 1 EQ low Q"
+  },
+  {
+   "a": "/main/1/eq/leq",
+   "t": "S",
+   "r": "",
+   "x": "PEQ, SHV, CUT, BW6, BW12, BS12, LR12, BW18, BW24, BS24, LR24,\nBW48, LR48",
+   "d": "Main 1 EQ low type"
+  },
+  {
+   "a": "/main/1/eq/1g",
+   "t": "F",
+   "r": "-15..15",
+   "x": "301 steps",
+   "d": "Main 1 EQ band 1 gain (dB)"
+  },
+  {
+   "a": "/main/1/eq/1f",
+   "t": "F",
+   "r": "20..20000",
+   "x": "961 steps",
+   "d": "Main 1 EQ band 1 frequency (Hz)"
+  },
+  {
+   "a": "/main/1/eq/1q",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Main 1 EQ band 1 Q"
+  },
+  {
+   "a": "/main/1/eq/2g",
+   "t": "F",
+   "r": "-15..15",
+   "x": "301 steps",
+   "d": "Main 1 EQ band 2 gain (dB)"
+  },
+  {
+   "a": "/main/1/eq/2f",
+   "t": "F",
+   "r": "20..20000",
+   "x": "961 steps",
+   "d": "Main 1 EQ band 2 frequency (Hz)"
+  },
+  {
+   "a": "/main/1/eq/2q",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Main 1 EQ band 2 Q"
+  },
+  {
+   "a": "/main/1/eq/3g",
+   "t": "F",
+   "r": "-15..15",
+   "x": "301 steps",
+   "d": "Main 1 EQ band 3 gain (dB)"
+  },
+  {
+   "a": "/main/1/eq/3f",
+   "t": "F",
+   "r": "20..20000",
+   "x": "961 steps",
+   "d": "Main 1 EQ band 3 frequency (Hz)"
+  },
+  {
+   "a": "/main/1/eq/3q",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Main 1 EQ band 3 Q"
+  },
+  {
+   "a": "/main/1/eq/4g",
+   "t": "F",
+   "r": "-15..15",
+   "x": "301 steps",
+   "d": "Main 1 EQ band 4 gain (dB)"
+  },
+  {
+   "a": "/main/1/eq/4f",
+   "t": "F",
+   "r": "20..20000",
+   "x": "961 steps",
+   "d": "Main 1 EQ band 4 frequency (Hz)"
+  },
+  {
+   "a": "/main/1/eq/4q",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Main 1 EQ band 4 Q"
+  },
+  {
+   "a": "/main/1/eq/5g",
+   "t": "F",
+   "r": "-15..15",
+   "x": "301 steps",
+   "d": "Main 1 EQ band 5 gain (dB)"
+  },
+  {
+   "a": "/main/1/eq/5f",
+   "t": "F",
+   "r": "20..20000",
+   "x": "961 steps",
+   "d": "Main 1 EQ band 5 frequency (Hz)"
+  },
+  {
+   "a": "/main/1/eq/5q",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Main 1 EQ band 5 Q"
+  },
+  {
+   "a": "/main/1/eq/6g",
+   "t": "F",
+   "r": "-15..15",
+   "x": "301 steps",
+   "d": "Main 1 EQ band 6 gain (dB)"
+  },
+  {
+   "a": "/main/1/eq/6f",
+   "t": "F",
+   "r": "20..20000",
+   "x": "961 steps",
+   "d": "Main 1 EQ band 6 frequency (Hz)"
+  },
+  {
+   "a": "/main/1/eq/6q",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Main 1 EQ band 6 Q"
+  },
+  {
+   "a": "/main/1/eq/hg",
+   "t": "F",
+   "r": "-15..15",
+   "x": "301 steps",
+   "d": "Main 1 EQ high gain (dB)"
+  },
+  {
+   "a": "/main/1/eq/hf",
+   "t": "F",
+   "r": "50..20000",
+   "x": "833 steps",
+   "d": "Main 1 EQ high frequency (Hz)"
+  },
+  {
+   "a": "/main/1/eq/hq",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Main 1 EQ high Q"
+  },
+  {
+   "a": "/main/1/eq/heq",
+   "t": "S",
+   "r": "",
+   "x": "PEQ, SHV, CUT, BW6, BW12, BS12, LR12, BW18, BW24, BS24, LR24,\nBW48, LR48",
+   "d": "Main 1 EQ high type"
+  },
+  {
+   "a": "/main/1/eq/tilt",
+   "t": "F",
+   "r": "-6..6",
+   "x": "49 steps",
+   "d": "Main 1 EQ tilt level"
+  },
+  {
+   "a": "/main/1/dyn",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Main 1 dynamic (compressor) node"
+  },
+  {
+   "a": "/main/1/dyn/on",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Main 1 compressor switch"
+  },
+  {
+   "a": "/main/1/dyn/mdl",
+   "t": "S",
+   "r": "",
+   "x": "GATE, DUCK, E88, 9000G, D241G, DS902, DEQ, DEQ2, WAVE, PSE, CMB,\nRIDE, WARM, COMP, EXP, B160, B560, D241C, ECL33, 9000C, SBUS, RED3,\n76LA, LA, F670, BLISS, NSTR, 2250, L100, E88C, LMT, ONEC",
+   "d": "Main 1 compressor switch, (see Appendix on Compressor plugins for\nparameters details, OSC patterns in italic below correspond to\nCOMP)"
+  },
+  {
+   "a": "/main/1/dyn/mix",
+   "t": "F",
+   "r": "0..100",
+   "x": "101 steps",
+   "d": "Main 1 compressor mix (%)"
+  },
+  {
+   "a": "/main/1/dyn/gain",
+   "t": "F",
+   "r": "-6..12",
+   "x": "37 steps",
+   "d": "Main 1 compressor gain (dB)"
+  },
+  {
+   "a": "/main/1/dyn/thr",
+   "t": "F",
+   "r": "-60..0",
+   "x": "121 steps",
+   "d": "Main 1 compressor threshold (dB)"
+  },
+  {
+   "a": "/main/1/dyn/ratio",
+   "t": "F",
+   "r": "1.1..100",
+   "x": "",
+   "d": "Main 1 compressor ratio"
+  },
+  {
+   "a": "/main/1/dyn/knee",
+   "t": "I",
+   "r": "0..5",
+   "x": "",
+   "d": "Main 1 compressor knee"
+  },
+  {
+   "a": "/main/1/dyn/det",
+   "t": "S",
+   "r": "",
+   "x": "PEAK, RMS",
+   "d": "Main 1 compressor detect"
+  },
+  {
+   "a": "/main/1/dyn/att",
+   "t": "F",
+   "r": "0..120",
+   "x": "121 steps",
+   "d": "Main 1 compressor attack (ms)"
+  },
+  {
+   "a": "/main/1/dyn/hld",
+   "t": "F",
+   "r": "1..200",
+   "x": "200 steps",
+   "d": "Main 1 compressor hold (ms)"
+  },
+  {
+   "a": "/main/1/dyn/rel",
+   "t": "F",
+   "r": "4..4000",
+   "x": "130 steps",
+   "d": "Main 1 compressor release (ms)"
+  },
+  {
+   "a": "/main/1/dyn/env",
+   "t": "S",
+   "r": "",
+   "x": "LIN, LOG",
+   "d": "Main 1 compressor envelope"
+  },
+  {
+   "a": "/main/1/dyn/auto",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Main 1 compressor auto switch"
+  },
+  {
+   "a": "/main/1/dynxo",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Main 1 compressor crossover node"
+  },
+  {
+   "a": "/main/1/dynxo/depth",
+   "t": "F",
+   "r": "0..20",
+   "x": "41 steps",
+   "d": "Main 1 compressor crossover depth (dB)"
+  },
+  {
+   "a": "/main/1/dynxo/type",
+   "t": "S",
+   "r": "",
+   "x": "OFF, LO, HI, S6, S12, PEAK",
+   "d": "Main 1 compressor crossover type"
+  },
+  {
+   "a": "/main/1/dynxo/f",
+   "t": "F",
+   "r": "20..20000",
+   "x": "901 steps",
+   "d": "Main 1 compressor crossover frequency (Hz)"
+  },
+  {
+   "a": "/main/1/dynxo/q",
+   "t": "F",
+   "r": "0.40..4.0",
+   "x": "121 steps",
+   "d": "Main 1 compressor crossover quality"
+  },
+  {
+   "a": "/main/1/dynxo/$solo",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Main 1 compressor crossover solo"
+  },
+  {
+   "a": "/main/1/dynsc",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Main 1 compressor sidechain node"
+  },
+  {
+   "a": "/main/1/dynsc/type",
+   "t": "S",
+   "r": "",
+   "x": "OFF, LP12, HP12, BP, NOTCH",
+   "d": "Main 1 compressor sidechain type"
+  },
+  {
+   "a": "/main/1/dynsc/f",
+   "t": "F",
+   "r": "20..20000",
+   "x": "901 steps",
+   "d": "Main 1 compressor sidechain frequency (Hz)"
+  },
+  {
+   "a": "/main/1/dynsc/q",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Main 1 compressor sidechain Q"
+  },
+  {
+   "a": "/main/1/dynsc/src",
+   "t": "S",
+   "r": "",
+   "x": "SELF, BUS.1..BUS.16, MAIN.1..MAIN.4, MTX.1..MTX.8,\nAUX.1..AUX.8",
+   "d": "Main 1 compressor sidechain source"
+  },
+  {
+   "a": "/main/1/dynsc/tap",
+   "t": "S",
+   "r": "",
+   "x": "BUS, DYN, PFL, AFL, EQ, INS2",
+   "d": "Main 1 compressor sidechain tap"
+  },
+  {
+   "a": "/main/1/dynsc/$solo",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Main 1 compressor sidechain solo"
+  },
+  {
+   "a": "/main/1/preins",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Main 1 pre-insert node"
+  },
+  {
+   "a": "/main/1/preins/on",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Main 1 pre-insert switch"
+  },
+  {
+   "a": "/main/1/preins/ins",
+   "t": "S",
+   "r": "",
+   "x": "NONE, FX1..FX16",
+   "d": "Main 1 pre-insert FX slot"
+  },
+  {
+   "a": "/main/1/preins/$stat",
+   "t": "S",
+   "r": "",
+   "x": "-, OK, N/A",
+   "d": "Main 1 pre-insert status [RO]"
+  },
+  {
+   "a": "/main/1/send",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Main 1 sends node"
+  },
+  {
+   "a": "/main/1/send/MX<x>",
+   "t": "N",
+   "r": "<x>: 1..8",
+   "x": "",
+   "d": "Main 1 matrix <x> sends node"
+  },
+  {
+   "a": "/main/1/send/MX<x>/on",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Main 1 mtx on switch"
+  },
+  {
+   "a": "/main/1/send/MX<x>/lvl",
+   "t": "F",
+   "r": "-144..10",
+   "x": "-oo..10 in 1024 steps",
+   "d": "Main 1 mtx fader level (dB)"
+  },
+  {
+   "a": "/main/1/send/MX<x>/pre",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Main 1 mtx pre/post switch"
+  },
+  {
+   "a": "/main/1/postins",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Main 1 post insert node"
+  },
+  {
+   "a": "/main/1/postins/on",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Main 1 post insert on switch"
+  },
+  {
+   "a": "/main/1/postins/ins",
+   "t": "S",
+   "r": "",
+   "x": "NONE, FX1..FX16",
+   "d": "Main 1 post insert mode"
+  },
+  {
+   "a": "/main/1/postins/$stat",
+   "t": "S",
+   "r": "",
+   "x": "-, OK, N/A",
+   "d": "Main 1 post insert status [RO]"
+  },
+  {
+   "a": "/main/1/dly",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Main 1 delay node"
+  },
+  {
+   "a": "/main/1/dly/on",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Main 1 delay on switch"
+  },
+  {
+   "a": "/main/1/dly/mode",
+   "t": "S",
+   "r": "",
+   "x": "M, FT, MS, SMP",
+   "d": "Meters, feet, milliseconds, samples"
+  },
+  {
+   "a": "/main/1/dly/dly",
+   "t": "F",
+   "r": "0..150 m / 0.5..500 ft/ 0.5..500 ms/\n16..500 smp",
+   "x": "1501 steps /\n1000 steps /\n4996 steps /\n485 steps",
+   "d": "Main 1 delay (meters, feet, ms, samples)"
+  },
+  {
+   "a": "/main/1/tags",
+   "t": "",
+   "r": "",
+   "x": "",
+   "d": ""
+  },
+  {
+   "a": "/main/1/$fdr",
+   "t": "S",
+   "r": "",
+   "x": "80 chars max",
+   "d": "Main 1 tags"
+  },
+  {
+   "a": "/main/1/$mute",
+   "t": "F",
+   "r": "-144..10",
+   "x": "-oo..10 in 1024 steps",
+   "d": "Main 1 fader level as affected by dca (dB)[RO]"
+  },
+  {
+   "a": "/main/1/$muteovr",
+   "t": "I",
+   "r": "0..2",
+   "x": "",
+   "d": "Main 1 mute [RO]"
+  }
+ ],
+ "mtx": [
+  {
+   "a": "/mtx",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Matrix node"
+  },
+  {
+   "a": "/mtx/1",
+   "t": "N",
+   "r": "1..8",
+   "x": "",
+   "d": "Matrix 1 node"
+  },
+  {
+   "a": "/mtx/1/in",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Matrix 1 input node"
+  },
+  {
+   "a": "/mtx/1/in/set",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Matrix 1 input set node"
+  },
+  {
+   "a": "/mtx/1/in/set/inv",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Matrix 1 input phase invert"
+  },
+  {
+   "a": "/mtx/1/in/set/trim",
+   "t": "F",
+   "r": "-18..18",
+   "x": "361 steps",
+   "d": "Matrix 1 input trim"
+  },
+  {
+   "a": "/mtx/1/in/set/bal",
+   "t": "F",
+   "r": "-9..9",
+   "x": "181 steps",
+   "d": "Matrix 1 input balance"
+  },
+  {
+   "a": "/mtx/1/dir",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Matrix 1 direct input signal"
+  },
+  {
+   "a": "/mtx/1/dir/on",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Matrix 1 direct in on switch"
+  },
+  {
+   "a": "/mtx/1/dir/lvl",
+   "t": "F",
+   "r": "-144..10",
+   "x": "-oo..10 in 1024 steps",
+   "d": "Matrix 1 direct in fader level (dB)"
+  },
+  {
+   "a": "/mtx/1/dir/inv",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Matrix 1 direct in invert"
+  },
+  {
+   "a": "/mtx/1/dir/in",
+   "t": "S",
+   "r": "",
+   "x": "OFF, AES, MON.PH, MON.SPK, MON.BUS",
+   "d": "Matrix 1 direct in input source"
+  },
+  {
+   "a": "/mtx/1/col",
+   "t": "I",
+   "r": "1..18",
+   "x": "",
+   "d": "Matrix 1 color"
+  },
+  {
+   "a": "/mtx/1/name",
+   "t": "S",
+   "r": "",
+   "x": "16 chars max",
+   "d": "Matrix 1 name"
+  },
+  {
+   "a": "/mtx/1/icon",
+   "t": "I",
+   "r": "0..999",
+   "x": "",
+   "d": "Matrix 1 icon"
+  },
+  {
+   "a": "/mtx/1/led",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Matrix 1 scribble light"
+  },
+  {
+   "a": "/mtx/1/$col",
+   "t": "I",
+   "r": "1..18",
+   "x": "",
+   "d": "Matrix 1 color [RO] reflects linked source or current strip\nvalue"
+  },
+  {
+   "a": "/mtx/1/$name",
+   "t": "S",
+   "r": "",
+   "x": "16 chars max",
+   "d": "Matrix 1 name [RO] reflects linked source or current strip\nvalue"
+  },
+  {
+   "a": "/mtx/1/$icon",
+   "t": "I",
+   "r": "0..999",
+   "x": "",
+   "d": "Matrix 1 icon [RO] reflects linked source or current strip\nvalue"
+  },
+  {
+   "a": "/mtx/1/busmono",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Matrix 1 mono switch"
+  },
+  {
+   "a": "/mtx/1/mute",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Matrix 1 mute"
+  },
+  {
+   "a": "/mtx/1/fdr",
+   "t": "F",
+   "r": "-144..10",
+   "x": "-oo..10 in 1024 steps",
+   "d": "Matrix 1 fader level (dB)"
+  },
+  {
+   "a": "/mtx/1/pan",
+   "t": "F",
+   "r": "-100..100",
+   "x": "201 steps",
+   "d": "Matrix 1 pan"
+  },
+  {
+   "a": "/mtx/1/wid",
+   "t": "F",
+   "r": "-150..150",
+   "x": "61 steps",
+   "d": "Matrix 1 width (%)"
+  },
+  {
+   "a": "/mtx/1/$solo",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Matrix 1 solo switch"
+  },
+  {
+   "a": "/mtx/1/$sololed",
+   "t": "I",
+   "r": "0..2",
+   "x": "",
+   "d": "Matrix 1 solo LED [RO]"
+  },
+  {
+   "a": "/mtx/1/mon",
+   "t": "S",
+   "r": "",
+   "x": "A, B, A+B",
+   "d": "Matrix 1 monitor mode"
+  },
+  {
+   "a": "/mtx/1/eq",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Matrix 1 EQ node"
+  },
+  {
+   "a": "/mtx/1/eq/on",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Matrix 1 EQ on switch"
+  },
+  {
+   "a": "/mtx/1/eq/mdl",
+   "t": "S",
+   "r": "",
+   "x": "STD, SOUL, E88, E84, F110, PULSAR, PIA",
+   "d": "Matrix 1 EQ model, (see Appendix on EQ plugins for parameters\ndetails, OSC patterns in italic below correspond to STD)"
+  },
+  {
+   "a": "/mtx/1/eq/mix",
+   "t": "F",
+   "r": "0..125",
+   "x": "126 steps",
+   "d": "Matrix 1 EQ mix (%)"
+  },
+  {
+   "a": "/mtx/1/eq/$solo",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Matrix 1 EQ solo"
+  },
+  {
+   "a": "/mtx/1/eq/$solobd",
+   "t": "I",
+   "r": "0..8",
+   "x": "",
+   "d": "Matrix 1 EQ solo band"
+  },
+  {
+   "a": "/mtx/1/eq/lg",
+   "t": "F",
+   "r": "-15..15",
+   "x": "301 steps",
+   "d": "Matrix 1 EQ low gain (dB)"
+  },
+  {
+   "a": "/mtx/1/eq/lf",
+   "t": "F",
+   "r": "20..2000",
+   "x": "641 steps",
+   "d": "Matrix 1 EQ low frequency"
+  },
+  {
+   "a": "/mtx/1/eq/lq",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Matrix 1 EQ low Q"
+  },
+  {
+   "a": "/mtx/1/eq/leq",
+   "t": "S",
+   "r": "",
+   "x": "PEQ, SHV, CUT, BW6, BW12, BS12, LR12, BW18, BW24, BS24, LR24,\nBW48, LR48",
+   "d": "Matrix 1 EQ low type"
+  },
+  {
+   "a": "/mtx/1/eq/1g",
+   "t": "F",
+   "r": "-15..15",
+   "x": "301 steps",
+   "d": "Matrix 1 EQ band 1 gain (dB)"
+  },
+  {
+   "a": "/mtx/1/eq/1f",
+   "t": "F",
+   "r": "20..20000",
+   "x": "961 steps",
+   "d": "Matrix 1 EQ band 1 frequency (Hz)"
+  },
+  {
+   "a": "/mtx/1/eq/1q",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Matrix 1 EQ band 1 Q"
+  },
+  {
+   "a": "/mtx/1/eq/2g",
+   "t": "F",
+   "r": "-15..15",
+   "x": "301 steps",
+   "d": "Matrix 1 EQ band 2 gain (dB)"
+  },
+  {
+   "a": "/mtx/1/eq/2f",
+   "t": "F",
+   "r": "20..20000",
+   "x": "961 steps",
+   "d": "Matrix 1 EQ band 2 frequency (Hz)"
+  },
+  {
+   "a": "/mtx/1/eq/2q",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Matrix 1 EQ band 2 Q"
+  },
+  {
+   "a": "/mtx/1/eq/3g",
+   "t": "F",
+   "r": "-15..15",
+   "x": "301 steps",
+   "d": "Matrix 1 EQ band 3 gain (dB)"
+  },
+  {
+   "a": "/mtx/1/eq/3f",
+   "t": "F",
+   "r": "20..20000",
+   "x": "961 steps",
+   "d": "Matrix 1 EQ band 3 frequency (Hz)"
+  },
+  {
+   "a": "/mtx/1/eq/3q",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Matrix 1 EQ band 3 Q"
+  },
+  {
+   "a": "/mtx/1/eq/4g",
+   "t": "F",
+   "r": "-15..15",
+   "x": "301 steps",
+   "d": "Matrix 1 EQ band 4 gain (dB)"
+  },
+  {
+   "a": "/mtx/1/eq/4f",
+   "t": "F",
+   "r": "20..20000",
+   "x": "961 steps",
+   "d": "Matrix 1 EQ band 4 frequency (Hz)"
+  },
+  {
+   "a": "/mtx/1/eq/4q",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Matrix 1 EQ band 4 Q"
+  },
+  {
+   "a": "/mtx/1/eq/5g",
+   "t": "F",
+   "r": "-15..15",
+   "x": "301 steps",
+   "d": "Matrix 1 EQ band 5 gain (dB)"
+  },
+  {
+   "a": "/mtx/1/eq/5f",
+   "t": "F",
+   "r": "20..20000",
+   "x": "961 steps",
+   "d": "Matrix 1 EQ band 5 frequency (Hz)"
+  },
+  {
+   "a": "/mtx/1/eq/5q",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Matrix 1 EQ band 5 Q"
+  },
+  {
+   "a": "/mtx/1/eq/6g",
+   "t": "F",
+   "r": "-15..15",
+   "x": "301 steps",
+   "d": "Matrix 1 EQ band 6 gain (dB)"
+  },
+  {
+   "a": "/mtx/1/eq/6f",
+   "t": "F",
+   "r": "20..20000",
+   "x": "961 steps",
+   "d": "Matrix 1 EQ band 6 frequency (Hz)"
+  },
+  {
+   "a": "/mtx/1/eq/6q",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Matrix 1 EQ band 6 Q"
+  },
+  {
+   "a": "/mtx/1/eq/hg",
+   "t": "F",
+   "r": "-15..15",
+   "x": "301 steps",
+   "d": "Matrix 1 EQ high gain (dB)"
+  },
+  {
+   "a": "/mtx/1/eq/hf",
+   "t": "F",
+   "r": "50..20000",
+   "x": "833 steps",
+   "d": "Matrix 1 EQ high frequency (Hz)"
+  },
+  {
+   "a": "/mtx/1/eq/hq",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Matrix 1 EQ high Q"
+  },
+  {
+   "a": "/mtx/1/eq/heq",
+   "t": "S",
+   "r": "",
+   "x": "PEQ, SHV, CUT, BW6, BW12, BS12, LR12, BW18, BW24, BS24, LR24,\nBW48, LR48",
+   "d": "Matrix 1 EQ high type"
+  },
+  {
+   "a": "/mtx/1/eq/tilt",
+   "t": "F",
+   "r": "-6..6",
+   "x": "49 steps",
+   "d": "Matrix 1 EQ tilt level (dB)"
+  },
+  {
+   "a": "/mtx/1/dyn",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Matrix 1 dynamic (compressor) node"
+  },
+  {
+   "a": "/mtx/1/dyn/on",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Matrix 1 compressor switch"
+  },
+  {
+   "a": "/mtx/1/dyn/mdl",
+   "t": "S",
+   "r": "",
+   "x": "GATE, DUCK, E88, 9000G, D241G, DS902, DEQ, DEQ2, WAVE, PSE, CMB,\nRIDE, WARM, COMP, EXP, B160, B560, D241C, ECL33, 9000C, SBUS, RED3,\n76LA, LA, F670, BLISS, NSTR, 2250, L100, E88C, LMT, ONEC",
+   "d": "Matrix 1 compressor model, (see Appendix on Compressor plugins\nfor parameters details, OSC patterns in italic below correspond to\nCOMP)"
+  },
+  {
+   "a": "/mtx/1/dyn/mix",
+   "t": "F",
+   "r": "0..100",
+   "x": "101 steps",
+   "d": "Matrix 1 compressor mix (%)"
+  },
+  {
+   "a": "/mtx/1/dyn/gain",
+   "t": "F",
+   "r": "-6..12",
+   "x": "37 steps",
+   "d": "Matrix 1 compressor gain (dB)"
+  },
+  {
+   "a": "/mtx/1/dyn/thr",
+   "t": "F",
+   "r": "-60..0",
+   "x": "121 steps",
+   "d": "Matrix 1 compressor threshold (dB)"
+  },
+  {
+   "a": "/mtx/1/dyn/ratio",
+   "t": "F",
+   "r": "1.1..100",
+   "x": "",
+   "d": "Matrix 1 compressor ratio"
+  },
+  {
+   "a": "/mtx/1/dyn/knee",
+   "t": "I",
+   "r": "0..5",
+   "x": "",
+   "d": "Matrix 1 compressor knee"
+  },
+  {
+   "a": "/mtx/1/dyn/det",
+   "t": "S",
+   "r": "",
+   "x": "PEAK, RMS",
+   "d": "Matrix 1 compressor detect"
+  },
+  {
+   "a": "/mtx/1/dyn/att",
+   "t": "F",
+   "r": "0..120",
+   "x": "121 steps",
+   "d": "Matrix 1 compressor attack (ms)"
+  },
+  {
+   "a": "/mtx/1/dyn/hld",
+   "t": "F",
+   "r": "1..200",
+   "x": "200 steps",
+   "d": "Matrix 1 compressor hold (ms)"
+  },
+  {
+   "a": "/mtx/1/dyn/rel",
+   "t": "F",
+   "r": "4..4000",
+   "x": "130 steps",
+   "d": "Matrix 1 compressor release (ms)"
+  },
+  {
+   "a": "/mtx/1/dyn/env",
+   "t": "S",
+   "r": "",
+   "x": "LIN, LOG",
+   "d": "Matrix 1 compressor envelope"
+  },
+  {
+   "a": "/mtx/1/dyn/auto",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Matrix 1 compressor auto switch"
+  },
+  {
+   "a": "/mtx/1/dynxo",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Matrix 1 compressor crossover node"
+  },
+  {
+   "a": "/mtx/1/dynxo/depth",
+   "t": "F",
+   "r": "0..20",
+   "x": "41 steps",
+   "d": "Matrix 1 compressor crossover depth (dB)"
+  },
+  {
+   "a": "/mtx/1/dynxo/type",
+   "t": "S",
+   "r": "",
+   "x": "OFF, LO, HI, S6, S12, PEAK]",
+   "d": "Matrix 1 compressor crossover type"
+  },
+  {
+   "a": "/mtx/1/dynxo/f",
+   "t": "F",
+   "r": "20..20000",
+   "x": "901 steps",
+   "d": "Matrix 1 compressor crossover frequency (Hz)"
+  },
+  {
+   "a": "/mtx/1/dynxo/q",
+   "t": "F",
+   "r": "0.40..4.0",
+   "x": "121 steps",
+   "d": "Matrix 1 compressor crossover quality"
+  },
+  {
+   "a": "/mtx/1/dynxo/$solo",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Matrix 1 compressor crossover solo"
+  },
+  {
+   "a": "/mtx/1/dynsc",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Matrix 1 compressor sidechain node"
+  },
+  {
+   "a": "/mtx/1/dynsc/type",
+   "t": "S",
+   "r": "",
+   "x": "OFF, LP12, HP12, BP, NOTCH",
+   "d": "Matrix 1 compressor sidechain type"
+  },
+  {
+   "a": "/mtx/1/dynsc/f",
+   "t": "F",
+   "r": "20..20000",
+   "x": "901 steps",
+   "d": "Matrix 1 compressor sidechain frequency (Hz)"
+  },
+  {
+   "a": "/mtx/1/dynsc/q",
+   "t": "F",
+   "r": "0.44..10",
+   "x": "181 steps",
+   "d": "Matrix 1 compressor sidechain Q"
+  },
+  {
+   "a": "/mtx/1/dynsc/src",
+   "t": "S",
+   "r": "",
+   "x": "SELF, BUS.1..BUS.16, MAIN.1..MAIN.4, MTX.1..MTX.8,\nAUX.1..AUX.8",
+   "d": "Matrix 1 compressor sidechain source"
+  },
+  {
+   "a": "/mtx/1/dynsc/tap",
+   "t": "S",
+   "r": "",
+   "x": "BUS, DYN, PFL, AFL, EQ, INS2",
+   "d": "Matrix 1 compressor sidechain tap"
+  },
+  {
+   "a": "/mtx/1/dynsc/$solo",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Matrix 1 compressor sidechain solo"
+  },
+  {
+   "a": "/mtx/1/preins",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Matrix 1 pre-insert node"
+  },
+  {
+   "a": "/mtx/1/preins/on",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Matrix 1 pre-insert switch"
+  },
+  {
+   "a": "/mtx/1/preins/ins",
+   "t": "S",
+   "r": "",
+   "x": "NONE, FX1..FX16",
+   "d": "Matrix 1 pre-insert FX slot"
+  },
+  {
+   "a": "/mtx/1/preins/$stat",
+   "t": "S",
+   "r": "",
+   "x": "-,OK, N/A",
+   "d": "Matrix 1 pre-insert status [RO]"
+  },
+  {
+   "a": "/mtx/1/postins",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Matrix 1 post insert node"
+  },
+  {
+   "a": "/mtx/1/postins/on",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Matrix 1 post insert on switch"
+  },
+  {
+   "a": "/mtx/1/postins/ins",
+   "t": "S",
+   "r": "",
+   "x": "NONE, FX1..FX16",
+   "d": "Matrix 1 post insert mode"
+  },
+  {
+   "a": "/mtx/1/postins/$stat",
+   "t": "S",
+   "r": "",
+   "x": "-,OK, N/A",
+   "d": "Matrix 1 post insert status [RO]"
+  },
+  {
+   "a": "/mtx/1/dly",
+   "t": "N",
+   "r": "",
+   "x": "",
+   "d": "Matrix 1 delay node"
+  },
+  {
+   "a": "/mtx/1/dly/on",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Matrix 1 delay on switch"
+  },
+  {
+   "a": "/mtx/1/dly/mode",
+   "t": "S",
+   "r": "",
+   "x": "M, FT, MS, SMP",
+   "d": "Meters, feet, milliseconds, samples"
+  },
+  {
+   "a": "/mtx/1/dly/dly",
+   "t": "F",
+   "r": "0..150 m / 0.5..500 ft/ 0.5..500 ms/\n16..500 smp",
+   "x": "1501 steps /\n1000 steps /\n4996 steps /\n485 steps",
+   "d": "Matrix 1 delay (meters, feet, ms, samples)"
+  },
+  {
+   "a": "/mtx/1/tags",
+   "t": "S",
+   "r": "",
+   "x": "80 chars max",
+   "d": "Matrix 1 tags"
+  },
+  {
+   "a": "/mtx/1/$fdr",
+   "t": "F",
+   "r": "-144..10",
+   "x": "-oo..10 in 1024 steps",
+   "d": "Matrix 1 fader level as affected by dca (dB)[RO]"
+  },
+  {
+   "a": "/mtx/1/$mute",
+   "t": "I",
+   "r": "0..2",
+   "x": "",
+   "d": "Matrix 1 mute [RO]"
+  },
+  {
+   "a": "/mtx/1/$muteovr",
+   "t": "I",
+   "r": "0..1",
+   "x": "",
+   "d": "Matrix 1 mute override"
+  }
+ ]
+}

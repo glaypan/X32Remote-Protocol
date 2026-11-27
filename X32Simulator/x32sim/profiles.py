@@ -3,8 +3,9 @@ from .consts import FX_COUNT, M32_FX_ALGOS, X32_FX_ALGOS
 from .fxlib import WING_FX_ALGOS, wing_mdl
 from .kinds import fx_par_kind, fx_par_num
 from .logbus import log
-from .params import CH_PARAM_SPECS, PARAM_SPECS, SEND_PARAM_SPECS, spec_addr
+from .params import CH_PARAM_SPECS, PARAM_SPECS, SEND_PARAM_SPECS, send_pack, send_unpack, spec_addr  # noqa: E501
 from .wingfx import wing_par_name, wing_par_num
+from .wingmap import WING_PARAM_ADDR, WING_PARAM_LIMITS, WING_VALUE_SNAP, WING_WIRE_CONV  # noqa: E501
 # -*- coding: utf-8 -*-
 """x32sim/profiles — 控台驱动层: ConsoleProfile 与各控台地址表"""
 
@@ -84,6 +85,28 @@ class ConsoleProfile:
 
     def supports(self, kind):
         return self.addr(kind, 0) is not None
+
+    def scene_msgs(self, n):
+        """场景召回要发的报文 —— [(地址, 参数列表), ...]。
+
+        X32 是**一条**：`/scene/N/load`（场景号不补零，1–99）。
+        WING 是**两段式**（覆盖见 WingProfile）：先写 `$actionidx` 选号，
+        再写 `$action = "GO"` 执行 —— 少发第二条的表现是"台面高亮了场景
+        但不执行"，属于最难查的一类"看起来成功"。
+        """
+        return [("/scene/%d/load" % int(n), [])]
+
+    def fx_param_caps(self):
+        """各效果槽**当前可写**的参数号 —— {槽号: [par 号, ...]}。
+
+        返回 None = 本控台所有参数都可写（X32：`/fx/N/par/M` 对每个算法都存在）。
+        WING 是命名参数（`/fx/1/time`），只有标定过名字的才写得进去，所以必须
+        逐槽算：换了算法，可写集合就变了。
+
+        用途：App 端据此灰显滑杆。网页是直接读 `/api/state.fx.slots[].params[].w`，
+        App 用 OSC 直连、拿不到这个字段，只能单独拉一次这张表。
+        """
+        return None
 
     def pending(self):
         """未标定时列出还需要提供地址映射的 kind（供 UI 与规范 §12 使用）。"""
@@ -165,14 +188,17 @@ class _StubProfile(ConsoleProfile):
 
 def _all_kinds():
     """语义管道里的全部 kind（卡片目标 / 预设范围 / 校验的并集）。"""
+    from .params import GROUP_PARAM_SPECS
     base = ["ch_fader", "ch_on", "bus_fader", "bus_on", "dca_fader",
             "dca_on", "main_fader", "main_on"]
     base += [g + "_fader" for g in ("auxin", "usb", "fxret", "mtx")]
     base += [g + "_on" for g in ("auxin", "usb", "fxret", "mtx")]
     base += ["ch_dca", "fx_type", "fx_on", "fx_mix", "fx_name", "fx_par_NN"]
-    # 通道参数 (增益/反相/延时/低切/插入/门/动态/EQ): 从登记表推导, 新增即跟上
-    base += [sp.kind for sp in CH_PARAM_SPECS]
-    # 发送 (通道→Bus): 二维地址, 同样从登记表推导
+    # 通道参数 (增益/反相/延时/低切/插入/门/动态/EQ): 从登记表推导, 新增即跟上。
+    # 必须遍历**所有组**而不只是 ch —— 只列 ch 的话 pending() 会漏报
+    # bus/mtx/main 的参数，看起来"WING 全都支持"，其实一大半返 None。
+    for _g in ("ch", "auxin", "bus", "mtx", "main"):
+        base += [sp.kind for sp in GROUP_PARAM_SPECS.get(_g, ())]
     base += [sp.kind for sp in SEND_PARAM_SPECS]
     return base
 
@@ -202,6 +228,26 @@ _WING_GROUP_REV = {v: k for k, v in _WING_GROUP.items()}
 _WING_TAIL_REV = {v: k for k, v in _WING_TAIL.items()}
 
 
+def _param_reverse_table():
+    """通道处理参数的地址模板 → (kind, 占位符个数)。
+
+    模板里的 `%d` 换成正则捕获组。注意 `re.escape` 不保证原样保留 `%`，
+    所以用 split/join 拼正则，而不是 escape 完再 replace。
+    """
+    import re
+    out = []
+    for kind, tpl in WING_PARAM_ADDR.items():
+        parts = tpl.split("%d")
+        pat = r"(\d+)".join(re.escape(p) for p in parts)
+        out.append((re.compile("^" + pat + "$"), kind, len(parts) - 1))
+    # 占位符多的先匹配（发送是两个 %d，避免被单 %d 的同形模板抢走）
+    out.sort(key=lambda t: -t[2])
+    return tuple(out)
+
+
+_WING_PARAM_REV = _param_reverse_table()
+
+
 def _slot_algo(slot):
     """槽位当前算法（延迟导入 STATE：profiles→state 会成环，只在调用时取）。
     取不到（未初始化/越界）一律当空槽 —— 空槽没有参数可写。"""
@@ -218,13 +264,23 @@ class WingProfile(ConsoleProfile):
     已标定（有文档/实测证据，可直接写）：推子(dB) / 静音(反向) / 声像 /
     算法选择(`/fx/N/mdl`) / 干湿比(`/fx/N/fxmix`) /
     **FX 命名参数**(`/fx/1/time`、`/fx/2/pdel|dcy`，见 wingfx.py 的证据分级) /
+    **通道处理参数**(EQ 中间段 f/g/q、低切、门、动态连续参数、发送，见 wingmap.py) /
+    **场景召回**(两段式 `/$ctl/lib/$actionidx` + `$action="GO"`，见 scene_msgs) /
     订阅回读(`/%<port>/*S`) / 节点批量写(`/ ,s "/ch.1.fdr=0,..."`，默认关)。
 
-    仍未标定的部分**显式缺席**而不是猜地址：
-      · 通道处理参数 (EQ/门/动态/发送) —— WING 的树结构与 X32 完全不同；
-      · 场景召回 —— `$stat`/`show` 子树尚未核实；
-      · FX 返回组 —— WING 没有 fxrtn 组（X32 的 8 条返回在 WING 里是普通通道）。
-    这些在 UI 上灰显（caps 不含对应能力 / `w=false` 灰掉单个滑杆），
+    仍未标定的部分**显式缺席**而不是猜地址（`addr()` 返 None，界面不出现该控件）：
+      · EQ 段类型 —— WING 的中间 4 段固定 PEQ，没有类型可选；
+      · 门/动态的**模型**（`gate/mdl`、`dyn/mdl` 各 35 种）与侧链节点
+        （`gatesc/*`、`dynsc/*`、`dynxo/*`）—— X32 是固定字段，两边不是改名关系；
+      · 插入 —— WING 是 `preins`/`postins` 插槽节点，X32 是 `insert/sel|pos`；
+      · 延时 —— `in/set/dly` 的单位取决于 `in/set/dlymode`（米/英尺/毫秒/采样），
+        没有"设为 ms"的确认证据，宁可不动；
+      · WING 的 aux 动态 / main 的 mix·auto —— 真台有，但 X32 侧没有对应 kind，
+        内部语义管道表达不了（不是地址问题）；
+      · **FX 返回组 —— 结构上不存在**：WING 的 FX 是插入式（`/fx/N` 挂到通道上），
+        没有 X32 那种独立的 8 条返回通道，所以 `counts["fxret"]=0`、fxret 参数
+        全部无地址。这不是"没标定"，是"没有这个东西"。
+    这些在 UI 上灰显（`w=false` 灰掉单个滑杆 / 参数规格不下发），
     写入时记一条明确日志后跳过。
     """
 
@@ -234,8 +290,8 @@ class WingProfile(ConsoleProfile):
     ready = True
     verified = False
     note = ("地址表来自《WING Remote Protocols V3.1》：编号不补零、推子为 dB、"
-            "静音 1=静音（与 X32 相反）、不支持 Bundle。FX 命名参数仅标定有证据的部分，"
-            "其余滑杆在前端灰显；通道处理参数待标定")
+            "静音 1=静音（与 X32 相反）、不支持 Bundle。FX 命名参数与通道处理参数"
+            "仅标定有证据的部分，其余在前端灰显或不下发")
     # counts = **本机能实际控制**的规模（受本地台面建模限制），不是协议规模。
     # 协议规模见 proto_counts —— 写 counts 用 40 会造成"卡片能选 ch40、实际无声"。
     counts = {"ch": 32, "bus": 16, "dca": 8, "auxin": 6, "usb": 0,
@@ -250,6 +306,13 @@ class WingProfile(ConsoleProfile):
     fx_mix_scale = 100       # 干湿比 0..100，不是 0..1
     index_fmt = "%d"         # 地址编号不补零
     fx_slots = 16
+    # 通道处理参数的线上差异（见 wingmap.py 的说明）
+    # ⚠️ 叫 wire_limits 而不是 param_limits —— 后者已被 app.py 用作
+    #    「控台固件量程」（trim ±12/±18，会喂给 set_param_limits）；
+    #    这张表是**线上值域**，两者语义不同，混用会让固件量程被参数表覆盖。
+    wire_limits = WING_PARAM_LIMITS       # 值域与 X32 不同时钳制
+    wire_conv = WING_WIRE_CONV            # 线上形态不同时转换（dB / 字符串枚举）
+    value_snap = WING_VALUE_SNAP          # 档位表不同时吸附（ch 压缩比 7.0 → 5.0）
     # WING 的 OSC 包内容**永远是单条 Message**（官方文档明说 Bundles are not
     # supported）——整包 Bundle 发过去会被丢弃，症状恰好是"界面全动、台子不动"。
     osc_bundle = False
@@ -272,6 +335,20 @@ class WingProfile(ConsoleProfile):
             if not name:
                 return None
             return "/fx/%d/%s" % (idx, name)
+        # 通道处理参数（EQ / 门 / 动态 / 发送 / 低切）：整表在 wingmap.py。
+        # 表里没有的 kind = 两边语义不等价 = 返 None，界面不显示、写入记日志跳过。
+        tpl = WING_PARAM_ADDR.get(kind)
+        if tpl is not None:
+            sp = PARAM_SPECS.get(kind)
+            if tpl.count("%") >= 2:
+                # 发送是二维参数：idx 是 send_pack 打包后的 (源, 目标)。
+                # send_unpack 返回的源号已经是 1-based（与地址编号一致），
+                # 不能再加 _WING_IDX_BASE —— main 会因此变成 /main/2。
+                _sg, src, tgt = send_unpack(idx)
+                return tpl % (int(src), int(tgt))
+            g = sp.group if sp is not None else kind.split("_")[0]
+            n = int(idx) + _WING_IDX_BASE.get(g, 0)
+            return tpl % n if n >= 1 else None
         grp, _, field = kind.rpartition("_")
         tail = _WING_TAIL.get(field)
         g = _WING_GROUP.get(grp)
@@ -286,29 +363,75 @@ class WingProfile(ConsoleProfile):
         """内部算法 key → WING 的 mdl 枚举；该算法 WING 没有则 None（拒发）。"""
         return wing_mdl(str(algo or "").upper())
 
+    def scene_msgs(self, n):
+        """WING 场景召回：**两段式**，没有 `/scene/N/load` 这种一步到位的地址。
+
+        文档《WING Remote Protocols》§ Control Settings 原文：
+          `/$ctl/lib/$actionidx`  I 0..16384  「用户选择的场景号」
+          `/$ctl/lib/$action`     S {IDLE, GOPREV, GONEXT, GO, PREV, NEXT, GOTAG}
+        召回 = 先写号，再写 GO。两条缺一不可：
+          · 只写号 → 台面列表里高亮了，但不执行（"看起来成功"）；
+          · 只写 GO → 执行的是上一次选中的场景（更糟：切错场）。
+
+        `$actionidx` 的 0 是特殊值（文档脚注：想用 NEXT/PREV 就要先设 0），
+        场景本身从 1 编号，所以场景号原样传，不做 ±1。
+        """
+        n = int(n)
+        return [("/$ctl/lib/$actionidx", [n]),
+                ("/$ctl/lib/$action", ["GO"])]
+
+    def fx_param_caps(self):
+        """WING 逐槽算可写参数号 —— 换了算法，可写集合就变了。
+
+        空槽返回空列表（没有算法就没有参数名）。探测结果（wing_params.json）
+        会通过 wingfx 的运行时覆盖自动生效，不需要改这里。
+        """
+        from .fxlib import X32_FX_ALGOS
+        out = {}
+        for s in range(1, int(self.fx_slots or 0) + 1):
+            algo = _slot_algo(s)
+            d = X32_FX_ALGOS.get(algo or "") or {}
+            cnt = len(d.get("params") or ())
+            out[s] = [p for p in range(1, cnt + 1) if wing_par_name(algo, p)]
+        return out
+
     def parse_addr(self, addr):
         s = str(addr or "").strip("/")
         parts = s.split("/")
-        if len(parts) != 3:
-            return None
-        head, num, tail = parts
-        try:
-            n = int(num)
-        except ValueError:
-            return None
-        if head == "fx":
-            if n < 1:
-                return None
-            if tail == "mdl":
-                return ("fx_type", n)
-            if tail == "fxmix":
-                return ("fx_mix", n)
-            pnum = wing_par_num(_slot_algo(n), tail)
-            return (fx_par_kind(pnum), n) if pnum else None
-        g = _WING_GROUP_REV.get(head)
-        f = _WING_TAIL_REV.get(tail)
-        if g and f:
-            return (g + "_" + f, n - _WING_IDX_BASE.get(g, 0))
+        if len(parts) == 3:
+            head, num, tail = parts
+            try:
+                n = int(num)
+            except ValueError:
+                n = None
+            if n is not None:
+                if head == "fx":
+                    if n < 1:
+                        return None
+                    if tail == "mdl":
+                        return ("fx_type", n)
+                    if tail == "fxmix":
+                        return ("fx_mix", n)
+                    pnum = wing_par_num(_slot_algo(n), tail)
+                    return (fx_par_kind(pnum), n) if pnum else None
+                g = _WING_GROUP_REV.get(head)
+                f = _WING_TAIL_REV.get(tail)
+                if g and f:
+                    return (g + "_" + f, n - _WING_IDX_BASE.get(g, 0))
+        # 通道处理参数（4~5 段）：`/ch/1/eq/1f`、`/ch/1/send/1/lvl`。
+        # 不认得就返回 None（桥接会记一行"未识别"），绝不猜成别的参数 ——
+        # 猜错的症状是"动了台面 A 旋钮，界面上 B 跟着跳"，比不回读更糟。
+        for rx, kind, nph in _WING_PARAM_REV:
+            m = rx.match(addr)
+            if not m:
+                continue
+            nums = [int(x) for x in m.groups()]
+            sp = PARAM_SPECS.get(kind)
+            if sp is not None and sp.group == "send" and nph >= 2:
+                sg = "ch" if kind.startswith("send_") else kind.split("_")[0]
+                return (kind, send_pack(nums[0], nums[1], sg))
+            g = sp.group if sp is not None else kind.split("_")[0]
+            return (kind, nums[0] - _WING_IDX_BASE.get(g, 0))
         return None
 
     def pending(self):

@@ -293,7 +293,9 @@ def set_value(kind, idx, value, source="manual"):
             # 表驱动: 钳制 + 档位量化 + 落库 (params.param_coerce)。
             # 推子/静音/12 个通道参数共用这一条, 与旧的分支写法逐字等价
             # (fader=_clamp01 / on=_truthy, 通道参数多一层量程与档位)。
-            _row_of(sp.group, idx)[sp.field] = param_coerce(kind, value)
+            # 传 profile 是为了**按控台吸附档位**: WING 的 ch 压缩比没有 7.0
+            # 这一档, 提前吸附, 界面就不会先显示 7.0 再自己跳成 5.0。
+            _row_of(sp.group, idx)[sp.field] = param_coerce(kind, value, profile())
         elif kind == "ch_dca":   # 位掩码: 通道归属哪些 DCA (bit0=DCA1 ...)
             mask = int(value) & 0xFF
             for d in range(1, 9):

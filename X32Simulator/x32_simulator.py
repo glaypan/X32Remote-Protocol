@@ -3103,20 +3103,139 @@ def _snap(sp, v):
     return v
 
 
-def param_coerce(kind, value):
+def snap_for(prof, kind, v):
+    """按控台吸附到**该控台物理存在的档位**。X32 下原样返回。
+
+    只对「两边档位表不同」的参数有意义。目前只有 ch 的压缩比：本地 12 档、
+    WING 17 档，交集 11 档 —— 本地 7.0 在 WING 上不存在，写下去会被台面改成
+    5.0 或 6.0。这里提前吸附，是为了**界面不要先显示 7.0 再跳**。
+    """
+    tab = getattr(prof, "value_snap", None) if prof is not None else None
+    if not tab:
+        return v
+    pool = tab.get(kind)
+    if not pool:
+        return v
+    x = _finite(v, pool[0])
+    if any(abs(x - e) < 1e-9 for e in pool):
+        return x
+    return min(pool, key=lambda e: (abs(e - x), e))
+
+
+def param_coerce(kind, value, prof=None):
     """外部输入 → 该参数的合法值。未知 kind 抛 KeyError（调用方按"不支持"处理）。"""
     sp = PARAM_SPECS[kind]
     if sp.vtype == "bool":
         return _truthy(value)
-    return _snap(sp, _finite(value, sp.default))
+    v = _snap(sp, _finite(value, sp.default))
+    return snap_for(prof, kind, v) if prof is not None else v
+
+
+# ---- 线上值转换器（WING 专用，按 kind 查表调用）--------------------------
+# 只在这里实现一次。wingmap.py 提供 kind → 转换器名，不重复数值逻辑。
+# 每个转换器必须成对：wire 侧发什么，from_wire 侧就要能接回来，否则
+# "写出去 A、读回来 B" → 界面自己跳。
+
+WING_SILENT_DB = -144.0
+
+
+def _conv_send_db(sp, v, rev=False):
+    """发送电平：本地 0..1（X32 的 161 档 level）↔ WING 的 dB。
+
+    WING 的 -∞ 是 **-144**（协议原文 -144..10），X32 的 level_db(0) 给 -90。
+    90 与 144 混用会让"静音"变成"极小但可闻"，所以这里单独收口。
+    """
+    if rev:
+        try:
+            db = float(v)
+        except (TypeError, ValueError):
+            return param_coerce(sp.kind, v)
+        if db <= -90.0:
+            return 0.0
+        return round(level_from_db(db), 4)
+    f = _finite(v, 0.0)
+    if f <= 0.0:
+        return WING_SILENT_DB
+    return round(level_db(f), 2)
+
+
+def _conv_ratio_str(sp, v, rev=False):
+    """ch 的压缩比：本地比值 ↔ WING 的**字符串**枚举（"4.0"）。
+
+    `sp.enum` 传进去是必须的：两边的档位表不同（本地 12 档、WING 17 档），
+    只在 WING 表里取最近值会漂移（7.0 → 6.0 → 回读被 X32 表吸附成 5.0）。
+    """
+    if rev:
+        return param_coerce(sp.kind, v)
+    return nearest_ratio(v, sp.enum)
+
+
+def _conv_ratio_num(sp, v, rev=False):
+    """bus/main/mtx 的压缩比：本地比值 ↔ WING 的**数值** 1.1..100。"""
+    if rev:
+        return param_coerce(sp.kind, v)
+    return round(_finite(v, 4.0), 2)
+
+
+def _conv_label_str(sp, v, rev=False):
+    """检波/包络：本地索引 ↔ WING 的字符串（PEAK/RMS、LIN/LOG）。"""
+    if rev:
+        if isinstance(v, str):
+            return param_from_wire(sp, v)
+        return _snap(sp, _finite(v, sp.default))
+    i = int(round(_finite(v, sp.default)))
+    if sp.labels and 0 <= i < len(sp.labels):
+        return sp.labels[i]
+    return str(i)
+
+
+def _conv_num_str(sp, v, rev=False):
+    """低切斜率：WING 是 S 类型，发 "12" 而不是 12。"""
+    if rev:
+        return param_coerce(sp.kind, v)
+    return str(int(round(_finite(v, sp.default))))
+
+
+def _conv_tap3(sp, v, rev=False):
+    """发送取点：X32 5 档 ↔ WING 3 档（PRE/POST/GRP）。"""
+    if rev:
+        return tap3_index(v) if isinstance(v, str) else int(round(_finite(v, 3)))
+    return tap3(v)
+
+
+_WIRE_CONV = {
+    "send_db": _conv_send_db,
+    "ratio_str": _conv_ratio_str,
+    "ratio_num": _conv_ratio_num,
+    "label_str": _conv_label_str,
+    "num_str": _conv_num_str,
+    "tap3": _conv_tap3,
+}
+
+
+def clamp_for(prof, kind, v):
+    """按控台的线上值域钳制。X32 下原样返回（没有 limits 表）。
+
+    ⚠️ 读 wire_limits，不是 param_limits —— 后者是「控台固件量程」
+    （app.py 的 --trim-range 会给它塞 ch_trim），语义不同别混用。
+    """
+    lim = getattr(prof, "wire_limits", None) if prof is not None else None
+    if not lim:
+        return v
+    rng = lim.get(kind)
+    if not rng:
+        return v
+    x = _finite(v, rng[0])
+    return min(max(x, rng[0]), rng[1])
 
 
 def param_wire(sp, v, prof=None):
     """本地存的值 → **线上**该发的值 (OSC 回包与桥接转发共用)。
 
-    四种换算:
+    五种换算:
       · prof.fader_db       → 组级推子发 dB (WING)，不是 0..1
       · prof.mute_inverted  → 组级静音线上 1=muted (WING)，本地 1=开
+      · prof.wire_conv      → 按 kind 查 WING 专属转换器（见 _WIRE_CONV）
       · enum_wire="index"   → 本地比值/自然值换算成枚举下标 (dyn/ratio 4.0 → 6)
       · enum_wire="label"   → 发**枚举名字符串** (发送取点 "POST")
       · 其余按 vtype 定型 (float 发浮点 / bool 发 0-1 / int 发整数)
@@ -3128,6 +3247,12 @@ def param_wire(sp, v, prof=None):
             return fader_to_db(v)
         if getattr(prof, "mute_inverted", False) and _is_group_mute(sp):
             return 0 if _truthy(v) else 1
+        conv = getattr(prof, "wire_conv", None)
+        if conv:
+            fn = _WIRE_CONV.get(conv.get(sp.kind))
+            if fn is not None:
+                return fn(sp, v)
+        v = clamp_for(prof, sp.kind, v)
     if sp.vtype == "bool":
         return 1 if _truthy(v) else 0
     if sp.enum is not None and sp.enum_wire == "index":
@@ -3164,6 +3289,11 @@ def param_from_wire(sp, v, prof=None):
             except (TypeError, ValueError):
                 return param_coerce(sp.kind, v)
             return 0 if _truthy(x) else 1
+        conv = getattr(prof, "wire_conv", None)
+        if conv:
+            fn = _WIRE_CONV.get(conv.get(sp.kind))
+            if fn is not None:
+                return fn(sp, v, rev=True)
     if isinstance(v, str) and sp.labels:
         s = v.strip().upper()
         for _i, _lab in enumerate(sp.labels):
@@ -3235,15 +3365,21 @@ def spec_section(sp):
     return "pre"
 
 
-def ui_specs(group):
+def ui_specs(group, prof=None):
     """一组的参数元数据 (给前端/App 生成控件, 不含任何协议地址)。
 
     字段名刻意短: 这个包每次打开通道详情都会拉一次, 6 组加起来约 8KB,
     用长键名 (label/lo/hi/step/…) 会白白多出 30%。
     sec = 页签 (见 spec_section), 前端只按它分组, 不再自己猜。
+
+    prof 传入时**按控台过滤**: addr() 返 None 的参数不下发。WING 没有
+    aux 的 EQ、没有 EQ 段类型、没有插入 —— 这些控件在它上面根本无处可写,
+    下发只会变成"拖了没反应"的死滑杆。过滤放在这里而不是各端各写一遍。
     """
     out = []
     for sp in GROUP_PARAM_SPECS.get(group, ()):
+        if prof is not None and prof.addr(sp.kind, 1) is None:
+            continue
         out.append({
             "f": sp.field, "l": sp.label, "t": sp.vtype,
             "lo": sp.lo, "hi": sp.hi, "st": sp.step, "dec": sp.dec,
@@ -6799,6 +6935,272 @@ def wing_par_sources():
 
 
 # ==================================================================
+# ==== x32sim/wingmap.py
+# ==================================================================
+"""WING 通道处理参数表 —— 只登记「两边语义真正等价」的参数。
+
+来源：《WING Remote Protocols》（Patrick-Gilles Maillot 维护，Behringer 授权），
+`### Channel Settings` / `### Aux Settings` / `### Bus Settings` /
+`### Mains Settings` / `### Matrix Settings` 五张地址表。
+解析脚本见 `_docs/parse_wing_doc.py`（去掉脚注引用后地址才是 `/dyn/thr`，
+带脚注序号会读成 `/dyn/thr6` —— 发出去真台回 NODE NOT FOUND）。
+
+⚠️ 这不是 X32 改个名。五处**结构**不同，逐条写在下面的注释里：
+
+  1. EQ 段数：X32 ch 4 段 / bus·mtx·main 6 段；WING ch 也是 4 段、bus·mtx·main 6 段
+     —— 段数正好对得上。但 WING 的 4 个中间段**没有类型**（固定 PEQ），
+     而 X32 每段都能选 {LCut,LShv,PEQ,VEQ,HShv,HCut}。所以 `*_eqN_type` 一律不登记。
+     WING 另有 low shelf（`/eq/lg|lf|lq`）与 high shelf（`/eq/hg|hf|hq`），
+     与 X32 的"首末段兼作低切/高切"不是一回事 —— 不硬凑，留给以后单独做。
+  2. Aux In：**WING 的 Aux 没有 EQ**（`/aux/N/eq/*` 整棵不存在）。X32 auxin 有 4 段。
+     所以 auxin 的 20 个参数在 WING 全部不登记 = 界面不显示 = 不会误发。
+  3. 低切：X32 在 `/ch/NN/preamp/hpf|hpon|hpslope`，WING 在 `/ch/N/flt/lc|lcf|lcs`
+     （还多一个高切 `hc|hcf|hcs`，X32 侧没有对应 kind，不做）。
+  4. 门：WING 的 `gate/mdl` 是 **35 种模型**（GATE/DUCK/E88/9000G/… 与动态共用一张表），
+     X32 的 `gate/mode` 是 int 0..1。值域完全不同 → 不登记。
+     侧链同理：WING 是 `gatesc/{type,f,q,src,tap}` 节点，X32 是 `gate/{keysrc,filter_*}`。
+  5. 动态：WING 的 `dyn/mdl` 也是 35 种模型，X32 是 COMP/EXP 两档 → 不登记。
+     `dyn/pos` 在 WING 是 `/ch/N/proc`（整个处理链顺序 "GEDI"/"GEID"/…），语义不同。
+     侧链 `dynsc/*` 同理不登记。
+     但**连续参数**（thr/knee/gain/att/hld/rel/mix/auto/det/env/ratio）语义一致，登记。
+
+数值差异（不是结构差异，靠钳制与换算解决）：
+  · WING `dyn/thr` 是 -60..0，X32 是 -80..0          → 钳到 -60
+  · WING `dyn/hld` 是 1..200，X32 是 0.02..2000      → 钳到 1..200
+  · WING `dyn/rel` 是 4..4000，X32 是 5..4000        → 钳到 4
+  · WING `dyn/gain` 是 -6..12，X32 是 0..24          → 钳到 -6..12
+  · WING `eq/N/q` 是 0.44..10，X32 是 0.3..10        → 钳到 0.44
+  · WING `gate/hld` 是 0..200，X32 是 0.02..2000     → 钳到 0..200
+  · WING `gate/rel` 是 4..4000，X32 是 5..4000       → 钳到 4
+  · WING `flt/lcs` 是 {6,12,18,24}，X32 只有 {12,18,24} → 原样（X32 值域是子集）
+
+三种**线上形态**与本地不同，必须转换（不做就是"能写但写坏"）：
+  · 发送电平：本地 0..1（X32 的 161 档 level），WING 线上是 **dB**（-144=静音，上限 +10）
+  · 压缩比：本地存比值，WING **ch** 要发字符串枚举（"4.0"），
+    bus/main/mtx 要发数值（1.1..100）。发错类型真台静默拒绝。
+  · 发送取点：X32 5 档 {<-EQ,EQ->,PRE,POST,GRP}，WING 3 档 {PRE,POST,GRP}。
+    X32 的前两档在 WING 上不存在 → 都落到 PRE（最近语义，且是 EQ 之前）。
+  · 检波/包络：X32 逻辑上发索引，WING 要发 "PEAK"/"RMS"、"LIN"/"LOG" 字符串。
+  · 低切斜率：WING 是 S 类型，必须发字符串 "12" 而不是整数 12。
+"""
+
+# 组名映射：内部组名 → WING 地址段。main 在 WING 是 /main/1（有路号，只有 1 路）。
+WING_GROUP = {"ch": "ch", "auxin": "aux", "bus": "bus",
+              "main": "main", "mtx": "mtx", "dca": "dca"}
+
+# WING 的路号从 1 起（不补零）；main 固定 1
+WING_IDX_BASE = {"main": 1}
+
+# EQ 段数：WING 与 X32 相同（aux 例外 —— WING 的 aux 没有 EQ）
+WING_EQ_BANDS = {"ch": 4, "bus": 6, "mtx": 6, "main": 6}
+
+
+def _addr_map():
+    """kind → WING 地址模板。模板里的 %d 是路号，发送是两个 %d（源、目标）。
+
+    只登记**地址与语义都对得上**的项；没登记的 kind 在 WING 上 addr() 返 None。
+    """
+    m = {}
+
+    # ---- EQ（on + 每段的 f/g/q；type 不登记）----
+    for g, bands in WING_EQ_BANDS.items():
+        wg = WING_GROUP[g]
+        m["%s_eq_on" % g] = "/%s/%%d/eq/on" % wg
+        for b in range(1, bands + 1):
+            m["%s_eq%d_f" % (g, b)] = "/%s/%%d/eq/%df" % (wg, b)
+            m["%s_eq%d_g" % (g, b)] = "/%s/%%d/eq/%dg" % (wg, b)
+            m["%s_eq%d_q" % (g, b)] = "/%s/%%d/eq/%dq" % (wg, b)
+
+    # ---- 输入段（X32 的 preamp/trim|invert → WING 的 in/set/trim|inv）----
+    # 值域两边都是 -18..18 dB / 0..1，直接用。
+    # ⚠️ WING 的 in/set/$g 是**话放模拟增益**（-2.5..45，随输入源变化），
+    #    与 X32 的 /headamp/NNN/gain 不是一条链 —— 不映射，避免"动了增益台面没反应"。
+    m["ch_trim"] = "/ch/%d/in/set/trim"
+    m["ch_invert"] = "/ch/%d/in/set/inv"
+    m["auxin_trim"] = "/aux/%d/in/set/trim"
+    m["auxin_invert"] = "/aux/%d/in/set/inv"
+
+    # ---- 低切（X32 的 preamp/hpf → WING 的 flt/lc）----
+    m["ch_hpf_on"] = "/ch/%d/flt/lc"
+    m["ch_hpf_f"] = "/ch/%d/flt/lcf"
+    m["ch_hpf_slope"] = "/ch/%d/flt/lcs"
+
+    # ---- 噪声门（只有 ch；WING 的 aux 有门但**没有 on/mdl**，开关无从控制）----
+    for f, tail in (("on", "on"), ("thr", "thr"), ("range", "range"),
+                    ("attack", "att"), ("hold", "hld"), ("release", "rel")):
+        m["ch_gate_%s" % f] = "/ch/%%d/gate/%s" % tail
+
+    # ---- 动态（五组的连续参数；mode/pos/keysrc/filter_* 不登记）----
+    # ⚠️ 只登记 X32 侧**确实存在对应 kind** 的项。kind 是全局语义管道，
+    #    没有 ParamSpec 就没有界面、没有写入入口 —— 登记了只是幽灵条目。
+    #    · X32 的 auxin 没有动态参数（真台的 /auxin/NN/dyn/* 也不存在）
+    #    · X32 的 main 没有 mix/auto（params._DYN_SKIP），真台有但内部表达不了
+    _dyn_skip = {"auxin": {"on", "thr", "knee", "mgain", "attack", "hold",
+                           "release", "mix", "auto", "det", "env", "ratio"},
+                 "main": {"mix", "auto"}}
+    for g in ("ch", "auxin", "bus", "mtx", "main"):
+        wg = WING_GROUP[g]
+        for f, tail in (("on", "on"), ("thr", "thr"), ("knee", "knee"),
+                        ("mgain", "gain"), ("attack", "att"), ("hold", "hld"),
+                        ("release", "rel"), ("mix", "mix"), ("auto", "auto"),
+                        ("det", "det"), ("env", "env"), ("ratio", "ratio")):
+            if f in _dyn_skip.get(g, ()):
+                continue
+            m["%s_dyn_%s" % (g, f)] = "/%s/%%d/dyn/%s" % (wg, tail)
+
+    # ---- 发送（X32 的 /mix/NN/level → WING 的 /send/K/lvl）----
+    # ch/auxin 送 Bus 1-16；bus/main 只能送 Matrix（WING 写作 /send/MX<x>）；
+    # mtx 在 WING 里没有发送子树，X32 的 mtx 也没有 —— 一致。
+    # ⚠️ 取点（mode）只有 ch/auxin 登记：X32 的 bus/main 发送本来就没有 tap 参数
+    #    （params._send_specs 里 has_tap=False），登记了就是**幽灵 kind** ——
+    #    PARAM_SPECS 里查不到、界面不显示、写入无门，但会污染"地址不撞号"检查。
+    for f, tail in (("on", "on"), ("level", "lvl")):
+        m["send_%s" % f] = "/ch/%%d/send/%%d/%s" % tail
+        m["auxin_send_%s" % f] = "/aux/%%d/send/%%d/%s" % tail
+        m["bus_send_%s" % f] = "/bus/%%d/send/MX%%d/%s" % tail
+        m["main_send_%s" % f] = "/main/%%d/send/MX%%d/%s" % tail
+    m["send_tap"] = "/ch/%d/send/%d/mode"
+    m["auxin_send_tap"] = "/aux/%d/send/%d/mode"
+
+    return m
+
+
+WING_PARAM_ADDR = _addr_map()
+
+# 地址反查：模板 → kind（回读用）。发送的两个 %d 与普通的一个 %d 分开处理。
+WING_ADDR_REV = {}
+
+
+def _build_rev():
+    """模板 → (kind, 路号是否为 1) —— 供 parse_addr 反查。
+
+    只处理 %d 个位数的模板（WING 不补零）。发送模板的两个 %d 在 parse_addr
+    里单独拆，不进这张表。
+    """
+    for kind, tpl in WING_PARAM_ADDR.items():
+        if tpl.count("%") != 1:
+            continue
+        WING_ADDR_REV[tpl] = kind
+
+
+_build_rev()
+
+# ---- 值域钳制 -----------------------------------------------------------
+# 只列**与 X32 不同**的项。写进真台前必须钳住：超范围的 OSC 参数真台要么
+# 静默截断（界面显示 A、台面是 B），要么直接回 NODE NOT FOUND。
+# ⚠️ 与 _addr_map 一样，只给**登记过的** kind 加限制：auxin 没有动态参数表，
+#    给它加限制只会留下四个指向不存在参数的键。
+WING_PARAM_LIMITS = {}
+for _g in ("ch", "bus", "mtx", "main"):
+    WING_PARAM_LIMITS["%s_dyn_thr" % _g] = (-60.0, 0.0)
+    WING_PARAM_LIMITS["%s_dyn_hold" % _g] = (1.0, 200.0)
+    WING_PARAM_LIMITS["%s_dyn_release" % _g] = (4.0, 4000.0)
+    WING_PARAM_LIMITS["%s_dyn_mgain" % _g] = (-6.0, 12.0)
+for _g, _b in WING_EQ_BANDS.items():
+    for _i in range(1, _b + 1):
+        WING_PARAM_LIMITS["%s_eq%d_q" % (_g, _i)] = (0.44, 10.0)
+WING_PARAM_LIMITS["ch_gate_hold"] = (0.0, 200.0)
+WING_PARAM_LIMITS["ch_gate_release"] = (4.0, 4000.0)
+
+
+# ---- 档位吸附 -----------------------------------------------------------
+# 本地（X32）与 WING 的档位表不同时，本地值可能"在 WING 上不存在"。
+# ch 压缩比：本地 12 档 {1.1,1.3,1.5,2,2.5,3,4,5,**7**,10,20,100}，
+# WING 17 档 {1.1,1.2,1.3,1.5,1.7,2,2.5,3,3.5,4,5,**6**,8,10,20,50,100}。
+# 交集 11 档 —— 本地的 7.0 没有对应，最近的 6.0/8.0 又不在本地表里。
+# 写入前吸附到交集，避免"界面 7.0、台面 5.0"。
+# ⚠️ 这张表必须等于 params 里 ch_dyn_ratio enum 与 WING_RATIO 的交集，
+#    回归 test_wing_profile 会校验（改了 enum 忘改这里就红）。
+WING_VALUE_SNAP = {
+    "ch_dyn_ratio": (1.1, 1.3, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 10.0, 20.0, 100.0),
+}
+
+
+# ---- 线上值转换 ---------------------------------------------------------
+# 转换器名字 → 实现在 params.py（那边有 level_db / fader_to_db 等曲线函数）。
+# 这里只给 kind → 转换器名，不重复实现任何数值逻辑。
+
+WING_WIRE_CONV = {}
+
+# 发送电平：本地 0..1 → dB。WING 的 -∞ 是 **-144**，不是 X32 的 -90。
+for _k in ("send_level", "auxin_send_level", "bus_send_level", "main_send_level"):
+    WING_WIRE_CONV[_k] = "send_db"
+
+# 压缩比：ch 发字符串枚举，其余发数值
+WING_WIRE_CONV["ch_dyn_ratio"] = "ratio_str"
+for _g in ("bus", "mtx", "main"):
+    WING_WIRE_CONV["%s_dyn_ratio" % _g] = "ratio_num"
+
+# 检波 / 包络：WING 收字符串（aux 没有这两个参数，见 _addr_map 的跳过表）
+for _g in ("ch", "bus", "mtx", "main"):
+    WING_WIRE_CONV["%s_dyn_det" % _g] = "label_str"
+    WING_WIRE_CONV["%s_dyn_env" % _g] = "label_str"
+
+# 低切斜率：WING 是 S 类型，必须发字符串 "12"
+WING_WIRE_CONV["ch_hpf_slope"] = "num_str"
+
+# 发送取点：5 档 → 3 档（<-EQ / EQ-> 落到 PRE）
+WING_WIRE_CONV["send_tap"] = "tap3"
+WING_WIRE_CONV["auxin_send_tap"] = "tap3"
+
+# ch 压缩比：本地比值 → WING 的字符串枚举。7.0 在 WING 上没有（它的表是
+# 1.1,1.2,1.3,1.5,1.7,2,2.5,3,3.5,4,5,6,8,10,20,50,100）→ 吸附到最近的 6.0。
+WING_RATIO = (1.1, 1.2, 1.3, 1.5, 1.7, 2.0, 2.5, 3.0, 3.5, 4.0,
+              5.0, 6.0, 8.0, 10.0, 20.0, 50.0, 100.0)
+
+
+def _fmt_ratio(v):
+    """WING 的 ratio 枚举写法。协议 Text 列原文：
+    `1.1, 1.2, 1.3, 1.5, 1.7, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0, 6.0, 8.0, 10, 20, 50, 100`
+    —— 10 以下**保留一位小数**（"2.0" 而不是 "2"），10 及以上是整数。
+    写成 "2" 真台不认（枚举是字符串精确匹配），表现为"设了压缩比、台面没动"。
+    """
+    return ("%.1f" % v) if v < 10 else "%d" % int(round(v))
+
+
+def nearest_ratio(v, allowed=None):
+    """本地比值 → WING enumerator 里最接近的比值（字符串形式）。
+
+    本地（X32）只有 12 档 {1.1,1.3,1.5,2,2.5,3,4,5,7,10,20,100}，WING 有 17 档。
+    必须在**两边的交集**里选，否则会漂移：本地 7.0 → WING 6.0 → 回读时
+    X32 的表里没有 6.0 → 吸附到 5.0，于是"拖到 7 松手变 5"。
+
+    `allowed` 传本地枚举（ParamSpec.enum），None 时退化为只看 WING 表。
+    """
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        v = 4.0
+    pool = list(WING_RATIO)
+    if allowed:
+        common = [x for x in pool if any(abs(x - float(a)) < 1e-6 for a in allowed)]
+        if common:
+            pool = common
+    if not any(abs(v - e) < 1e-6 for e in pool):
+        v = min(pool, key=lambda e: (abs(e - v), e))
+    return _fmt_ratio(v)
+
+
+# 发送取点：X32 {<-EQ,EQ->,PRE,POST,GRP} → WING {PRE,POST,GRP}
+_TAP3 = ("PRE", "PRE", "PRE", "POST", "GRP")
+
+
+def tap3(idx):
+    """X32 取点索引 → WING 三档名。越界落到 POST（X32 的默认）。"""
+    try:
+        i = int(round(float(idx)))
+    except (TypeError, ValueError):
+        i = 3
+    return _TAP3[i] if 0 <= i < len(_TAP3) else "POST"
+
+
+def tap3_index(label):
+    """WING 的三档名 → X32 的索引（PRE→2, POST→3, GRP→4）。"""
+    s = str(label or "").strip().upper()
+    return {"PRE": 2, "POST": 3, "GRP": 4}.get(s, 3)
+
+
+# ==================================================================
 # ==== x32sim/profiles.py
 # ==================================================================
 # -*- coding: utf-8 -*-
@@ -6877,6 +7279,28 @@ class ConsoleProfile:
 
     def supports(self, kind):
         return self.addr(kind, 0) is not None
+
+    def scene_msgs(self, n):
+        """场景召回要发的报文 —— [(地址, 参数列表), ...]。
+
+        X32 是**一条**：`/scene/N/load`（场景号不补零，1–99）。
+        WING 是**两段式**（覆盖见 WingProfile）：先写 `$actionidx` 选号，
+        再写 `$action = "GO"` 执行 —— 少发第二条的表现是"台面高亮了场景
+        但不执行"，属于最难查的一类"看起来成功"。
+        """
+        return [("/scene/%d/load" % int(n), [])]
+
+    def fx_param_caps(self):
+        """各效果槽**当前可写**的参数号 —— {槽号: [par 号, ...]}。
+
+        返回 None = 本控台所有参数都可写（X32：`/fx/N/par/M` 对每个算法都存在）。
+        WING 是命名参数（`/fx/1/time`），只有标定过名字的才写得进去，所以必须
+        逐槽算：换了算法，可写集合就变了。
+
+        用途：App 端据此灰显滑杆。网页是直接读 `/api/state.fx.slots[].params[].w`，
+        App 用 OSC 直连、拿不到这个字段，只能单独拉一次这张表。
+        """
+        return None
 
     def pending(self):
         """未标定时列出还需要提供地址映射的 kind（供 UI 与规范 §12 使用）。"""
@@ -6963,9 +7387,11 @@ def _all_kinds():
     base += [g + "_fader" for g in ("auxin", "usb", "fxret", "mtx")]
     base += [g + "_on" for g in ("auxin", "usb", "fxret", "mtx")]
     base += ["ch_dca", "fx_type", "fx_on", "fx_mix", "fx_name", "fx_par_NN"]
-    # 通道参数 (增益/反相/延时/低切/插入/门/动态/EQ): 从登记表推导, 新增即跟上
-    base += [sp.kind for sp in CH_PARAM_SPECS]
-    # 发送 (通道→Bus): 二维地址, 同样从登记表推导
+    # 通道参数 (增益/反相/延时/低切/插入/门/动态/EQ): 从登记表推导, 新增即跟上。
+    # 必须遍历**所有组**而不只是 ch —— 只列 ch 的话 pending() 会漏报
+    # bus/mtx/main 的参数，看起来"WING 全都支持"，其实一大半返 None。
+    for _g in ("ch", "auxin", "bus", "mtx", "main"):
+        base += [sp.kind for sp in GROUP_PARAM_SPECS.get(_g, ())]
     base += [sp.kind for sp in SEND_PARAM_SPECS]
     return base
 
@@ -6995,6 +7421,26 @@ _WING_GROUP_REV = {v: k for k, v in _WING_GROUP.items()}
 _WING_TAIL_REV = {v: k for k, v in _WING_TAIL.items()}
 
 
+def _param_reverse_table():
+    """通道处理参数的地址模板 → (kind, 占位符个数)。
+
+    模板里的 `%d` 换成正则捕获组。注意 `re.escape` 不保证原样保留 `%`，
+    所以用 split/join 拼正则，而不是 escape 完再 replace。
+    """
+    import re
+    out = []
+    for kind, tpl in WING_PARAM_ADDR.items():
+        parts = tpl.split("%d")
+        pat = r"(\d+)".join(re.escape(p) for p in parts)
+        out.append((re.compile("^" + pat + "$"), kind, len(parts) - 1))
+    # 占位符多的先匹配（发送是两个 %d，避免被单 %d 的同形模板抢走）
+    out.sort(key=lambda t: -t[2])
+    return tuple(out)
+
+
+_WING_PARAM_REV = _param_reverse_table()
+
+
 def _slot_algo(slot):
     """槽位当前算法（延迟导入 STATE：profiles→state 会成环，只在调用时取）。
     取不到（未初始化/越界）一律当空槽 —— 空槽没有参数可写。"""
@@ -7010,13 +7456,23 @@ class WingProfile(ConsoleProfile):
     已标定（有文档/实测证据，可直接写）：推子(dB) / 静音(反向) / 声像 /
     算法选择(`/fx/N/mdl`) / 干湿比(`/fx/N/fxmix`) /
     **FX 命名参数**(`/fx/1/time`、`/fx/2/pdel|dcy`，见 wingfx.py 的证据分级) /
+    **通道处理参数**(EQ 中间段 f/g/q、低切、门、动态连续参数、发送，见 wingmap.py) /
+    **场景召回**(两段式 `/$ctl/lib/$actionidx` + `$action="GO"`，见 scene_msgs) /
     订阅回读(`/%<port>/*S`) / 节点批量写(`/ ,s "/ch.1.fdr=0,..."`，默认关)。
 
-    仍未标定的部分**显式缺席**而不是猜地址：
-      · 通道处理参数 (EQ/门/动态/发送) —— WING 的树结构与 X32 完全不同；
-      · 场景召回 —— `$stat`/`show` 子树尚未核实；
-      · FX 返回组 —— WING 没有 fxrtn 组（X32 的 8 条返回在 WING 里是普通通道）。
-    这些在 UI 上灰显（caps 不含对应能力 / `w=false` 灰掉单个滑杆），
+    仍未标定的部分**显式缺席**而不是猜地址（`addr()` 返 None，界面不出现该控件）：
+      · EQ 段类型 —— WING 的中间 4 段固定 PEQ，没有类型可选；
+      · 门/动态的**模型**（`gate/mdl`、`dyn/mdl` 各 35 种）与侧链节点
+        （`gatesc/*`、`dynsc/*`、`dynxo/*`）—— X32 是固定字段，两边不是改名关系；
+      · 插入 —— WING 是 `preins`/`postins` 插槽节点，X32 是 `insert/sel|pos`；
+      · 延时 —— `in/set/dly` 的单位取决于 `in/set/dlymode`（米/英尺/毫秒/采样），
+        没有"设为 ms"的确认证据，宁可不动；
+      · WING 的 aux 动态 / main 的 mix·auto —— 真台有，但 X32 侧没有对应 kind，
+        内部语义管道表达不了（不是地址问题）；
+      · **FX 返回组 —— 结构上不存在**：WING 的 FX 是插入式（`/fx/N` 挂到通道上），
+        没有 X32 那种独立的 8 条返回通道，所以 `counts["fxret"]=0`、fxret 参数
+        全部无地址。这不是"没标定"，是"没有这个东西"。
+    这些在 UI 上灰显（`w=false` 灰掉单个滑杆 / 参数规格不下发），
     写入时记一条明确日志后跳过。
     """
 
@@ -7026,8 +7482,8 @@ class WingProfile(ConsoleProfile):
     ready = True
     verified = False
     note = ("地址表来自《WING Remote Protocols V3.1》：编号不补零、推子为 dB、"
-            "静音 1=静音（与 X32 相反）、不支持 Bundle。FX 命名参数仅标定有证据的部分，"
-            "其余滑杆在前端灰显；通道处理参数待标定")
+            "静音 1=静音（与 X32 相反）、不支持 Bundle。FX 命名参数与通道处理参数"
+            "仅标定有证据的部分，其余在前端灰显或不下发")
     # counts = **本机能实际控制**的规模（受本地台面建模限制），不是协议规模。
     # 协议规模见 proto_counts —— 写 counts 用 40 会造成"卡片能选 ch40、实际无声"。
     counts = {"ch": 32, "bus": 16, "dca": 8, "auxin": 6, "usb": 0,
@@ -7042,6 +7498,13 @@ class WingProfile(ConsoleProfile):
     fx_mix_scale = 100       # 干湿比 0..100，不是 0..1
     index_fmt = "%d"         # 地址编号不补零
     fx_slots = 16
+    # 通道处理参数的线上差异（见 wingmap.py 的说明）
+    # ⚠️ 叫 wire_limits 而不是 param_limits —— 后者已被 app.py 用作
+    #    「控台固件量程」（trim ±12/±18，会喂给 set_param_limits）；
+    #    这张表是**线上值域**，两者语义不同，混用会让固件量程被参数表覆盖。
+    wire_limits = WING_PARAM_LIMITS       # 值域与 X32 不同时钳制
+    wire_conv = WING_WIRE_CONV            # 线上形态不同时转换（dB / 字符串枚举）
+    value_snap = WING_VALUE_SNAP          # 档位表不同时吸附（ch 压缩比 7.0 → 5.0）
     # WING 的 OSC 包内容**永远是单条 Message**（官方文档明说 Bundles are not
     # supported）——整包 Bundle 发过去会被丢弃，症状恰好是"界面全动、台子不动"。
     osc_bundle = False
@@ -7064,6 +7527,20 @@ class WingProfile(ConsoleProfile):
             if not name:
                 return None
             return "/fx/%d/%s" % (idx, name)
+        # 通道处理参数（EQ / 门 / 动态 / 发送 / 低切）：整表在 wingmap.py。
+        # 表里没有的 kind = 两边语义不等价 = 返 None，界面不显示、写入记日志跳过。
+        tpl = WING_PARAM_ADDR.get(kind)
+        if tpl is not None:
+            sp = PARAM_SPECS.get(kind)
+            if tpl.count("%") >= 2:
+                # 发送是二维参数：idx 是 send_pack 打包后的 (源, 目标)。
+                # send_unpack 返回的源号已经是 1-based（与地址编号一致），
+                # 不能再加 _WING_IDX_BASE —— main 会因此变成 /main/2。
+                _sg, src, tgt = send_unpack(idx)
+                return tpl % (int(src), int(tgt))
+            g = sp.group if sp is not None else kind.split("_")[0]
+            n = int(idx) + _WING_IDX_BASE.get(g, 0)
+            return tpl % n if n >= 1 else None
         grp, _, field = kind.rpartition("_")
         tail = _WING_TAIL.get(field)
         g = _WING_GROUP.get(grp)
@@ -7078,29 +7555,74 @@ class WingProfile(ConsoleProfile):
         """内部算法 key → WING 的 mdl 枚举；该算法 WING 没有则 None（拒发）。"""
         return wing_mdl(str(algo or "").upper())
 
+    def scene_msgs(self, n):
+        """WING 场景召回：**两段式**，没有 `/scene/N/load` 这种一步到位的地址。
+
+        文档《WING Remote Protocols》§ Control Settings 原文：
+          `/$ctl/lib/$actionidx`  I 0..16384  「用户选择的场景号」
+          `/$ctl/lib/$action`     S {IDLE, GOPREV, GONEXT, GO, PREV, NEXT, GOTAG}
+        召回 = 先写号，再写 GO。两条缺一不可：
+          · 只写号 → 台面列表里高亮了，但不执行（"看起来成功"）；
+          · 只写 GO → 执行的是上一次选中的场景（更糟：切错场）。
+
+        `$actionidx` 的 0 是特殊值（文档脚注：想用 NEXT/PREV 就要先设 0），
+        场景本身从 1 编号，所以场景号原样传，不做 ±1。
+        """
+        n = int(n)
+        return [("/$ctl/lib/$actionidx", [n]),
+                ("/$ctl/lib/$action", ["GO"])]
+
+    def fx_param_caps(self):
+        """WING 逐槽算可写参数号 —— 换了算法，可写集合就变了。
+
+        空槽返回空列表（没有算法就没有参数名）。探测结果（wing_params.json）
+        会通过 wingfx 的运行时覆盖自动生效，不需要改这里。
+        """
+        out = {}
+        for s in range(1, int(self.fx_slots or 0) + 1):
+            algo = _slot_algo(s)
+            d = X32_FX_ALGOS.get(algo or "") or {}
+            cnt = len(d.get("params") or ())
+            out[s] = [p for p in range(1, cnt + 1) if wing_par_name(algo, p)]
+        return out
+
     def parse_addr(self, addr):
         s = str(addr or "").strip("/")
         parts = s.split("/")
-        if len(parts) != 3:
-            return None
-        head, num, tail = parts
-        try:
-            n = int(num)
-        except ValueError:
-            return None
-        if head == "fx":
-            if n < 1:
-                return None
-            if tail == "mdl":
-                return ("fx_type", n)
-            if tail == "fxmix":
-                return ("fx_mix", n)
-            pnum = wing_par_num(_slot_algo(n), tail)
-            return (fx_par_kind(pnum), n) if pnum else None
-        g = _WING_GROUP_REV.get(head)
-        f = _WING_TAIL_REV.get(tail)
-        if g and f:
-            return (g + "_" + f, n - _WING_IDX_BASE.get(g, 0))
+        if len(parts) == 3:
+            head, num, tail = parts
+            try:
+                n = int(num)
+            except ValueError:
+                n = None
+            if n is not None:
+                if head == "fx":
+                    if n < 1:
+                        return None
+                    if tail == "mdl":
+                        return ("fx_type", n)
+                    if tail == "fxmix":
+                        return ("fx_mix", n)
+                    pnum = wing_par_num(_slot_algo(n), tail)
+                    return (fx_par_kind(pnum), n) if pnum else None
+                g = _WING_GROUP_REV.get(head)
+                f = _WING_TAIL_REV.get(tail)
+                if g and f:
+                    return (g + "_" + f, n - _WING_IDX_BASE.get(g, 0))
+        # 通道处理参数（4~5 段）：`/ch/1/eq/1f`、`/ch/1/send/1/lvl`。
+        # 不认得就返回 None（桥接会记一行"未识别"），绝不猜成别的参数 ——
+        # 猜错的症状是"动了台面 A 旋钮，界面上 B 跟着跳"，比不回读更糟。
+        for rx, kind, nph in _WING_PARAM_REV:
+            m = rx.match(addr)
+            if not m:
+                continue
+            nums = [int(x) for x in m.groups()]
+            sp = PARAM_SPECS.get(kind)
+            if sp is not None and sp.group == "send" and nph >= 2:
+                sg = "ch" if kind.startswith("send_") else kind.split("_")[0]
+                return (kind, send_pack(nums[0], nums[1], sg))
+            g = sp.group if sp is not None else kind.split("_")[0]
+            return (kind, nums[0] - _WING_IDX_BASE.get(g, 0))
         return None
 
     def pending(self):
@@ -7490,7 +8012,9 @@ def set_value(kind, idx, value, source="manual"):
             # 表驱动: 钳制 + 档位量化 + 落库 (params.param_coerce)。
             # 推子/静音/12 个通道参数共用这一条, 与旧的分支写法逐字等价
             # (fader=_clamp01 / on=_truthy, 通道参数多一层量程与档位)。
-            _row_of(sp.group, idx)[sp.field] = param_coerce(kind, value)
+            # 传 profile 是为了**按控台吸附档位**: WING 的 ch 压缩比没有 7.0
+            # 这一档, 提前吸附, 界面就不会先显示 7.0 再自己跳成 5.0。
+            _row_of(sp.group, idx)[sp.field] = param_coerce(kind, value, profile())
         elif kind == "ch_dca":   # 位掩码: 通道归属哪些 DCA (bit0=DCA1 ...)
             mask = int(value) & 0xFF
             for d in range(1, 9):
@@ -8151,6 +8675,38 @@ def _send_msgs(sock, msgs, addr):
         return
     for m in msgs:
         sock.sendto(encode_message(m), addr)
+
+
+def bridge_scene(n):
+    """把场景召回转发给真台。未桥接返回 False（调用方只改本地状态）。
+
+    ⚠️ 这条路径以前**不存在**：`actions` 里切场景只写 `STATE.scene`，注释说
+    "真台发 /scene/N/load" 但从来没有代码真的发过 —— 症状是桥接模式下点切场景，
+    网页的场景号变了、台面纹丝不动，而日志里一个字都没有。现在补上，
+    并且地址由 profile 给（WING 是两段式，见 ConsoleProfile.scene_msgs）。
+
+    返回 True = 已发出；False = 未桥接/发送失败（调用方据此决定是否提示）。
+    """
+    addr = BRIDGE["addr"]
+    sock = BRIDGE_SOCK[0]
+    if addr is None or sock is None:
+        return False
+    try:
+        msgs = [OscMsg(a, args) for a, args in profile().scene_msgs(n)]
+    except (TypeError, ValueError) as e:
+        log("BRIDGE 场景号非法: %r (%r)" % (n, e))
+        return False
+    try:
+        # ⚠️ 场景召回**逐条发，不打包 Bundle**：它是 trigger 不是参数批写，
+        #    而 WING 里 `$actionidx` 与 `$action` 还必须**严格按序**到达
+        #    （先选号再 GO）。Bundle 在 X32 上或许也能工作，但顺序语义更脆，
+        #    且这条路径一次只发 1~2 条，省不下什么。
+        for m in msgs:
+            sock.sendto(encode_message(m), addr)
+    except OSError as e:
+        log("BRIDGE 场景召回转发失败: %r" % e)
+        return False
+    return True
 
 
 def _bridge_fwd_flush_once():
@@ -9000,7 +9556,10 @@ def handle(msg: OscMsg, addr, sock):
             return
         with STATE.lock:
             STATE.scene = n
-        log("    场景切换 -> %d" % n)
+        # 桥接时同步给真台 —— 客户端直连模拟器发 /scene/N/load 也要落到台面上,
+        # 否则"网页切了、真台没切"，且这条路径连日志都看不出问题。
+        _fwd = bridge_scene(n)
+        log("    场景切换 -> %d%s" % (n, "（已转发真台）" if _fwd else ""))
         return
 
     if a == "/reboot" or a == "/quit":
@@ -9976,9 +10535,15 @@ def _exec_instant(act):
                 % (int(act.get("scene", 1)), snap.get("name", ""),
                    float(act.get("duration", 1.0) or 0.0)))
             return
+        _n = int(act.get("scene", 1))
         with STATE.lock:
-            STATE.scene = int(act.get("scene", 1))
-        log("SHOW 切换到场景 %d（全局 recall）" % int(act.get("scene", 1)))
+            STATE.scene = _n
+        # 真台召回：地址由 profile 给（X32 一条 /scene/N/load；WING 两段式）。
+        # 以前这里只改本地状态，"真台发 /scene/N/load" 只写在注释里 ——
+        # 桥接模式下点切场景，网页变了、台面不动、日志干净。
+        _fwd = bridge_scene(_n)
+        log("SHOW 切换到场景 %d（全局 recall）%s"
+            % (_n, "，已发往真台" if _fwd else "，未桥接（仅本地）"))
     elif k == "preset":
         snap = find_snapshot(act.get("presetId"))
         if not snap:
@@ -11730,10 +12295,24 @@ class WebHandler(BaseHTTPRequestHandler):
             # 各组参数的**元数据** (名称/量程/单位/枚举/默认值)。
             # 前端不再维护一份手抄的控件表: 抄一份就必然有一天与后端漂移,
             # 而漂移的症状是"滑块能拖到后端不认的区间"——只能靠回归抓。
+            # 传 profile: WING 下不下发它没有地址的参数(aux 的 EQ / EQ 段类型 /
+            # 插入 / 门模型), 否则界面上会多出一排永远拖不动的滑杆。
             self._send(200, "application/json; charset=utf-8",
-                       json.dumps({"specs": {g: ui_specs(g)
+                       json.dumps({"specs": {g: ui_specs(g, profile())
                                              for g in GROUP_PARAM_SPECS}},
                                   allow_nan=False).encode("utf-8"))
+        elif path == "/api/fxcaps":
+            # 效果参数的**可写性表** —— 给 App 用。
+            # 网页走 /api/state.fx.slots[].params[].w（每参数一个布尔），
+            # 但 App 是 OSC 直连，拿不到 HTTP 状态里的字段；它只在进 FX 页时
+            # 拉这一个轻量接口就够。返回 null 表示"全部可写"（X32）。
+            _p = profile()
+            caps = _p.fx_param_caps()
+            body = {"console": _p.id,
+                    "all": caps is None,
+                    "slots": caps or {}}
+            self._send(200, "application/json; charset=utf-8",
+                       json.dumps(body, allow_nan=False).encode("utf-8"))
         elif path == "/api/meters":
             # 电平单独取: 它每 tick 都变, 不能进 /api/state 的内容指纹,
             # 否则"没变更"永远命中不了。旧 /api/state 仍带 meters (App 兼容)。

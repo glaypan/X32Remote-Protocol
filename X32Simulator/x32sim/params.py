@@ -823,20 +823,141 @@ def _snap(sp, v):
     return v
 
 
-def param_coerce(kind, value):
+def snap_for(prof, kind, v):
+    """按控台吸附到**该控台物理存在的档位**。X32 下原样返回。
+
+    只对「两边档位表不同」的参数有意义。目前只有 ch 的压缩比：本地 12 档、
+    WING 17 档，交集 11 档 —— 本地 7.0 在 WING 上不存在，写下去会被台面改成
+    5.0 或 6.0。这里提前吸附，是为了**界面不要先显示 7.0 再跳**。
+    """
+    tab = getattr(prof, "value_snap", None) if prof is not None else None
+    if not tab:
+        return v
+    pool = tab.get(kind)
+    if not pool:
+        return v
+    x = _finite(v, pool[0])
+    if any(abs(x - e) < 1e-9 for e in pool):
+        return x
+    return min(pool, key=lambda e: (abs(e - x), e))
+
+
+def param_coerce(kind, value, prof=None):
     """外部输入 → 该参数的合法值。未知 kind 抛 KeyError（调用方按"不支持"处理）。"""
     sp = PARAM_SPECS[kind]
     if sp.vtype == "bool":
         return _truthy(value)
-    return _snap(sp, _finite(value, sp.default))
+    v = _snap(sp, _finite(value, sp.default))
+    return snap_for(prof, kind, v) if prof is not None else v
+
+
+# ---- 线上值转换器（WING 专用，按 kind 查表调用）--------------------------
+# 只在这里实现一次。wingmap.py 提供 kind → 转换器名，不重复数值逻辑。
+# 每个转换器必须成对：wire 侧发什么，from_wire 侧就要能接回来，否则
+# "写出去 A、读回来 B" → 界面自己跳。
+
+WING_SILENT_DB = -144.0
+
+
+def _conv_send_db(sp, v, rev=False):
+    """发送电平：本地 0..1（X32 的 161 档 level）↔ WING 的 dB。
+
+    WING 的 -∞ 是 **-144**（协议原文 -144..10），X32 的 level_db(0) 给 -90。
+    90 与 144 混用会让"静音"变成"极小但可闻"，所以这里单独收口。
+    """
+    if rev:
+        try:
+            db = float(v)
+        except (TypeError, ValueError):
+            return param_coerce(sp.kind, v)
+        if db <= -90.0:
+            return 0.0
+        return round(level_from_db(db), 4)
+    f = _finite(v, 0.0)
+    if f <= 0.0:
+        return WING_SILENT_DB
+    return round(level_db(f), 2)
+
+
+def _conv_ratio_str(sp, v, rev=False):
+    """ch 的压缩比：本地比值 ↔ WING 的**字符串**枚举（"4.0"）。
+
+    `sp.enum` 传进去是必须的：两边的档位表不同（本地 12 档、WING 17 档），
+    只在 WING 表里取最近值会漂移（7.0 → 6.0 → 回读被 X32 表吸附成 5.0）。
+    """
+    from .wingmap import nearest_ratio
+    if rev:
+        return param_coerce(sp.kind, v)
+    return nearest_ratio(v, sp.enum)
+
+
+def _conv_ratio_num(sp, v, rev=False):
+    """bus/main/mtx 的压缩比：本地比值 ↔ WING 的**数值** 1.1..100。"""
+    if rev:
+        return param_coerce(sp.kind, v)
+    return round(_finite(v, 4.0), 2)
+
+
+def _conv_label_str(sp, v, rev=False):
+    """检波/包络：本地索引 ↔ WING 的字符串（PEAK/RMS、LIN/LOG）。"""
+    if rev:
+        if isinstance(v, str):
+            return param_from_wire(sp, v)
+        return _snap(sp, _finite(v, sp.default))
+    i = int(round(_finite(v, sp.default)))
+    if sp.labels and 0 <= i < len(sp.labels):
+        return sp.labels[i]
+    return str(i)
+
+
+def _conv_num_str(sp, v, rev=False):
+    """低切斜率：WING 是 S 类型，发 "12" 而不是 12。"""
+    if rev:
+        return param_coerce(sp.kind, v)
+    return str(int(round(_finite(v, sp.default))))
+
+
+def _conv_tap3(sp, v, rev=False):
+    """发送取点：X32 5 档 ↔ WING 3 档（PRE/POST/GRP）。"""
+    from .wingmap import tap3, tap3_index
+    if rev:
+        return tap3_index(v) if isinstance(v, str) else int(round(_finite(v, 3)))
+    return tap3(v)
+
+
+_WIRE_CONV = {
+    "send_db": _conv_send_db,
+    "ratio_str": _conv_ratio_str,
+    "ratio_num": _conv_ratio_num,
+    "label_str": _conv_label_str,
+    "num_str": _conv_num_str,
+    "tap3": _conv_tap3,
+}
+
+
+def clamp_for(prof, kind, v):
+    """按控台的线上值域钳制。X32 下原样返回（没有 limits 表）。
+
+    ⚠️ 读 wire_limits，不是 param_limits —— 后者是「控台固件量程」
+    （app.py 的 --trim-range 会给它塞 ch_trim），语义不同别混用。
+    """
+    lim = getattr(prof, "wire_limits", None) if prof is not None else None
+    if not lim:
+        return v
+    rng = lim.get(kind)
+    if not rng:
+        return v
+    x = _finite(v, rng[0])
+    return min(max(x, rng[0]), rng[1])
 
 
 def param_wire(sp, v, prof=None):
     """本地存的值 → **线上**该发的值 (OSC 回包与桥接转发共用)。
 
-    四种换算:
+    五种换算:
       · prof.fader_db       → 组级推子发 dB (WING)，不是 0..1
       · prof.mute_inverted  → 组级静音线上 1=muted (WING)，本地 1=开
+      · prof.wire_conv      → 按 kind 查 WING 专属转换器（见 _WIRE_CONV）
       · enum_wire="index"   → 本地比值/自然值换算成枚举下标 (dyn/ratio 4.0 → 6)
       · enum_wire="label"   → 发**枚举名字符串** (发送取点 "POST")
       · 其余按 vtype 定型 (float 发浮点 / bool 发 0-1 / int 发整数)
@@ -848,6 +969,12 @@ def param_wire(sp, v, prof=None):
             return fader_to_db(v)
         if getattr(prof, "mute_inverted", False) and _is_group_mute(sp):
             return 0 if _truthy(v) else 1
+        conv = getattr(prof, "wire_conv", None)
+        if conv:
+            fn = _WIRE_CONV.get(conv.get(sp.kind))
+            if fn is not None:
+                return fn(sp, v)
+        v = clamp_for(prof, sp.kind, v)
     if sp.vtype == "bool":
         return 1 if _truthy(v) else 0
     if sp.enum is not None and sp.enum_wire == "index":
@@ -884,6 +1011,11 @@ def param_from_wire(sp, v, prof=None):
             except (TypeError, ValueError):
                 return param_coerce(sp.kind, v)
             return 0 if _truthy(x) else 1
+        conv = getattr(prof, "wire_conv", None)
+        if conv:
+            fn = _WIRE_CONV.get(conv.get(sp.kind))
+            if fn is not None:
+                return fn(sp, v, rev=True)
     if isinstance(v, str) and sp.labels:
         s = v.strip().upper()
         for _i, _lab in enumerate(sp.labels):
@@ -955,15 +1087,21 @@ def spec_section(sp):
     return "pre"
 
 
-def ui_specs(group):
+def ui_specs(group, prof=None):
     """一组的参数元数据 (给前端/App 生成控件, 不含任何协议地址)。
 
     字段名刻意短: 这个包每次打开通道详情都会拉一次, 6 组加起来约 8KB,
     用长键名 (label/lo/hi/step/…) 会白白多出 30%。
     sec = 页签 (见 spec_section), 前端只按它分组, 不再自己猜。
+
+    prof 传入时**按控台过滤**: addr() 返 None 的参数不下发。WING 没有
+    aux 的 EQ、没有 EQ 段类型、没有插入 —— 这些控件在它上面根本无处可写,
+    下发只会变成"拖了没反应"的死滑杆。过滤放在这里而不是各端各写一遍。
     """
     out = []
     for sp in GROUP_PARAM_SPECS.get(group, ()):
+        if prof is not None and prof.addr(sp.kind, 1) is None:
+            continue
         out.append({
             "f": sp.field, "l": sp.label, "t": sp.vtype,
             "lo": sp.lo, "hi": sp.hi, "st": sp.step, "dec": sp.dec,
